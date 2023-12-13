@@ -2,8 +2,11 @@ module Utils
     ( module Utils
     ) where
 
+import Config                        qualified as C
 import Control.Monad
+import Data.Char                     qualified as Char
 import Data.Text                     qualified as T
+import Data.Text.ICU                 qualified as I
 import Data.Text.Lazy                qualified as TL
 import Data.Time.Clock
 import Data.Time.Format
@@ -12,6 +15,7 @@ import Hakyll                        hiding (defaultContext, pandocCompiler)
 import Hakyll                        qualified as H
 import Hakyll.Core.Compiler.Internal
 import System.FilePath               (takeFileName)
+import System.IO.Unsafe
 import System.Process
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Blaze.Html5              qualified as H
@@ -19,7 +23,19 @@ import Text.Blaze.Html5.Attributes   qualified as A
 import Text.Pandoc
 import Text.Pandoc.Shared            (headerShift)
 import Text.Pandoc.Walk
-import Config qualified as C
+
+-- HACK: unsafePerformIO
+titleSlug :: String -> String
+titleSlug = unsafePerformIO .
+  readProcess "scripts/title-slug" [] . takeFileName
+{-# NOINLINE titleSlug #-}
+
+titleSlug' :: String -> String
+titleSlug' = T.unpack . f . T.pack
+  where
+    f (I.nfd -> x) = T.map g . T.filter (not . Char.isMark) $ x
+    g c | Char.isAlpha c = Char.toLower c
+    g _ = '-'
 
 basename :: Routes
 basename = customRoute (takeFileName . toFilePath)

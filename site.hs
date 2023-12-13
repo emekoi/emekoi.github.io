@@ -3,6 +3,8 @@ module Main
     ) where
 
 import Data.Foldable
+import Data.List     (intercalate)
+import Data.Maybe    (fromJust)
 import Hakyll        hiding (defaultContext, pandocCompiler)
 import Utils
 
@@ -31,7 +33,10 @@ main = hakyll $ do
           >>= relativizeUrls
 
     match "posts/*" $ do
-        route $ setExtension "html"
+        route $ metadataRoute $ \meta ->
+          let title = titleSlug $ fromJust (lookupString "title" meta)
+          in constRoute . intercalate "/" $ ["posts", title, "index.html"]
+
         compile $ pandocCC
             >>= loadAndApplyTemplate "templates/post.html"    postCtx
             >>= saveSnapshot "content"

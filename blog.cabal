@@ -23,6 +23,7 @@ common base
     , base == 4.*
     , hakyll == 4.16.*
     , text
+    , containers
 
 library
   import: base
@@ -40,6 +41,7 @@ library
     , pandoc-types
     , process
     , time
+    , text-icu
 
 executable site
   import: base

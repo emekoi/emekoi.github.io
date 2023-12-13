@@ -1,4 +1,6 @@
-module Config (module Config) where
+module Config
+    ( module Config
+    ) where
 
 author, email, github :: String
 author = "Emeka Nkurumeh"
