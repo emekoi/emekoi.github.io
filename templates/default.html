@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="$lang$" xml:lang="$lang$"$if(dir)$ dir="$dir$"$endif$ color-scheme="auto">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="generator" content="pandoc"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"/>
+    $if(author)$<meta name="author" content="$author$"/>$endif$
+    $if(published)$<meta name="dcterms.date" content="$published$"/>$endif$
+    <title>$title$ | $site-title$</title>
+    <link rel="stylesheet" href="/css/default.css"/>
+    $partial("templates/color-scheme-load.html")$
+    $if(math)$$math$$endif$
+  </head>
+  <body>
+    $partial("templates/page-header.html")$
+    <main>
+      $if(hide-title)$$else$
+      <header id="title-block-header">
+        <h1 class="title">$title$</h1>
+        $if(subtitle)$<p class="subtitle">$subtitle$</p>$endif$
+      </header>
+      $endif$
+      $body$
+    </main>
+    $partial("templates/page-footer.html")$
+    $partial("templates/color-scheme-toggle.html")$
+  </body>
+</html>

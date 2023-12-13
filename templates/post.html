@@ -1,0 +1,10 @@
+<div class="post-info">
+  <ul>
+    <!-- <li><span class="date">$published$</span> $if(modified)$(Modified: $modified$)$endif$</li> -->
+    <li><span class="date">$date(published)$</span> $if(modified)$<span class="date">($modified$)$endif$</span></li>
+    $if(tags)$
+    $for(tags)$<li><a href="/tags.html#$it$">#$it$</a></li>$endfor$
+    $endif$
+  </ul>
+</div>
+<article>$body$</article>

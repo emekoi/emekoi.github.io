@@ -1,0 +1,47 @@
+cabal-version: 2.2
+build-type:    Simple
+version:       0.1.0.0
+name:          blog
+
+common base
+  ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing
+  default-language: Haskell2010
+  default-extensions:
+    BlockArguments
+    FlexibleContexts
+    FlexibleInstances
+    ImportQualifiedPost
+    LambdaCase
+    OverloadedStrings
+    PatternSynonyms
+    ScopedTypeVariables
+    TupleSections
+    TypeApplications
+    TypeOperators
+    ViewPatterns
+  build-depends:
+    , base == 4.*
+    , hakyll == 4.16.*
+    , text
+
+library
+  import: base
+  exposed-modules:
+      Utils
+  hs-source-dirs:
+      src
+  build-depends:
+    , blaze-html ^>= 0.9
+    , bytestring ^>= 0.11
+    , filepath
+    , ghc-syntax-highlighter ^>= 0.0.10
+    , pandoc
+    , pandoc-types
+    , process
+    , time
+
+executable site
+  import: base
+  main-is: site.hs
+  build-depends: blog
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N

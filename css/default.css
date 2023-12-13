@@ -1,0 +1,9 @@
+@import url("https://cdn.jsdelivr.net/npm/normalize.css@8.0.1/normalize.css");
+@import url("/css/flexoki.css");
+@import url("/css/sakura.css");
+@import url("/css/highlighting.css");
+@import url("/css/custom.css");
+
+*,::after,::before {
+  box-sizing: border-box
+}
