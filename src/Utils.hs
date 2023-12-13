@@ -2,6 +2,7 @@ module Utils
     ( module Utils
     ) where
 
+import Control.Monad
 import Data.Text                     qualified as T
 import Data.Text.Lazy                qualified as TL
 import Data.Time.Clock
@@ -16,10 +17,21 @@ import Text.Blaze.Html.Renderer.Text (renderHtml)
 import Text.Blaze.Html5              qualified as H
 import Text.Blaze.Html5.Attributes   qualified as A
 import Text.Pandoc
+import Text.Pandoc.Shared            (headerShift)
 import Text.Pandoc.Walk
+import Config qualified as C
 
 basename :: Routes
 basename = customRoute (takeFileName . toFilePath)
+
+atomFeed :: FeedConfiguration
+atomFeed = FeedConfiguration
+  { feedTitle       = C.siteTitle
+  , feedDescription = ""
+  , feedAuthorName  = C.author
+  , feedAuthorEmail = C.email
+  , feedRoot        = C.siteURL
+  }
 
 defaultContext :: Context String
 defaultContext =
@@ -28,14 +40,17 @@ defaultContext =
     <> H.defaultContext
   where
     fields =
-      [ ("author-meta", "Emeka Nkurumeh")
-      , ("lang", "en")
-      , ("github", "https://github.com/emekoi")
-      , ("site-source", "https://github.com/emekoi/emekoi.github.io")
-      , ("site-title", "Forgetful Functor")
-      , ("site-url", "https://emekoi.github.com")
-      , ("email", "email@example.com")
+      [ ("author", C.author)
+      , ("lang", C.siteLang)
+      , ("github", C.github)
+      , ("site-source", C.siteSource)
+      , ("site-title", C.siteTitle)
+      , ("site-url", C.siteURL)
+      , ("email", C.email)
       ]
+
+parseDate :: String -> Maybe UTCTime
+parseDate = parseTimeM @_ @UTCTime True defaultTimeLocale "%Y-%m-%d"
 
 postCtx :: Context String
 postCtx =
@@ -43,16 +58,14 @@ postCtx =
     <> functionField "date" fmtDate
     <> defaultContext
   where
-    fmtDate ((parseTimeM @_ @UTCTime True defaultTimeLocale "%Y-%m-%d" -> Just date ):xs) _ = do
-      let fmt = case xs of
-            []      ->  "%e %B %Y"
-            fmt : _ -> fmt
+    fmtDate ((parseDate -> Just date ):xs) _ = do
+      let fmt = case xs of [] -> "%e %B %Y"; fmt : _ -> fmt
       pure $ formatTime defaultTimeLocale fmt date
     fmtDate _ _ = error "invalid use of date function"
 
-ghcHighlight :: T.Text -> Maybe T.Text
+ghcHighlight :: T.Text -> Maybe H.Html
 ghcHighlight (tokenizeHaskell -> Just x) =
-  pure . TL.toStrict $ renderHtml (formatTokens x)
+  pure $ formatTokens x
   where
     tokenClass :: Token -> Maybe T.Text
     tokenClass = \case
@@ -78,21 +91,25 @@ ghcHighlight _ = Nothing
 
 highlight :: Pandoc -> Compiler Pandoc
 highlight = walkM \case
-  block@(CodeBlock (_, "haskell" : _, _) body) ->
-    pure $ case ghcHighlight body of
-      Just body -> RawBlock "html" body
-      Nothing   -> block
+  (CodeBlock (_, "haskell" : _, _) (ghcHighlight -> Just body)) ->
+    pure $ RawBlock "html" (wrap body)
   CodeBlock (_, (T.unpack -> lang) : _, _) (T.unpack -> body) ->
-    RawBlock "html" . T.pack <$> unsafeCompiler (pygs lang body)
+    RawBlock "html" . wrap <$> unsafeCompiler (pygs lang body)
   block -> pure block
  where
-  pygs lang = readProcess "pygmentize" ["-l", lang, "-f", "html", "-O", "nowrap=True"]
+   pygs lang = readProcess "pygmentize" ["-l", lang, "-f", "html", "-O", "nowrap=True"]
+   wrap :: (H.ToMarkup a) => a -> T.Text
+   wrap = TL.toStrict . renderHtml
+     . (H.div H.! A.class_ "hl")
+     . H.pre . H.preEscapedToMarkup
 
 pandocCCPre :: (Item String -> Compiler (Item String)) -> Compiler (Item String)
 pandocCCPre f =
   cached "Main.pandocCompiler" $
-      getResourceBody >>= f >>= renderPandocWithTransformM reader writer highlight
+      getResourceBody >>= f >>= renderPandocWithTransformM reader writer
+        (foldl1 (>=>) passes)
   where
+    passes = [pure . headerShift 1, highlight]
     reader = defaultHakyllReaderOptions
       { readerStripComments = True
       }

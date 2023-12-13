@@ -3,8 +3,7 @@ module Main
     ) where
 
 import Data.Foldable
-import Hakyll                        hiding (defaultContext, pandocCompiler)
-import Hakyll                        qualified as H
+import Hakyll        hiding (defaultContext, pandocCompiler)
 import Utils
 
 main :: IO ()
@@ -33,24 +32,37 @@ main = hakyll $ do
 
     match "posts/*" $ do
         route $ setExtension "html"
-        compile $ H.pandocCompiler
+        compile $ pandocCC
             >>= loadAndApplyTemplate "templates/post.html"    postCtx
+            >>= saveSnapshot "content"
             >>= loadAndApplyTemplate "templates/default.html" postCtx
             >>= relativizeUrls
 
     create ["posts/index.html"] $ version "generated" $ do
         route idRoute
         compile $ do
-            let archiveCtx = fold
+            let postListCtx = fold
                   [ listField "posts" postCtx postList
                   , constField "title" "Posts"
                   , defaultContext
                   ]
 
             makeItem "$partial(\"templates/post-list.html\")$"
-                >>= loadAndApplyTemplate "templates/default.html" archiveCtx
+                >>= loadAndApplyTemplate "templates/default.html" postListCtx
                 >>= relativizeUrls
 
+    create ["feed.xml"] $ do
+        route idRoute
+        compile $ do
+            let feedCtx = postCtx <> bodyField "description"
+            posts <- recentFirst =<<
+              loadAllSnapshots postsPattern "content"
+            renderAtom atomFeed feedCtx posts
   where
+    postsPattern :: Pattern
+    postsPattern = "posts/*" .&&. hasNoVersion
+
+    -- tagsList = buildTags
+
     postList :: Compiler [Item String]
-    postList = recentFirst =<< loadAll ("posts/*" .&&. hasNoVersion)
+    postList = recentFirst =<< loadAll postsPattern
