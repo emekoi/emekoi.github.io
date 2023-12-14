@@ -29,8 +29,9 @@ common base
 library
   import: base
   exposed-modules:
-      Utils
       Config
+      Slug
+      Utils
   hs-source-dirs:
       site
   build-depends:

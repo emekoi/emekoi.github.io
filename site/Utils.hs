@@ -25,9 +25,6 @@ import Text.Pandoc
 import Text.Pandoc.Shared              (headerShift)
 import Text.Pandoc.Walk
 
-titleSlug :: String -> IO String
-titleSlug = readProcess "scripts/title-slug" [] . takeFileName
-
 basename :: Routes
 basename = customRoute (takeFileName . toFilePath)
 

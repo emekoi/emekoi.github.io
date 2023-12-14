@@ -3,6 +3,7 @@ module Main
     ) where
 
 import Config
+import Control.Applicative
 import Control.Monad
 import Data.Aeson                 qualified as Aeson
 import Data.ByteString.Lazy.Char8 qualified as B
@@ -12,6 +13,7 @@ import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromJust, fromMaybe)
 import Data.Set                   qualified as Set
 import Hakyll                     hiding (defaultContext, pandocCompiler)
+import Slug
 import Utils
 
 feedConfig :: FeedConfiguration
@@ -74,12 +76,11 @@ main = hakyll do
         >>= relativizeUrls
 
     match ("posts/*.md" .||. "posts/*.lhs") do
-      postMetadata <- Map.fromList <$> getAllMetadata postsPattern
-      titleSlugs <- preprocess do
-        traverse (titleSlug . fromJust . lookupString "title") postMetadata
-
-      route $ customRoute \f ->
-        L.intercalate "/" ["posts", titleSlugs Map.! f, "index.html"]
+      route $ metadataRoute \meta ->
+        let
+          slug = fromJust $ lookupString "slug" meta
+            <|> (titleSlug <$> lookupString "title" meta)
+        in  constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
 
       compile $ pandocCC
         >>= loadAndApplyTemplate "templates/post.html"    postCtx
