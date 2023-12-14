@@ -3,28 +3,29 @@ module Main
     ) where
 
 import Data.Foldable
-import Data.List     (intercalate)
-import Data.Maybe    (fromJust)
-import Hakyll        hiding (defaultContext, pandocCompiler)
+import Data.List       (intercalate)
+import Data.Map.Strict qualified as Map
+import Data.Maybe      (fromJust)
+import Hakyll          hiding (defaultContext, pandocCompiler)
 import Utils
 
 main :: IO ()
-main = hakyll $ do
+main = hakyll do
     match "templates/*" $ compile templateBodyCompiler
 
     -- TODO: concat css
-    match "css/*" $ do
-        route   idRoute
+    match "css/*" do
+        route idRoute
         compile compressCssCompiler
 
-    match (fromList ["pages/404.md"]) $ do
-        route   $ basename `composeRoutes` setExtension "html"
+    match (fromList ["pages/404.md"]) do
+        route $ basename `composeRoutes` setExtension "html"
         compile $ pandocCC
             >>= loadAndApplyTemplate "templates/default.html" defaultContext
             >>= relativizeUrls
 
-    match "pages/index.md" $ do
-        route   $ basename `composeRoutes` setExtension "html"
+    match "pages/index.md" do
+        route $ basename `composeRoutes` setExtension "html"
         let indexCtx = listField "posts" postCtx postList
               <> defaultContext
 
@@ -32,10 +33,13 @@ main = hakyll $ do
           >>= loadAndApplyTemplate "templates/default.html" indexCtx
           >>= relativizeUrls
 
-    match "posts/*" $ do
-        route $ metadataRoute $ \meta ->
-          let title = titleSlug $ fromJust (lookupString "title" meta)
-          in constRoute . intercalate "/" $ ["posts", title, "index.html"]
+    match "posts/*" do
+        postMetadata <- Map.fromList <$> getAllMetadata postsPattern
+        titleSlugs <- preprocess do
+          traverse (titleSlug . fromJust . lookupString "title") postMetadata
+
+        route $ customRoute \f ->
+          intercalate "/" ["posts", titleSlugs Map.! f, "index.html"]
 
         compile $ pandocCC
             >>= loadAndApplyTemplate "templates/post.html"    postCtx
@@ -43,9 +47,9 @@ main = hakyll $ do
             >>= loadAndApplyTemplate "templates/default.html" postCtx
             >>= relativizeUrls
 
-    create ["posts/index.html"] $ version "generated" $ do
+    create ["posts/index.html"] $ version "generated" do
         route idRoute
-        compile $ do
+        compile do
             let postListCtx = fold
                   [ listField "posts" postCtx postList
                   , constField "title" "Posts"
@@ -56,9 +60,9 @@ main = hakyll $ do
                 >>= loadAndApplyTemplate "templates/default.html" postListCtx
                 >>= relativizeUrls
 
-    create ["feed.xml"] $ do
+    create ["feed.xml"] do
         route idRoute
-        compile $ do
+        compile do
             let feedCtx = postCtx <> bodyField "description"
             posts <- recentFirst =<<
               loadAllSnapshots postsPattern "content"

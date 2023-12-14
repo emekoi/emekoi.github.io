@@ -3,7 +3,8 @@
     <!-- <li><span class="date">$published$</span> $if(updated)$(Updated: $updated$)$endif$</li> -->
     <li><span class="date">$date(published)$</span> $if(updated)$<span class="date">($updated$)$endif$</span></li>
     $if(tags)$
-    $for(tags)$<li><a href="/tags.html#$it$">#$it$</a></li>$endfor$
+    $-- $for(tags)$<li><a rel="tag" href="/tags.html#$tag$">#$tag$</a></li>$endfor$
+    $tags$
     $endif$
   </ul>
 </div>
