@@ -47,12 +47,16 @@ jsonTagsCtx = field "tags" \(Item id _) -> do
 
 main :: IO ()
 main = hakyll do
-    match "templates/*" $ compile templateBodyCompiler
+    match "templates/*" $
+      compile templateBodyCompiler
 
-    -- TODO: concat css
-    match "css/*" do
+    match ("css/*.css" .&&. complement "css/default.css") $
+      compile templateBodyCompiler
+
+    match "css/default.css" do
       route idRoute
-      compile compressCssCompiler
+      compile $
+        getResourceString >>= (fmap (fmap compressCss) . applyAsTemplate mempty)
 
     match (fromList ["pages/404.md"]) do
       route $ basename `composeRoutes` setExtension "html"
