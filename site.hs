@@ -2,6 +2,7 @@ module Main
     ( main
     ) where
 
+import Control.Monad
 import Data.Foldable
 import Data.List       (intercalate)
 import Data.Map.Strict qualified as Map
@@ -9,69 +10,94 @@ import Data.Maybe      (fromJust)
 import Hakyll          hiding (defaultContext, pandocCompiler)
 import Utils
 
+data PostList
+  = Tagged String
+  | Only Int
+  | All
+
 main :: IO ()
 main = hakyll do
     match "templates/*" $ compile templateBodyCompiler
 
     -- TODO: concat css
     match "css/*" do
-        route idRoute
-        compile compressCssCompiler
+      route idRoute
+      compile compressCssCompiler
 
     match (fromList ["pages/404.md"]) do
-        route $ basename `composeRoutes` setExtension "html"
-        compile $ pandocCC
-            >>= loadAndApplyTemplate "templates/default.html" defaultContext
-            >>= relativizeUrls
+      route $ basename `composeRoutes` setExtension "html"
+      compile $ pandocCC
+        >>= loadAndApplyTemplate "templates/default.html" defaultContext
+        >>= relativizeUrls
 
     match "pages/index.md" do
-        route $ basename `composeRoutes` setExtension "html"
-        let indexCtx = listField "posts" postCtx postList
-              <> defaultContext
+      route $ basename `composeRoutes` setExtension "html"
+      let indexCtx = listField "posts" postCtx (postList (Only 5))
+            <> defaultContext
 
-        compile $ pandocCCPre (applyAsTemplate indexCtx)
-          >>= loadAndApplyTemplate "templates/default.html" indexCtx
-          >>= relativizeUrls
+      compile $ pandocCCPre (applyAsTemplate indexCtx)
+        >>= loadAndApplyTemplate "templates/default.html" indexCtx
+        >>= relativizeUrls
 
-    match "posts/*" do
-        postMetadata <- Map.fromList <$> getAllMetadata postsPattern
-        titleSlugs <- preprocess do
-          traverse (titleSlug . fromJust . lookupString "title") postMetadata
+    match ("posts/*.md" .||. "posts/*.lhs") do
+      postMetadata <- Map.fromList <$> getAllMetadata postsPattern
+      titleSlugs <- preprocess do
+        traverse (titleSlug . fromJust . lookupString "title") postMetadata
 
-        route $ customRoute \f ->
-          intercalate "/" ["posts", titleSlugs Map.! f, "index.html"]
+      route $ customRoute \f ->
+        intercalate "/" ["posts", titleSlugs Map.! f, "index.html"]
 
-        compile $ pandocCC
-            >>= loadAndApplyTemplate "templates/post.html"    postCtx
-            >>= saveSnapshot "content"
-            >>= loadAndApplyTemplate "templates/default.html" postCtx
-            >>= relativizeUrls
+      compile $ pandocCC
+        >>= loadAndApplyTemplate "templates/post.html"    postCtx
+        >>= saveSnapshot "content"
+        >>= loadAndApplyTemplate "templates/default.html" postCtx
+        >>= relativizeUrls
 
     create ["posts/index.html"] $ version "generated" do
-        route idRoute
-        compile do
-            let postListCtx = fold
-                  [ listField "posts" postCtx postList
-                  , constField "title" "Posts"
-                  , defaultContext
-                  ]
+      route idRoute
+      compile do
+        let postListCtx = fold
+              [ listField "posts" postCtx (postList All)
+              , constField "title" "Posts"
+              , defaultContext
+              ]
 
-            makeItem "$partial(\"templates/post-list.html\")$"
-                >>= loadAndApplyTemplate "templates/default.html" postListCtx
-                >>= relativizeUrls
+        makeItem "$partial(\"templates/post-list.html\")$"
+          >>= applyAsTemplate postListCtx
+          >>= loadAndApplyTemplate "templates/default.html" postListCtx
+          >>= relativizeUrls
 
-    create ["feed.xml"] do
-        route idRoute
-        compile do
-            let feedCtx = postCtx <> bodyField "description"
-            posts <- recentFirst =<<
-              loadAllSnapshots postsPattern "content"
-            renderAtom atomFeed feedCtx posts
+    create ["tags.html"] $ version "generated" do
+      route idRoute
+      compile do
+        let postListCtx = fold
+              [ listField "posts" postCtx (postList All)
+              , constField "title" "Tags"
+              , defaultContext
+              ]
+
+        makeItem "$partial(\"templates/post-list.html\")$"
+          >>= applyAsTemplate postListCtx
+          >>= loadAndApplyTemplate "templates/default.html" postListCtx
+          >>= relativizeUrls
+
+    create ["feed.xml"] $ version "generated" do
+      route idRoute
+      compile do
+        let feedCtx = postCtx <> bodyField "description"
+        posts <- recentFirst =<<
+          loadAllSnapshots postsPattern "content"
+        renderAtom atomFeed feedCtx posts
+
   where
     postsPattern :: Pattern
-    postsPattern = "posts/*" .&&. hasNoVersion
+    postsPattern = "posts/*.md" .||. "posts/*.lhs"
 
-    -- tagsList = buildTags
-
-    postList :: Compiler [Item String]
-    postList = recentFirst =<< loadAll postsPattern
+    postList :: PostList -> Compiler [Item String]
+    postList p = do
+      posts <- recentFirst =<< loadAll postsPattern
+      case p of
+        All        -> pure posts
+        Only n     -> pure $ take n posts
+        Tagged tag ->
+          filterM (\(Item id _) -> elem tag <$> getTags id) posts

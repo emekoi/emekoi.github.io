@@ -145,9 +145,8 @@ highlight = walkM \case
 
 pandocCCPre :: (Item String -> Compiler (Item String)) -> Compiler (Item String)
 pandocCCPre f =
-  cached "Main.pandocCompiler" $
-      getResourceBody >>= f >>= renderPandocWithTransformM reader writer
-        (foldl1 (>=>) passes)
+  getResourceBody >>= f >>= renderPandocWithTransformM reader writer
+    (foldl1 (>=>) passes)
   where
     passes = [pure . headerShift 1, highlight]
     reader = defaultHakyllReaderOptions
