@@ -1,0 +1,4 @@
+packages: ./*.cabal
+split-sections: true
+optimization: 2
+jobs: $ncpus

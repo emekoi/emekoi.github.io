@@ -5,6 +5,7 @@ module Utils
 import Config                          qualified as C
 import Control.Applicative
 import Control.Monad
+import Data.Text                       (Text)
 import Data.Text                       qualified as T
 import Data.Text.Lazy                  qualified as TL
 import Data.Time.Clock
@@ -29,15 +30,6 @@ titleSlug = readProcess "scripts/title-slug" [] . takeFileName
 
 basename :: Routes
 basename = customRoute (takeFileName . toFilePath)
-
-atomFeed :: FeedConfiguration
-atomFeed = FeedConfiguration
-  { feedTitle       = C.siteTitle
-  , feedDescription = ""
-  , feedAuthorName  = C.author
-  , feedAuthorEmail = C.email
-  , feedRoot        = C.siteURL
-  }
 
 defaultContext :: Context String
 defaultContext =
@@ -82,11 +74,11 @@ tagsField = field "tags" \(Item id _) -> do
         H.! A.href (H.toValue $ "/tags.html" ++ x)
         H.! A.rel "tag" $ H.toHtml x
 
-ghcHighlight :: T.Text -> Maybe H.Html
+ghcHighlight :: Text -> Maybe H.Html
 ghcHighlight (tokenizeHaskell -> Just x) =
   pure $ formatTokens x
   where
-    tokenClass :: Token -> Maybe T.Text
+    tokenClass :: Token -> Maybe Text
     tokenClass = \case
       KeywordTok     -> Just "k"
       PragmaTok      -> Just "na"
@@ -102,6 +94,7 @@ ghcHighlight (tokenizeHaskell -> Just x) =
       SpaceTok       -> Nothing
       OtherTok       -> Just "x"
 
+    formatTokens :: [(Token, Text)] -> H.Html
     formatTokens = mapM_ \(c, H.toHtml -> h) ->
       case tokenClass c of
         Just c  -> H.span H.! A.class_ (H.toValue c) $ h
@@ -116,7 +109,9 @@ highlight = walkM \case
     RawBlock "html" . wrap <$> unsafeCompiler (pygs lang body)
   block -> pure block
  where
+   pygs :: String -> String -> IO String
    pygs lang = readProcess "pygmentize" ["-l", lang, "-f", "html", "-O", "nowrap=True"]
+
    wrap :: (H.ToMarkup a) => a -> T.Text
    wrap = TL.toStrict . renderHtml
      . (H.div H.! A.class_ "hl")
@@ -127,11 +122,15 @@ pandocCCPre f =
   getResourceBody >>= f >>= renderPandocWithTransformM reader writer
     (foldl1 (>=>) passes)
   where
+    passes :: [Pandoc -> Compiler Pandoc]
     passes = [pure . headerShift 1, highlight]
+
+    reader :: ReaderOptions
     reader = defaultHakyllReaderOptions
       { readerStripComments = True
       }
 
+    writer :: WriterOptions
     writer = defaultHakyllWriterOptions
       { writerHTMLMathMethod = KaTeX ""
       , writerWrapText = WrapNone
@@ -144,5 +143,5 @@ pandocCC :: Compiler (Item String)
 pandocCC = pandocCCPre pure
 
 gitHash :: Compiler String
-gitHash = compilerUnsafeIO $ do
+gitHash = compilerUnsafeIO $
   readProcess "git" ["rev-parse", "--short", "master"] []

@@ -2,19 +2,48 @@ module Main
     ( main
     ) where
 
+import Config
 import Control.Monad
+import Data.Aeson                 qualified as Aeson
+import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Foldable
-import Data.List       qualified as L (intercalate)
-import Data.Map.Strict qualified as Map
-import Data.Maybe      (fromJust)
-import Data.Set        qualified as Set
-import Hakyll          hiding (defaultContext, pandocCompiler)
+import Data.List                  qualified as L (intercalate)
+import Data.Map.Strict            qualified as Map
+import Data.Maybe                 (fromJust, fromMaybe)
+import Data.Set                   qualified as Set
+import Hakyll                     hiding (defaultContext, pandocCompiler)
 import Utils
+
+feedConfig :: FeedConfiguration
+feedConfig = FeedConfiguration
+  { feedTitle       = siteTitle
+  , feedDescription = ""
+  , feedAuthorName  = author
+  , feedAuthorEmail = email
+  , feedRoot        = siteURL
+  }
 
 data PostList
   = Tag String
   | Only Int
   | All
+
+postsPattern :: Pattern
+postsPattern = "posts/*.md" .||. "posts/*.lhs"
+
+postList :: PostList -> Compiler [Item String]
+postList p = do
+  posts <- recentFirst =<< loadAll postsPattern
+  case p of
+    All        -> pure posts
+    Only n     -> pure $ take n posts
+    Tag tag ->
+      filterM (\(Item id _) -> elem tag <$> getTags id) posts
+
+jsonTagsCtx :: Context a
+jsonTagsCtx = field "tags" \(Item id _) -> do
+  meta <- getMetadata id
+  pure . B.unpack . Aeson.encode . fromMaybe [] $ lookupStringList "tags" meta
 
 main :: IO ()
 main = hakyll do
@@ -87,27 +116,30 @@ main = hakyll do
         loadAndApplyTemplate "templates/default.html" pageCtx (uItem page)
           >>= relativizeUrls
 
-    create ["feed.xml"] $ version "generated" do
+    create ["atom.xml"] $ version "generated" do
       route idRoute
       compile do
         let feedCtx = postCtx <> bodyField "description"
-        posts <- recentFirst =<<
-          loadAllSnapshots postsPattern "content"
-        renderAtom atomFeed feedCtx posts
+        posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+        renderAtom feedConfig feedCtx posts
+
+    create ["rss.xml"] $ version "generated" do
+      route idRoute
+      compile do
+        let feedCtx = postCtx <> bodyField "description"
+        posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+        renderRss feedConfig feedCtx posts
+
+    create ["feed.json"] $ version "generated" do
+      route idRoute
+      compile do
+        posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+        feedT <- loadBody "templates/feed.json"
+        itemT <- loadBody "templates/feed-item.json"
+        let feedCtx = bodyField "description" <> jsonTagsCtx <> postCtx
+        renderJsonWithTemplates feedT itemT feedConfig feedCtx posts
 
   where
     tagPageEntry :: String
     tagPageEntry =
       "<h2 id=\"$tag$\">#$tag$</h2>$partial(\"templates/post-list.html\")$"
-
-    postsPattern :: Pattern
-    postsPattern = "posts/*.md" .||. "posts/*.lhs"
-
-    postList :: PostList -> Compiler [Item String]
-    postList p = do
-      posts <- recentFirst =<< loadAll postsPattern
-      case p of
-        All        -> pure posts
-        Only n     -> pure $ take n posts
-        Tag tag ->
-          filterM (\(Item id _) -> elem tag <$> getTags id) posts

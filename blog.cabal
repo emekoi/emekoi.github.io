@@ -21,9 +21,10 @@ common base
     ViewPatterns
   build-depends:
     , base == 4.*
+    , bytestring
+    , containers
     , hakyll == 4.16.*
     , text
-    , containers
 
 library
   import: base
@@ -31,7 +32,7 @@ library
       Utils
       Config
   hs-source-dirs:
-      src
+      site
   build-depends:
     , blaze-html ^>= 0.9
     , bytestring ^>= 0.11
@@ -40,11 +41,14 @@ library
     , pandoc
     , pandoc-types
     , process
-    , time
     , text-icu
+    , time
 
 executable site
   import: base
   main-is: site.hs
-  build-depends: blog
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N -O2
+  build-depends:
+    , aeson
+    , blog
+    , bytestring
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
