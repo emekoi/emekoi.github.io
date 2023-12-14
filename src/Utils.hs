@@ -10,7 +10,8 @@ import Data.Text.Lazy                  qualified as TL
 import Data.Time.Clock
 import Data.Time.Format
 import GHC.SyntaxHighlighter           (Token (..), tokenizeHaskell)
-import Hakyll                          hiding (defaultContext, pandocCompiler)
+import Hakyll                          hiding (defaultContext, pandocCompiler,
+                                        tagsField)
 import Hakyll                          qualified as H
 import Hakyll.Core.Compiler.Internal
 import System.FilePath                 (takeFileName)
@@ -62,27 +63,15 @@ postCtx =
     dateField "published" "%Y-%m-%d"
     <> functionField "date" fmtDate
     <> defaultContext
-    <> tagsField''
+    <> tagsField
   where
     fmtDate ((parseDate -> Just date ):xs) _ = do
       let fmt = case xs of [] -> "%e %B %Y"; fmt : _ -> fmt
       pure $ formatTime defaultTimeLocale fmt date
     fmtDate _ _ = error "invalid use of date function"
 
-tagsField' :: Context a
-tagsField' = Context \k _ (Item id _) ->
-  if k /= "tags" then noResult "Tried field tags" else do
-    meta <- getMetadata id
-    case lookupStringList "tags" meta of
-      Nothing -> empty
-      Just tags ->
-        let ctx = field "tag" (pure . itemBody) in
-        pure $ ListField ctx [Item "tag" x | x <- tags]
-
--- $for(tags)$<li><a href="/tags.html#$tag$">#$tag$</a></li>$endfor$
--- return html string
-tagsField'' :: Context a
-tagsField'' = field "tags" \(Item id _) -> do
+tagsField :: Context a
+tagsField = field "tags" \(Item id _) -> do
   meta <- getMetadata id
   case lookupStringList "tags" meta of
     Nothing -> empty
@@ -92,16 +81,6 @@ tagsField'' = field "tags" \(Item id _) -> do
     f x = H.li $ H.a
         H.! A.href (H.toValue $ "/tags.html" ++ x)
         H.! A.rel "tag" $ H.toHtml x
-
--- $for(tags)$<li><a href="/tags.html#$tag$">#$tag$</a></li>$endfor$
--- return html string
--- tagsField''' = Context \k _ (Item id _) ->
---     if k /= "tags" then noResult $ "Tried field tags" else do
---       meta <- getMetadata id
---       let tags = concat $ lookupStringList "tags" metadata
---           ctx = field "tag" (pure . itemBody)
---       -- listField "tags" undefined undefined
---       pure $ ListField ctx [Item "tag" x| x <- value]
 
 ghcHighlight :: T.Text -> Maybe H.Html
 ghcHighlight (tokenizeHaskell -> Just x) =

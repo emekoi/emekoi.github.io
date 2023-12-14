@@ -4,14 +4,15 @@ module Main
 
 import Control.Monad
 import Data.Foldable
-import Data.List       (intercalate)
+import Data.List       qualified as L (intercalate)
 import Data.Map.Strict qualified as Map
 import Data.Maybe      (fromJust)
+import Data.Set        qualified as Set
 import Hakyll          hiding (defaultContext, pandocCompiler)
 import Utils
 
 data PostList
-  = Tagged String
+  = Tag String
   | Only Int
   | All
 
@@ -45,7 +46,7 @@ main = hakyll do
         traverse (titleSlug . fromJust . lookupString "title") postMetadata
 
       route $ customRoute \f ->
-        intercalate "/" ["posts", titleSlugs Map.! f, "index.html"]
+        L.intercalate "/" ["posts", titleSlugs Map.! f, "index.html"]
 
       compile $ pandocCC
         >>= loadAndApplyTemplate "templates/post.html"    postCtx
@@ -68,17 +69,22 @@ main = hakyll do
           >>= relativizeUrls
 
     create ["tags.html"] $ version "generated" do
+      postTags <-
+        fmap (maybe Set.empty Set.fromList . lookupStringList "tags")
+        . Map.fromList <$> getAllMetadata postsPattern
+
       route idRoute
       compile do
-        let postListCtx = fold
-              [ listField "posts" postCtx (postList All)
-              , constField "title" "Tags"
-              , defaultContext
-              ]
+        let postListCtx tag = constField "tag" tag
+              <> listField "posts" postCtx (postList (Tag tag))
+            pageCtx = constField "title" "Tags" <> defaultContext
 
-        makeItem "$partial(\"templates/post-list.html\")$"
-          >>= applyAsTemplate postListCtx
-          >>= loadAndApplyTemplate "templates/default.html" postListCtx
+        uItem <- Item <$> getUnderlying
+        page <- foldrM `flip` [] `flip` fold postTags $ \tag acc -> do
+          Item _ item <- applyAsTemplate (postListCtx tag) $ uItem tagPageEntry
+          pure $ item ++ acc
+
+        loadAndApplyTemplate "templates/default.html" pageCtx (uItem page)
           >>= relativizeUrls
 
     create ["feed.xml"] $ version "generated" do
@@ -90,6 +96,10 @@ main = hakyll do
         renderAtom atomFeed feedCtx posts
 
   where
+    tagPageEntry :: String
+    tagPageEntry =
+      "<h2 id=\"$tag$\">#$tag$</h2>$partial(\"templates/post-list.html\")$"
+
     postsPattern :: Pattern
     postsPattern = "posts/*.md" .||. "posts/*.lhs"
 
@@ -99,5 +109,5 @@ main = hakyll do
       case p of
         All        -> pure posts
         Only n     -> pure $ take n posts
-        Tagged tag ->
+        Tag tag ->
           filterM (\(Item id _) -> elem tag <$> getTags id) posts
