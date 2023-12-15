@@ -12,12 +12,11 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
   # Runs on pushes targeting the default branch
   push:
     branches: [$default-branch]
-
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
 
 jobs:
   build:
@@ -71,9 +70,18 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: Build Hakyll
+    - name: Build site
       run: |
         cabal build all
+        cabal exec site build
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v2
+      with:
+        path: '_site/'
 
   deploy:
     runs-on: ubuntu-latest
@@ -85,18 +93,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-    - name: Setup Pages
-      uses: actions/configure-pages@v4
-
-    - name: Build Site
-      run: |
-        cabal exec site build
-
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v2
-      with:
-        path: '_site/'
-
     - name: Deploy to GitHub Pages
       id: deployment
       uses: actions/deploy-pages@v3
