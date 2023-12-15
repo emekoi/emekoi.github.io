@@ -23,7 +23,7 @@ env:
 
 jobs:
   build:
-    name: Build with GHC ${{ env.ghc_version }}
+    name: build and deploy page
     runs-on: ubuntu-latest
 
     # Deploy to the github-pages environment
@@ -34,18 +34,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up GHC ${{ env.ghc_version }}
+    - name: set up GHC ${{ env.ghc_version }}
       uses: haskell-actions/setup@v2
       id: setup
       with:
         ghc-version: ${{ env.ghc_version }}
 
-    - name: Configure build
+    - name: configure build
       run: |
         cabal configure
         cabal build all --dry-run
 
-    - name: Restore cached dependencies
+    - name: restore cached dependencies
       uses: actions/cache/restore@v3
       id: cache
       env:
@@ -55,13 +55,13 @@ jobs:
         key: ${{ env.key }}-plan-${{ hashFiles('**/plan.json') }}
         restore-keys: ${{ env.key }}-
 
-    - name: Install dependencies
+    - name: install dependencies
       # If we had an exact cache hit, the dependencies will be up to date.
       if: steps.cache.outputs.cache-hit != 'true'
       run: cabal build all --only-dependencies
 
     # Cache dependencies already here, so that we do not have to rebuild them should the subsequent steps fail.
-    - name: Save cached dependencies
+    - name: save cached dependencies
       uses: actions/cache/save@v3
       # If we had an exact cache hit, trying to save the cache would error because of key clash.
       if: steps.cache.outputs.cache-hit != 'true'
@@ -69,24 +69,24 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: Build site
+    - name: build site
       run: |
         cabal build all
         cabal exec site build
 
-    - name: Build resume
+    - name: build resume
       uses: xu-cheng/latex-action@v3
       with:
         root_file: resume/resume.tex
 
-    - name: Setup Pages
+    - name: setup pages
       uses: actions/configure-pages@v4
 
-    - name: Upload artifact
+    - name: upload artifact
       uses: actions/upload-pages-artifact@v2
       with:
         path: '_site/'
 
-    - name: Deploy to GitHub Pages
+    - name: deploy to github pages
       id: deployment
       uses: actions/deploy-pages@v3
