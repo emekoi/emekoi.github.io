@@ -1,0 +1,20 @@
+cradle:
+  multi:
+    - path: "./drafts"
+      config:
+        cradle:
+          direct:
+            arguments: [-pgmL markdown-unlit]
+    - path: "./posts"
+      config:
+        cradle:
+          direct:
+            arguments: [-pgmL markdown-unlit]
+    - path: "."
+      config:
+        cradle:
+          cabal:
+            - path: "./src"
+              component: "lib:site"
+            - path: "."
+              component: "exe:site"
