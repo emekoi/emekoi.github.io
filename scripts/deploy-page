@@ -2,39 +2,48 @@
 
 set -e
 
-[ -n "$BUILD_COMMAND" ]
-
 head="$(git rev-parse --abbrev-ref HEAD)"
 
 site_branch="${1:-gh-pages}"
-build_dir="${2:-build}"
+build_dir="${2:-_site}"
 
+# create the branch we use for github pages and switch back to $head
 setup_branch() {
   git switch --orphan "$site_branch"
   git commit --allow-empty -m"init"
   git switch "$head"
 }
 
-build_page() {
-  sh -ce "$BUILD_COMMAND"
+# build the site and push it to github
+build_site() {
+  cabal build && cabal exec site build
   git -C "$build_dir" add --all
   git -C "$build_dir" commit -m "deploy from $(git rev-parse "$head")"
   # git -C "$build_dir" push origin "$site_branch"
 }
 
-build_page_clean() {
-  [ -d "$build_dir" ] && [ -f "$build_dir"/.git ] && git worktree remove "$build_dir"
-  [ -d "$build_dir" ] && rm -r "$build_dir"
+build_site_clean() {
+  if [ -d "$build_dir" ]; then
+    # if this is a git repo then remove the worktree
+    [ -f "$build_dir"/.git ] && git worktree remove "$build_dir"
+    rm -r "$build_dir"
+  fi
+  # setup new worktree to add files into
   git worktree add "$build_dir" "$site_branch"
-  build_page
+  # build and deploy site
+  build_site
+  # remove worktree
   git worktree remove "$build_dir"
 }
 
-build_page_dirty() {
+build_site_dirty() {
+  # if this isn't a worktree then remove the folder
   [ -d "$build_dir" ] && [ ! -f "$build_dir"/.git ] && rm -r "$build_dir"
+  # set up a worktree if it doesn't already exist
   [ ! -d "$build_dir" ] && git worktree add "$build_dir" "$site_branch"
-  build_page
+  build_site
 }
 
+# check if the branch exists
 git rev-parse --verify "$site_branch" >/dev/null 2>&1 || setup_branch
-([ -z "$DIRTY" ] && build_page_clean) || build_page_dirty
+([ -z "$DIRTY" ] && build_site_clean) || build_site_dirty
