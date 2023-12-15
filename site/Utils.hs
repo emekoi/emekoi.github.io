@@ -5,6 +5,7 @@ module Utils
 import Config                          qualified as C
 import Control.Applicative
 import Control.Monad
+
 import Data.Text                       (Text)
 import Data.Text                       qualified as T
 import Data.Text.Lazy                  qualified as TL
@@ -12,10 +13,11 @@ import Data.Time.Clock
 import Data.Time.Format
 import GHC.SyntaxHighlighter           (Token (..), tokenizeHaskell)
 import Hakyll                          hiding (defaultContext, pandocCompiler,
-                                        tagsField)
+                                        relativizeUrls, relativizeUrlsWith,
+                                        tagsField, urlField)
 import Hakyll                          qualified as H
 import Hakyll.Core.Compiler.Internal
-import System.FilePath                 (takeFileName)
+import System.FilePath                 (takeDirectory, takeFileName)
 import System.Process
 import Text.Blaze.Html.Renderer.String qualified as H
 import Text.Blaze.Html.Renderer.Text   (renderHtml)
@@ -32,6 +34,7 @@ defaultContext :: Context String
 defaultContext =
     foldMap (uncurry constField) fields
     <> field "git-hash" (const gitHash)
+    <> functionField "date" fmtDate
     <> H.defaultContext
   where
     fields =
@@ -43,21 +46,41 @@ defaultContext =
       , ("site-url", C.siteURL)
       , ("email", C.email)
       ]
-
-parseDate :: String -> Maybe UTCTime
-parseDate = parseTimeM @_ @UTCTime True defaultTimeLocale "%Y-%m-%d"
-
-postCtx :: Context String
-postCtx =
-    dateField "published" "%Y-%m-%d"
-    <> functionField "date" fmtDate
-    <> defaultContext
-    <> tagsField
-  where
-    fmtDate ((parseDate -> Just date ):xs) _ = do
+    fmtDate ((parseDate -> Just date) : xs) _ = do
       let fmt = case xs of [] -> "%e %B %Y"; fmt : _ -> fmt
       pure $ formatTime defaultTimeLocale fmt date
     fmtDate _ _ = error "invalid use of date function"
+
+parseDate :: String -> Maybe UTCTime
+parseDate x = msum [parseTimeM True defaultTimeLocale fmt x | fmt <- formats]
+  where
+    formats =
+      [ "%a, %d %b %Y %H:%M:%S %Z"
+      , "%a, %d %b %Y %H:%M:%S"
+      , "%Y-%m-%dT%H:%M:%S%Z"
+      , "%Y-%m-%dT%H:%M:%S"
+      , "%Y-%m-%d %H:%M:%S%Z"
+      , "%Y-%m-%d %H:%M:%S"
+      , "%Y-%m-%d"
+      , "%d.%m.%Y"
+      , "%B %e, %Y %l:%M %p"
+      , "%B %e, %Y"
+      , "%b %d, %Y"
+      ]
+
+postCtx :: Context String
+postCtx =
+    dateField "published" "%Y-%m-%dT%H:%M:%S%Ez"
+    <> dateField "updated" "%Y-%m-%dT%H:%M:%S%Ez"
+    <> urlField
+    <> tagsField
+    <> defaultContext
+
+urlField :: Context a
+urlField = field "url" $ \i -> do
+    let id = itemIdentifier i
+        empty' = fail $ "No route url found for item " ++ show id
+    maybe empty' (toUrl . takeDirectory) <$> getRoute id
 
 tagsField :: Context a
 tagsField = field "tags" \(Item id _) -> do
@@ -103,16 +126,22 @@ highlight = walkM \case
   (CodeBlock (_, "haskell" : _, _) (ghcHighlight -> Just body)) ->
     pure $ RawBlock "html" (wrap body)
   CodeBlock (_, (T.unpack -> lang) : _, _) (T.unpack -> body) ->
-    RawBlock "html" . wrap <$> unsafeCompiler (pygs lang body)
+    RawBlock "html" . wrap <$> pygs lang body
   block -> pure block
  where
-   pygs :: String -> String -> IO String
-   pygs lang = readProcess "pygmentize" ["-l", lang, "-f", "html", "-O", "nowrap=True"]
+   pygs :: String -> String -> Compiler String
+   pygs lang = unixFilter "pygmentize" ["-l", lang, "-f", "html", "-O", "nowrap=True"]
 
    wrap :: (H.ToMarkup a) => a -> T.Text
    wrap = TL.toStrict . renderHtml
      . (H.div H.! A.class_ "hl")
      . H.pre . H.preEscapedToMarkup
+
+addSectionLinks :: Pandoc -> Pandoc
+addSectionLinks = walk \case
+  Header n attr@(idAttr, _, _) inlines ->
+    Header n attr [Link nullAttr inlines ("#" <> idAttr, "")]
+  block -> block
 
 pandocCCPre :: (Item String -> Compiler (Item String)) -> Compiler (Item String)
 pandocCCPre f =
@@ -120,7 +149,7 @@ pandocCCPre f =
     (foldl1 (>=>) passes)
   where
     passes :: [Pandoc -> Compiler Pandoc]
-    passes = [pure . headerShift 1, highlight]
+    passes = [pure . foldl1 (.) [headerShift 1, addSectionLinks], highlight]
 
     reader :: ReaderOptions
     reader = defaultHakyllReaderOptions
@@ -142,3 +171,16 @@ pandocCC = pandocCCPre pure
 gitHash :: Compiler String
 gitHash = compilerUnsafeIO $
   readProcess "git" ["rev-parse", "--short", "master"] []
+
+-- relativizeUrls :: Item String -> Compiler (Item String)
+-- relativizeUrls item = do
+--   route <- getRoute $ itemIdentifier item
+--   pure $ case route of
+--     Just r  -> fmap (withUrls (rel r)) item
+--     Nothing -> item
+--   where
+--     isRel ('/' : '/' : _) = False
+--     isRel ('/' : _)      = True
+--     isRel _              = False
+--     rel _ ('$' : x) = x
+--     rel r x         = if isRel x then toSiteRoot r ++ x else x

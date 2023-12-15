@@ -1,11 +1,8 @@
 <div class="post-info">
   <ul>
-    <!-- <li><span class="date">$published$</span> $if(updated)$(Updated: $updated$)$endif$</li> -->
-    <li><span class="date">$date(published)$</span> $if(updated)$<span class="date">($updated$)$endif$</span></li>
-    $if(tags)$
-    <!-- $$for(tags)$$<li><a rel="tag" href="/tags.html#$$tag$$">#$$tag$$</a></li>$$endfor$$ -->
-    $tags$
-    $endif$
+    <li><span class="date">$date(published)$</span></li>
+    $if(updated)$<li><span class="date">Updated: $date(updated)$</span></li>$endif$
+    $if(tags)$$tags$$endif$
   </ul>
 </div>
 <article>$body$</article>

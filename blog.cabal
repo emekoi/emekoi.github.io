@@ -23,6 +23,7 @@ common base
     , base == 4.*
     , bytestring
     , containers
+    , filepath
     , hakyll == 4.16.*
     , text
 
@@ -37,7 +38,6 @@ library
   build-depends:
     , blaze-html ^>= 0.9
     , bytestring ^>= 0.11
-    , filepath
     , ghc-syntax-highlighter ^>= 0.0.10
     , pandoc
     , pandoc-types
@@ -52,4 +52,7 @@ executable site
     , aeson
     , blog
     , bytestring
+    , http-types
+    , wai
+    , wai-app-static
   ghc-options: -threaded -rtsopts -with-rtsopts=-N

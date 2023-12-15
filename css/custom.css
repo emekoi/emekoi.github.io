@@ -123,3 +123,7 @@ p:last-child {
 span.smallcaps { font-variant: small-caps; }
 div.columns { display: flex; gap: min(4vw, 1.5em); }
 div.column {flex: auto; overflow-x: auto; }
+
+h2 a, h3 a, h4 a, h5 a, h6 a {
+  text-decoration: none;
+}

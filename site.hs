@@ -5,16 +5,35 @@ module Main
 import Config
 import Control.Applicative
 import Control.Monad
-import Data.Aeson                 qualified as Aeson
-import Data.ByteString.Lazy.Char8 qualified as B
+import Data.Aeson                      qualified as Aeson
+import Data.ByteString.Lazy.Char8      qualified as B
 import Data.Foldable
-import Data.List                  qualified as L (intercalate)
-import Data.Map.Strict            qualified as Map
-import Data.Maybe                 (fromJust, fromMaybe)
-import Data.Set                   qualified as Set
-import Hakyll                     hiding (defaultContext, pandocCompiler)
+import Data.List                       qualified as L (intercalate)
+import Data.Map.Strict                 qualified as Map
+import Data.Maybe                      (fromJust, fromMaybe)
+import Data.Set                        qualified as Set
+import Hakyll                          hiding (defaultContext, pandocCompiler)
+import Network.HTTP.Types.Status       (status404)
+import Network.Wai                     qualified as W
 import Slug
+import System.FilePath                 ((</>))
 import Utils
+import WaiAppStatic.Storage.Filesystem
+import WaiAppStatic.Types
+
+hakyllConfig :: Configuration
+hakyllConfig = defaultConfiguration
+  { previewSettings =
+    \path -> let settings = previewSettings defaultConfiguration path in
+      settings
+        { ss404Handler = Just pageNotFound
+        }
+  }
+  where
+    pageNotFound ::  W.Application
+    pageNotFound _ respond =
+      B.readFile (destinationDirectory defaultConfiguration </> "404.html")
+        >>= respond . W.responseLBS status404 []
 
 feedConfig :: FeedConfiguration
 feedConfig = FeedConfiguration
@@ -48,7 +67,7 @@ jsonTagsCtx = field "tags" \(Item id _) -> do
   pure . B.unpack . Aeson.encode . fromMaybe [] $ lookupStringList "tags" meta
 
 main :: IO ()
-main = hakyll do
+main = hakyllWith hakyllConfig do
     match "templates/*" $
       compile templateBodyCompiler
 
@@ -64,7 +83,6 @@ main = hakyll do
       route $ basename `composeRoutes` setExtension "html"
       compile $ pandocCC
         >>= loadAndApplyTemplate "templates/default.html" defaultContext
-        >>= relativizeUrls
 
     match "pages/index.md" do
       route $ basename `composeRoutes` setExtension "html"
@@ -83,8 +101,8 @@ main = hakyll do
         in  constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
 
       compile $ pandocCC
-        >>= loadAndApplyTemplate "templates/post.html"    postCtx
         >>= saveSnapshot "content"
+        >>= loadAndApplyTemplate "templates/post.html"    postCtx
         >>= loadAndApplyTemplate "templates/default.html" postCtx
         >>= relativizeUrls
 
@@ -121,12 +139,14 @@ main = hakyll do
         loadAndApplyTemplate "templates/default.html" pageCtx (uItem page)
           >>= relativizeUrls
 
-    create ["atom.xml"] $ version "generated" do
+    create ["feed.xml"] $ version "generated" do
       route idRoute
       compile do
-        let feedCtx = postCtx <> bodyField "description"
+        feedT <- loadBody "templates/atom.xml"
+        itemT <- loadBody "templates/atom-item.xml"
         posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
-        renderAtom feedConfig feedCtx posts
+        let feedCtx = postCtx <> bodyField "description"
+        renderAtomWithTemplates feedT itemT feedConfig feedCtx posts
 
     create ["feed.json"] $ version "generated" do
       route idRoute
