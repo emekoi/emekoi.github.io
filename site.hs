@@ -20,7 +20,7 @@ import Network.HTTP.Types.Status  (status404)
 import Network.Wai                qualified as W
 import Slug
 import System.Directory           (doesFileExist)
-import System.FilePath            (takeExtension, takeFileName, (<.>), (</>))
+import System.FilePath            (takeExtension, (<.>), (</>))
 import System.Process
 import Text.RawString.QQ
 import Utils
