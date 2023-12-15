@@ -61,30 +61,49 @@ feedConfig = FeedConfiguration
   , feedRoot        = siteURL
   }
 
-data PostList
-  = Tag String
-  | Only Int
-  | All
-
-postsPattern :: Pattern
-postsPattern = "posts/*.md" .||. "posts/*.lhs"
-
-postList :: PostList -> Compiler [Item String]
-postList p = do
-  posts <- recentFirst =<< loadAll postsPattern
-  case p of
-    All        -> pure posts
-    Only n     -> pure $ take n posts
-    Tag tag ->
-      filterM (\(Item id _) -> elem tag <$> getTags id) posts
-
 jsonTagsCtx :: Context a
 jsonTagsCtx = field "tags" \(Item id _) -> do
   meta <- getMetadata id
   pure . B.unpack . Aeson.encode . fromMaybe [] $ lookupStringList "tags" meta
 
+data PostList
+  = Tag String
+  | Only Int
+  | All
+
+draftsPattern :: Pattern
+draftsPattern = "drafts/*.md" .||. "drafts/*.lhs"
+
+postsPattern :: Pattern
+postsPattern = "posts/*.md" .||. "posts/*.lhs"
+
+tagPageEntry :: String
+tagPageEntry = [r|
+  <h2 id="$tag$"><a href=\"#$tag$\">#$tag$</a></h2>
+  $partial("templates/post-list.html")$
+|]
+
 main :: IO ()
-main = hakyllWith hakyllConfig do
+main = do
+  hakyllArgs <- defaultParser hakyllConfig
+
+  let
+    allPostsPattern :: Pattern
+    allPostsPattern =
+      case optCommand hakyllArgs of
+        Watch {} -> postsPattern .||. draftsPattern
+        _ -> postsPattern
+
+    postList :: PostList -> Compiler [Item String]
+    postList p = do
+      posts <- recentFirst =<< loadAll allPostsPattern
+      case p of
+        All        -> pure posts
+        Only n     -> pure $ take n posts
+        Tag tag ->
+          filterM (\(Item id _) -> elem tag <$> getTags id) posts
+
+  hakyllWithArgs hakyllConfig hakyllArgs do
     match "templates/*" $
       compile templateBodyCompiler
 
@@ -101,16 +120,7 @@ main = hakyllWith hakyllConfig do
       compile $ pandocCC
         >>= loadAndApplyTemplate "templates/default.html" defaultContext
 
-    match "pages/index.md" do
-      route $ basename `composeRoutes` setExtension "html"
-      let indexCtx = listField "posts" postCtx (postList (Only 5))
-            <> defaultContext
-
-      compile $ pandocCCPre (applyAsTemplate indexCtx)
-        >>= loadAndApplyTemplate "templates/default.html" indexCtx
-        >>= relativizeUrls
-
-    match ("posts/*.md" .||. "posts/*.lhs") do
+    match allPostsPattern do
       route $ metadataRoute \meta ->
         let
           slug = fromJust $ lookupString "slug" meta
@@ -123,59 +133,63 @@ main = hakyllWith hakyllConfig do
         >>= loadAndApplyTemplate "templates/default.html" postCtx
         >>= relativizeUrls
 
-    create ["posts/index.html"] $ version "generated" do
-      route idRoute
-      compile do
-        let postListCtx = fold
-              [ listField "posts" postCtx (postList All)
-              , constField "title" "Posts"
-              , defaultContext
-              ]
-
-        makeItem "$partial(\"templates/post-list.html\")$"
-          >>= applyAsTemplate postListCtx
-          >>= loadAndApplyTemplate "templates/default.html" postListCtx
+    draftsDep <- makePatternDependency draftsPattern
+    rulesExtraDependencies [draftsDep] $ do
+      match "pages/index.md" do
+        route $ basename `composeRoutes` setExtension "html"
+        let indexCtx = listField "posts" postCtx (postList (Only 5))
+              <> defaultContext
+        compile $ pandocCCPre (applyAsTemplate indexCtx)
+          >>= loadAndApplyTemplate "templates/default.html" indexCtx
           >>= relativizeUrls
 
-    create ["tags.html"] $ version "generated" do
-      postTags <-
-        fmap (maybe Set.empty Set.fromList . lookupStringList "tags")
-        . Map.fromList <$> getAllMetadata postsPattern
+      create ["posts/index.html"] $ version "generated" do
+        route idRoute
+        compile do
+          let postListCtx = fold
+                [ listField "posts" postCtx (postList All)
+                , constField "title" "Posts"
+                , defaultContext
+                ]
 
-      route idRoute
-      compile do
-        let postListCtx tag = constField "tag" tag
-              <> listField "posts" postCtx (postList (Tag tag))
-            pageCtx = constField "title" "Tags" <> defaultContext
+          makeItem "$partial(\"templates/post-list.html\")$"
+            >>= applyAsTemplate postListCtx
+            >>= loadAndApplyTemplate "templates/default.html" postListCtx
+            >>= relativizeUrls
 
-        uItem <- Item <$> getUnderlying
-        page <- foldrM `flip` [] `flip` fold postTags $ \tag acc -> do
-          Item _ item <- applyAsTemplate (postListCtx tag) $ uItem tagPageEntry
-          pure $ item ++ acc
+      create ["tags.html"] $ version "generated" do
+        postTags <-
+          fmap (maybe Set.empty Set.fromList . lookupStringList "tags")
+          . Map.fromList <$> getAllMetadata postsPattern
 
-        loadAndApplyTemplate "templates/default.html" pageCtx (uItem page)
-          >>= relativizeUrls
+        route idRoute
+        compile do
+          let postListCtx tag = constField "tag" tag
+                <> listField "posts" postCtx (postList (Tag tag))
+              pageCtx = constField "title" "Tags" <> defaultContext
 
-    create ["feed.xml"] $ version "generated" do
-      route idRoute
-      compile do
-        feedT <- loadBody "templates/atom.xml"
-        itemT <- loadBody "templates/atom-item.xml"
-        posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
-        let feedCtx = postCtx <> bodyField "description"
-        renderAtomWithTemplates feedT itemT feedConfig feedCtx posts
+          uItem <- Item <$> getUnderlying
+          page <- foldrM `flip` [] `flip` fold postTags $ \tag acc -> do
+            Item _ item <- applyAsTemplate (postListCtx tag) $ uItem tagPageEntry
+            pure $ item ++ acc
 
-    create ["feed.json"] $ version "generated" do
-      route idRoute
-      compile do
-        posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
-        feedT <- loadBody "templates/feed.json"
-        itemT <- loadBody "templates/feed-item.json"
-        let feedCtx = bodyField "description" <> jsonTagsCtx <> postCtx
-        renderJsonWithTemplates feedT itemT feedConfig feedCtx posts
+          loadAndApplyTemplate "templates/default.html" pageCtx (uItem page)
+            >>= relativizeUrls
 
-  where
-    tagPageEntry :: String
-    tagPageEntry =
-      [r|<h2 id="$tag$"><a href=\"#$tag$\">#$tag$</a></h2>
-      $partial("templates/post-list.html")$|]
+      create ["feed.xml"] $ version "generated" do
+        route idRoute
+        compile do
+          feedT <- loadBody "templates/atom.xml"
+          itemT <- loadBody "templates/atom-item.xml"
+          posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+          let feedCtx = postCtx <> bodyField "description"
+          renderAtomWithTemplates feedT itemT feedConfig feedCtx posts
+
+      create ["feed.json"] $ version "generated" do
+        route idRoute
+        compile do
+          posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+          feedT <- loadBody "templates/feed.json"
+          itemT <- loadBody "templates/feed-item.json"
+          let feedCtx = bodyField "description" <> jsonTagsCtx <> postCtx
+          renderJsonWithTemplates feedT itemT feedConfig feedCtx posts
