@@ -3,6 +3,9 @@
     "title": "$title$",
     "home_page_url": "$root$",
     "feed_url": "$root$$url$",
+    $if(description)$
+    "description": "$description$",
+    $endif$
     $if(authorName)$
     "authors": [
         {

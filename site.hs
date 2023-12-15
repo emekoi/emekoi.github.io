@@ -19,7 +19,7 @@ import Utils
 feedConfig :: FeedConfiguration
 feedConfig = FeedConfiguration
   { feedTitle       = siteTitle
-  , feedDescription = ""
+  , feedDescription = author ++ "'s Blog"
   , feedAuthorName  = author
   , feedAuthorEmail = email
   , feedRoot        = siteURL
@@ -127,13 +127,6 @@ main = hakyll do
         let feedCtx = postCtx <> bodyField "description"
         posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
         renderAtom feedConfig feedCtx posts
-
-    create ["rss.xml"] $ version "generated" do
-      route idRoute
-      compile do
-        let feedCtx = postCtx <> bodyField "description"
-        posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
-        renderRss feedConfig feedCtx posts
 
     create ["feed.json"] $ version "generated" do
       route idRoute
