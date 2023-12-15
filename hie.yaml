@@ -14,7 +14,3 @@ cradle:
       config:
         cradle:
           cabal:
-            - path: "./src"
-              component: "lib:site"
-            - path: "."
-              component: "exe:site"

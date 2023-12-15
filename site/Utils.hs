@@ -16,9 +16,8 @@ import Hakyll                          hiding (defaultContext, pandocCompiler,
                                         relativizeUrls, relativizeUrlsWith,
                                         tagsField, urlField)
 import Hakyll                          qualified as H
-import Hakyll.Core.Compiler.Internal
 import System.FilePath                 (takeDirectory, takeFileName)
-import System.Process
+import System.Process                  (readProcess)
 import Text.Blaze.Html.Renderer.String qualified as H
 import Text.Blaze.Html.Renderer.Text   (renderHtml)
 import Text.Blaze.Html5                qualified as H
@@ -169,7 +168,7 @@ pandocCC :: Compiler (Item String)
 pandocCC = pandocCCPre pure
 
 gitHash :: Compiler String
-gitHash = compilerUnsafeIO $
+gitHash = unsafeCompiler $
   readProcess "git" ["rev-parse", "--short", "master"] []
 
 -- relativizeUrls :: Item String -> Compiler (Item String)

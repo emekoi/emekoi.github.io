@@ -75,6 +75,9 @@ jobs:
         cabal build all
         cabal exec site build
 
+    - name: Build resume
+      uses: xu-cheng/latex-action@v3
+
     - name: Setup Pages
       uses: actions/configure-pages@v4
 

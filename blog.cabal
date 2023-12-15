@@ -13,6 +13,7 @@ common base
   ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing
   default-language: Haskell2010
   default-extensions:
+    BangPatterns
     BlockArguments
     FlexibleContexts
     FlexibleInstances
@@ -32,6 +33,7 @@ common base
     , containers ^>= 0.6
     , filepath ^>= 1.4
     , hakyll ^>= 4.16
+    , process ^>= 1.6
     , text ^>= 2.0
 
 library
@@ -48,7 +50,6 @@ library
     , ghc-syntax-highlighter ^>= 0.0.10
     , pandoc ^>= 3.1
     , pandoc-types ^>= 1.23
-    , process ^>= 1.6
     , text-icu ^>= 0.8
     , time ^>= 1.12
 

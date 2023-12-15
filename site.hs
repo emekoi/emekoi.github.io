@@ -20,7 +20,8 @@ import Network.HTTP.Types.Status  (status404)
 import Network.Wai                qualified as W
 import Slug
 import System.Directory           (doesFileExist)
-import System.FilePath            (takeExtension, (<.>), (</>))
+import System.FilePath            (takeExtension, takeFileName, (<.>), (</>))
+import System.Process
 import Text.RawString.QQ
 import Utils
 import WaiAppStatic.Types
@@ -77,9 +78,12 @@ draftsPattern = "drafts/*.md" .||. "drafts/*.lhs"
 postsPattern :: Pattern
 postsPattern = "posts/*.md" .||. "posts/*.lhs"
 
+resumePattern :: Pattern
+resumePattern = "resume/*.tex" .||. "resume/*.sty"
+
 tagPageEntry :: String
 tagPageEntry = [r|
-  <h2 id="$tag$"><a href=\"#$tag$\">#$tag$</a></h2>
+  <h2 id="$tag$"><a href="#$tag$">#$tag$</a></h2>
   $partial("templates/post-list.html")$
 |]
 
@@ -88,11 +92,15 @@ main = do
   hakyllArgs <- defaultParser hakyllConfig
 
   let
-    allPostsPattern :: Pattern
-    allPostsPattern =
+    isWatch :: Bool
+    isWatch =
       case optCommand hakyllArgs of
-        Watch {} -> postsPattern .||. draftsPattern
-        _ -> postsPattern
+        Watch {} -> True; _ -> False
+
+    allPostsPattern :: Pattern
+    allPostsPattern
+      | isWatch   = postsPattern .||. draftsPattern
+      | otherwise = postsPattern
 
     postList :: PostList -> Compiler [Item String]
     postList p = do
@@ -133,8 +141,29 @@ main = do
         >>= loadAndApplyTemplate "templates/default.html" postCtx
         >>= relativizeUrls
 
+    -- NOTE: even though these are not in the final site (no `route`),
+    -- we need to use `copyFileCompiler` so they are in the store and
+    -- dependency tracking works correctly
+    match resumePattern do
+      compile copyFileCompiler
+
+    resumeDeps <- makePatternDependency resumePattern
+    rulesExtraDependencies [resumeDeps] do
+      create ["static/resume.pdf"] do
+        route idRoute
+
+        when isWatch do
+          compile $ do
+            TmpFile tmp <- newTmpFile "latexmk"
+            _ <- unsafeCompiler $ do
+              readProcess "latexmk"
+                [ "-jobname=" ++ takeFileName tmp
+                , "-outdir=" ++ hakyllConfig.tmpDirectory
+                ] []
+            makeItem $ CopyFile (tmp <.> "pdf")
+
     draftsDep <- makePatternDependency draftsPattern
-    rulesExtraDependencies [draftsDep] $ do
+    rulesExtraDependencies [draftsDep] do
       match "pages/index.md" do
         route $ basename `composeRoutes` setExtension "html"
         let indexCtx = listField "posts" postCtx (postList (Only 5))
@@ -160,7 +189,7 @@ main = do
       create ["tags.html"] $ version "generated" do
         postTags <-
           fmap (maybe Set.empty Set.fromList . lookupStringList "tags")
-          . Map.fromList <$> getAllMetadata postsPattern
+          . Map.fromList <$> getAllMetadata allPostsPattern
 
         route idRoute
         compile do
@@ -181,14 +210,14 @@ main = do
         compile do
           feedT <- loadBody "templates/atom.xml"
           itemT <- loadBody "templates/atom-item.xml"
-          posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+          posts <- recentFirst =<< loadAllSnapshots allPostsPattern "content"
           let feedCtx = postCtx <> bodyField "description"
           renderAtomWithTemplates feedT itemT feedConfig feedCtx posts
 
       create ["feed.json"] $ version "generated" do
         route idRoute
         compile do
-          posts <- recentFirst =<< loadAllSnapshots postsPattern "content"
+          posts <- recentFirst =<< loadAllSnapshots allPostsPattern "content"
           feedT <- loadBody "templates/feed.json"
           itemT <- loadBody "templates/feed-item.json"
           let feedCtx = bodyField "description" <> jsonTagsCtx <> postCtx

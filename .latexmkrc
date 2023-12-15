@@ -1,0 +1,5 @@
+@default_files = ('resume/resume.tex');
+ensure_path('TEXINPUTS', './resume/');
+$aux_dir = '_cache/tmp/';
+$out_dir = '_site/static/';
+$pdf_mode = 1;

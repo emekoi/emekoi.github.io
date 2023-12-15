@@ -6,14 +6,14 @@ hide-title: true
 # About Me
 I am Emeka Nkurumeh, a third-year undergraduate student at Caltech. My main interests lie in functional programming and systems programming, which means I spend most of my time thinking about compilers. Right now I'm most interested in the compilation of algebraic effect-based systems.
 
-You can find my resume here when I get around to updating it.
+You can find my resume [here](/static/resume.pdf).
 
 # Contact
 Email
-: $email$
+: <$email$>
 
 Github
-: $github$
+: [@emekoi]($github$)
 
 <!-- # Publications -->
 
