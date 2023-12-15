@@ -4,7 +4,7 @@ module Config
 
 author, email, github :: String
 author = "Emeka Nkurumeh"
-email = "email@example.com"
+email = "e.nk@caltech.edu"
 github = "https://github.com/emekoi"
 
 siteLang, siteTitle, siteSource, siteURL :: String
