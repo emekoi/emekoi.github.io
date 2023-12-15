@@ -77,6 +77,8 @@ jobs:
 
     - name: Build resume
       uses: xu-cheng/latex-action@v3
+      with:
+        root_file: resume/resume.tex
 
     - name: Setup Pages
       uses: actions/configure-pages@v4

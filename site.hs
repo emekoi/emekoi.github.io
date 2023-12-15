@@ -154,13 +154,8 @@ main = do
 
         when isWatch do
           compile $ do
-            TmpFile tmp <- newTmpFile "latexmk"
-            _ <- unsafeCompiler $ do
-              readProcess "latexmk"
-                [ "-jobname=" ++ takeFileName tmp
-                , "-outdir=" ++ hakyllConfig.tmpDirectory
-                ] []
-            makeItem $ CopyFile (tmp <.> "pdf")
+            _ <- unsafeCompiler $ readProcess "latexmk" [] []
+            makeItem ()
 
     draftsDep <- makePatternDependency draftsPattern
     rulesExtraDependencies [draftsDep] do
