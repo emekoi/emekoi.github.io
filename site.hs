@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 module Main
     ( main
     ) where
@@ -5,28 +7,43 @@ module Main
 import Config
 import Control.Applicative
 import Control.Monad
-import Data.Aeson                      qualified as Aeson
-import Data.ByteString.Lazy.Char8      qualified as B
+import Data.Aeson                 qualified as Aeson
+import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Foldable
-import Data.List                       qualified as L (intercalate)
-import Data.Map.Strict                 qualified as Map
-import Data.Maybe                      (fromJust, fromMaybe)
-import Data.Set                        qualified as Set
-import Hakyll                          hiding (defaultContext, pandocCompiler)
-import Network.HTTP.Types.Status       (status404)
-import Network.Wai                     qualified as W
+import Data.List                  qualified as L (intercalate)
+import Data.Map.Strict            qualified as Map
+import Data.Maybe                 (fromJust, fromMaybe)
+import Data.Set                   qualified as Set
+import Data.Text                  qualified as T
+import Hakyll                     hiding (defaultContext, pandocCompiler)
+import Network.HTTP.Types.Status  (status404)
+import Network.Wai                qualified as W
 import Slug
-import System.FilePath                 ((</>))
+import System.Directory           (doesFileExist)
+import System.FilePath            (takeExtension, (<.>), (</>))
+import Text.RawString.QQ
 import Utils
-import WaiAppStatic.Storage.Filesystem
 import WaiAppStatic.Types
 
+-- https://github.com/LightAndLight/lightandlight.github.io/blob/a29bac1b084b86abe43e28c4062ca963d0647b98/site.hs#L31-L55
 hakyllConfig :: Configuration
 hakyllConfig = defaultConfiguration
   { previewSettings =
     \path -> let settings = previewSettings defaultConfiguration path in
       settings
         { ss404Handler = Just pageNotFound
+        , ssLookupFile = \pieces ->
+          case splitAt (length pieces - 1) pieces of
+            (prefix, [piece])
+              | let fileName = fromPiece piece
+              , takeExtension (T.unpack fileName) == "" ->
+                  settings.ssLookupFile $ prefix <> [unsafeToPiece $ fileName <> ".html"]
+            _ -> settings.ssLookupFile pieces
+        , ssGetMimeType = \file ->
+          if takeExtension (T.unpack (fromPiece file.fileName)) == "" then do
+            htmlExists <- doesFileExist $ path </> T.unpack (fromPiece file.fileName) <.> "html"
+            if htmlExists then pure "text/html" else settings.ssGetMimeType file
+          else settings.ssGetMimeType file
         }
   }
   where
@@ -160,4 +177,5 @@ main = hakyllWith hakyllConfig do
   where
     tagPageEntry :: String
     tagPageEntry =
-      "<h2 id=\"$tag$\">#$tag$</h2>$partial(\"templates/post-list.html\")$"
+      [r|<h2 id="$tag$"><a href=\"#$tag$\">#$tag$</a></h2>
+      $partial("templates/post-list.html")$|]

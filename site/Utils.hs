@@ -91,7 +91,7 @@ tagsField = field "tags" \(Item id _) -> do
       pure . H.renderHtml . H.toHtml $ f . ('#':) <$> tags
   where
     f x = H.li $ H.a
-        H.! A.href (H.toValue $ "/tags.html" ++ x)
+        H.! A.href (H.toValue $ "/tags" ++ x)
         H.! A.rel "tag" $ H.toHtml x
 
 ghcHighlight :: Text -> Maybe H.Html
