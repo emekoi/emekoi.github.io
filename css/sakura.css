@@ -14,6 +14,12 @@
   --main-width: 80ch;
 }
 
+@supports (font-variation-settings: normal) {
+  :root {
+    --font-family-monospace: "Fira Code VF", "DejaVu Sans Mono", Menlo, Consolas, "Liberation Mono", Monaco, "Lucida Console", monospace;
+  }
+}
+
 /* Body */
 html {
   font-family: var(--font-family-base);
