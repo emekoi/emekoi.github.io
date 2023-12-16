@@ -16,7 +16,8 @@ import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromJust, fromMaybe)
 import Data.Set                   qualified as Set
 import Data.Text                  qualified as T
-import Hakyll                     hiding (defaultContext, pandocCompiler)
+import Hakyll                     hiding (dateField, defaultContext,
+                                   pandocCompiler)
 import Network.HTTP.Types.Status  (status404)
 import Network.Wai                qualified as W
 import Slug
@@ -124,7 +125,12 @@ main = do
           posts <- recentFirst =<< loadAllSnapshots allPostsPattern "content"
           feedT <- loadBody . fromFilePath $ "templates" </> feedT
           itemT <- loadBody . fromFilePath $ "templates" </> itemT
-          let feedCtx = bodyField "description" <> ctx <> postCtx
+          let feedCtx = fold
+                [ ctx
+                , bodyField "description"
+                , modificationTimeField "updated" "%Y-%m-%dT%H:%M:%S%Ez"
+                , postCtx
+                ]
           f feedT itemT feedConfig feedCtx posts
 
   hakyllWithArgs hakyllConfig hakyllArgs do

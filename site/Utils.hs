@@ -12,9 +12,9 @@ import Data.Text.Lazy                  qualified as TL
 import Data.Time.Clock
 import Data.Time.Format
 import GHC.SyntaxHighlighter           (Token (..), tokenizeHaskell)
-import Hakyll                          hiding (defaultContext, pandocCompiler,
-                                        relativizeUrls, relativizeUrlsWith,
-                                        tagsField, urlField)
+import Hakyll                          hiding (dateField, defaultContext,
+                                        pandocCompiler, relativizeUrls,
+                                        relativizeUrlsWith, tagsField, urlField)
 import Hakyll                          qualified as H
 import System.FilePath                 (takeDirectory, takeFileName)
 import System.Process                  (readProcess)
@@ -67,10 +67,16 @@ parseDate x = msum [parseTimeM True defaultTimeLocale fmt x | fmt <- formats]
       , "%b %d, %Y"
       ]
 
+dateField :: String -> String -> Context String
+dateField key fmt = field key \(Item i _) -> do
+  getMetadataField i key >>= \case
+    Just (parseDate -> Just date) -> pure $ formatTime defaultTimeLocale fmt date
+    Just _ -> noResult $ "Invalid date field '" ++ key ++ "' in context"
+    _ -> noResult $ "Missing field '" ++ key ++ "' in context"
+
 postCtx :: Context String
 postCtx =
     dateField "published" "%Y-%m-%dT%H:%M:%S%Ez"
-    <> dateField "updated" "%Y-%m-%dT%H:%M:%S%Ez"
     <> urlField
     <> tagsField
     <> defaultContext
