@@ -118,7 +118,7 @@ main = do
         Tag tag ->
           filterM (\(Item id _) -> elem tag <$> getTags id) posts
 
-    createFeed name feedT itemT f ctx =
+    createFeed name feedT itemT f g ctx =
       create [name] $ version "generated" do
         route idRoute
         compile do
@@ -127,7 +127,7 @@ main = do
           itemT <- loadBody . fromFilePath $ "templates" </> itemT
           let feedCtx = fold
                 [ ctx
-                , bodyField "description"
+                , field "description" $ return . g . itemBody
                 , modificationTimeField "updated" "%Y-%m-%dT%H:%M:%S%Ez"
                 , postCtx
                 ]
@@ -137,7 +137,7 @@ main = do
     match "templates/*" $
       compile templateBodyCompiler
 
-    match ("css/*.css" .&&. complement "css/default.css") $
+    match ("css/*.css" .&&. complement ("css/default.css" .||. "css/noscript.css")) $
       compile templateBodyCompiler
 
     -- NOTE: even though these are not in the final site (no `route`),
@@ -159,6 +159,10 @@ main = do
     match staticFiles do
       route idRoute
       compile copyFileCompiler
+
+    match "css/noscript.css" do
+      route idRoute
+      compile compressCssCompiler
 
     match "css/default.css" do
       route idRoute
@@ -229,7 +233,7 @@ main = do
             >>= relativizeUrls
 
       createFeed "feed.xml" "atom.xml" "atom-item.xml"
-        renderAtomWithTemplates mempty
+        renderAtomWithTemplates escapeHtml mempty
 
       createFeed "feed.json" "feed.json" "feed-item.json"
-        renderJsonWithTemplates jsonTagsCtx
+        renderJsonWithTemplates id jsonTagsCtx

@@ -4,5 +4,5 @@
     <id>$root$$url$</id>
     <published>$date(published, "%Y-%m-%dT%H:%M:%S%Ez")$</published>
     <updated>$date(updated, "%Y-%m-%dT%H:%M:%S%Ez")$</updated>
-    <content type="html"><![CDATA[$description$]]></content>
+    <content type="html">$description$</content>
 </entry>

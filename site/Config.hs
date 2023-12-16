@@ -9,6 +9,6 @@ github = "https://github.com/emekoi"
 
 siteLang, siteTitle, siteSource, siteURL :: String
 siteLang = "en"
-siteTitle = "Forgetful Functor"
+siteTitle = author ++ "'s Blog"
 siteSource = "https://github.com/emekoi/emekoi.github.io"
 siteURL = "https://emekoi.github.io"
