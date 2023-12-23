@@ -148,13 +148,22 @@ addSectionLinks = walk \case
     Header n attr [Link nullAttr inlines ("#" <> idAttr, "")]
   block -> block
 
+imgLazyLoad :: Pandoc -> Pandoc
+imgLazyLoad = walk \case
+  Image (id, cs, kv) alt target ->
+    Image (id, cs, ("loading", "lazy") : kv) alt target
+  inline -> inline
+
 pandocCCPre :: (Item String -> Compiler (Item String)) -> Compiler (Item String)
 pandocCCPre f =
   getResourceBody >>= f >>= renderPandocWithTransformM reader writer
     (foldl1 (>=>) passes)
   where
     passes :: [Pandoc -> Compiler Pandoc]
-    passes = [pure . foldl1 (.) [headerShift 1, addSectionLinks], highlight]
+    passes =
+      [ pure . foldl1 (.) [headerShift 1, addSectionLinks, imgLazyLoad]
+      , highlight
+      ]
 
     reader :: ReaderOptions
     reader = defaultHakyllReaderOptions

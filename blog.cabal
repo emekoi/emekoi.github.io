@@ -4,7 +4,7 @@ author:             Emeka Nkurumeh
 build-type:         Simple
 homepage:           https://emekoi.github.io
 license-file:       LICENSE
-license:            MIT
+license:            BSD-3-Clause
 maintainer:         emekankurumeh@outlook.com
 name:               blog
 version:            0.1.0.0

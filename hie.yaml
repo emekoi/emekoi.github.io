@@ -10,6 +10,11 @@ cradle:
         cradle:
           direct:
             arguments: [-pgmL markdown-unlit]
+    - path: "./snippets"
+      config:
+        cradle:
+          direct:
+            arguments: [-pgmL markdown-unlit]
     - path: "."
       config:
         cradle:
