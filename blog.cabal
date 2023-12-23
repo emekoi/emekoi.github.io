@@ -42,6 +42,7 @@ library
       Config
       Slug
       Utils
+      Pandoc
   hs-source-dirs:
       site
   build-depends:

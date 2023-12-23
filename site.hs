@@ -26,6 +26,7 @@ import System.FilePath            (hasExtension, (<.>), (</>))
 import System.Process             (readProcess)
 import Text.RawString.QQ
 import Utils
+import Pandoc
 import WaiAppStatic.Types
 
 -- https://github.com/LightAndLight/lightandlight.github.io/blob/a29bac1b084b86abe43e28c4062ca963d0647b98/site.hs#L31-L55
@@ -171,7 +172,7 @@ main = do
 
     match (fromList ["pages/404.md"]) do
       route $ basename `composeRoutes` setExtension "html"
-      compile $ pandocCC
+      compile $ pandocCompiler
         >>= loadAndApplyTemplate "templates/default.html" defaultContext
 
     match allPostsPattern do
@@ -181,7 +182,7 @@ main = do
             <|> (titleSlug <$> lookupString "title" meta)
         in  constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
 
-      compile $ pandocCC
+      compile $ pandocCompiler
         >>= saveSnapshot "content"
         >>= loadAndApplyTemplate "templates/post.html"    postCtx
         >>= loadAndApplyTemplate "templates/default.html" postCtx
@@ -193,7 +194,7 @@ main = do
         route $ basename `composeRoutes` setExtension "html"
         let indexCtx = listField "posts" postCtx (postList (Only 5))
               <> defaultContext
-        compile $ pandocCCPre (applyAsTemplate indexCtx)
+        compile $ pandocCompiler' (applyAsTemplate indexCtx)
           >>= loadAndApplyTemplate "templates/default.html" indexCtx
           >>= relativizeUrls
 
