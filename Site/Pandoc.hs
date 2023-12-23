@@ -1,4 +1,4 @@
-module Pandoc
+module Site.Pandoc
     ( pandocCompiler
     , pandocCompiler'
     , pandocCompilerM

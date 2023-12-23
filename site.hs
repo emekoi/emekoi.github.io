@@ -5,7 +5,6 @@ module Main
     ( main
     ) where
 
-import Config
 import Control.Applicative
 import Control.Monad
 import Data.Aeson                 qualified as Aeson
@@ -20,13 +19,14 @@ import Hakyll                     hiding (dateField, defaultContext,
                                    pandocCompiler)
 import Network.HTTP.Types.Status  (status404)
 import Network.Wai                qualified as W
-import Slug
+import Site.Config
+import Site.Pandoc
+import Site.Slug
+import Site.Utils
 import System.Directory           (doesFileExist)
 import System.FilePath            (hasExtension, (<.>), (</>))
 import System.Process             (readProcess)
 import Text.RawString.QQ
-import Utils
-import Pandoc
 import WaiAppStatic.Types
 
 -- https://github.com/LightAndLight/lightandlight.github.io/blob/a29bac1b084b86abe43e28c4062ca963d0647b98/site.hs#L31-L55

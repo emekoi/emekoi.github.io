@@ -1,5 +1,5 @@
-module Slug
-    ( module Slug
+module Site.Slug
+    ( module Site.Slug
     ) where
 
 import Data.Char          qualified as Char

@@ -1,17 +1,12 @@
-module Utils
-    ( module Utils
+module Site.Utils
+    ( module Site.Utils
     ) where
 
-import Config                          qualified as C
+import Site.Config                          qualified as C
 import Control.Applicative
 import Control.Monad
-
-import Data.Text                       (Text)
-import Data.Text                       qualified as T
-import Data.Text.Lazy                  qualified as TL
 import Data.Time.Clock
 import Data.Time.Format
-import GHC.SyntaxHighlighter           (Token (..), tokenizeHaskell)
 import Hakyll                          hiding (dateField, defaultContext,
                                         pandocCompiler, relativizeUrls,
                                         relativizeUrlsWith, tagsField, urlField)
@@ -19,12 +14,8 @@ import Hakyll                          qualified as H
 import System.FilePath                 (takeDirectory, takeFileName)
 import System.Process                  (readProcess)
 import Text.Blaze.Html.Renderer.String qualified as H
-import Text.Blaze.Html.Renderer.Text   (renderHtml)
 import Text.Blaze.Html5                qualified as H
 import Text.Blaze.Html5.Attributes     qualified as A
-import Text.Pandoc
-import Text.Pandoc.Shared              (headerShift)
-import Text.Pandoc.Walk
 
 basename :: Routes
 basename = customRoute (takeFileName . toFilePath)
