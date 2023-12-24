@@ -2,7 +2,6 @@ module Site.Utils
     ( module Site.Utils
     ) where
 
-import Site.Config                          qualified as C
 import Control.Applicative
 import Control.Monad
 import Data.Time.Clock
@@ -11,6 +10,7 @@ import Hakyll                          hiding (dateField, defaultContext,
                                         pandocCompiler, relativizeUrls,
                                         relativizeUrlsWith, tagsField, urlField)
 import Hakyll                          qualified as H
+import Site.Config                     qualified as C
 import System.FilePath                 (takeDirectory, takeFileName)
 import System.Process                  (readProcess)
 import Text.Blaze.Html.Renderer.String qualified as H

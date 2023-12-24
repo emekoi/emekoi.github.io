@@ -1,74 +1,46 @@
 module Site.Pandoc
-    ( pandocCompiler
+    ( BibInfo (..)
+    , defaultPostPass
+    , pandocCompiler
     , pandocCompiler'
     , pandocCompilerM
+    , pandocCompilerRaw
+    , pandocCompilerRaw'
     ) where
 
-import Data.Text                       (Text)
-import Data.Text.Lazy                  qualified as TL
-import GHC.SyntaxHighlighter           (Token (..), tokenizeHaskell)
-import Hakyll (defaultHakyllReaderOptions, defaultHakyllWriterOptions, unixFilter)
-import Text.Blaze.Html.Renderer.Text   (renderHtml)
-import Text.Blaze.Html5                qualified as H
-import Text.Blaze.Html5.Attributes     qualified as A
-import Text.Pandoc.Shared              (headerShift)
-import Text.Pandoc.Walk
 import Control.Monad
-import Data.Text                  qualified as T
+import Data.Text                     (Text)
+import Data.Text                     qualified as T
+import Data.Text.Lazy                qualified as TL
+import GHC.SyntaxHighlighter         (Token (..), tokenizeHaskell)
+import Hakyll qualified
 import Hakyll.Core.Compiler
 import Hakyll.Core.Item
+import Hakyll.Web.Pandoc.Biblio
 import Hakyll.Web.Pandoc.FileType
-import Text.Pandoc
+import Text.Blaze.Html.Renderer.Text (renderHtml)
+import Text.Blaze.Html5              qualified as H
+import Text.Blaze.Html5.Attributes   qualified as A
+import Text.Pandoc                   as Pandoc
+import Text.Pandoc.Shared            (headerShift)
+import Text.Pandoc.Walk              (walk, walkM)
 
-pandocIO :: PandocIO a -> Compiler (Either PandocError a)
-pandocIO = unsafeCompiler . runIO
+readerOptions :: ReaderOptions
+readerOptions = Hakyll.defaultHakyllReaderOptions
+  { readerStripComments = True
+  }
 
-readPandocWith
-  :: ReaderOptions
-  -> Item String
-  -> Compiler (Item Pandoc)
-readPandocWith ropt i@(Item id body) =
-    pandocIO (reader ropt (itemFileType i) (T.pack body)) >>= \case
-    Left err    -> fail $
-        "Hakyll.Web.Pandoc.readPandocWith: parse failed: " ++ show err
-    Right item' -> pure . Item id $ item'
-  where
-    reader ro t = case t of
-      DocBook            -> readDocBook ro
-      Html               -> readHtml ro
-      Jupyter            -> readIpynb ro
-      LaTeX              -> readLaTeX ro
-      LiterateHaskell t' -> reader ro t'
-      Markdown           -> readMarkdown ro
-      MediaWiki          -> readMediaWiki ro
-      OrgMode            -> readOrg ro
-      Rst                -> readRST ro
-      Textile            -> readTextile ro
-      _                  -> error $
-        "Hakyll.Web.readPandocWith: I don't know how to read a file of " ++
-        "the type " ++ show t ++ " for: " ++ show id
-
-writePandocWith
-  :: WriterOptions
-  -> Item Pandoc
-  -> Compiler (Item String)
-writePandocWith wopt (Item id body) =
-  pandocIO (writeHtml5String wopt body) >>= \case
-    Left err    -> fail $ "Hakyll.Web.Pandoc.writePandocWith: " ++ show err
-    Right body -> pure . Item id $ T.unpack body
-
-renderPandocM
-  :: ReaderOptions
-  -> WriterOptions
-  -> (Pandoc -> Compiler Pandoc)
-  -> Item String
-  -> Compiler (Item String)
-renderPandocM ropt wopt f =
-  readPandocWith ropt >=> traverse f >=> writePandocWith wopt
+writerOptions :: WriterOptions
+writerOptions = Hakyll.defaultHakyllWriterOptions
+  { writerHTMLMathMethod = KaTeX ""
+  , writerWrapText = WrapNone
+  , writerEmailObfuscation = JavascriptObfuscation
+  , writerHtmlQTags = True
+  , writerHighlightStyle = Nothing
+  }
 
 ghcHighlight :: Text -> Maybe H.Html
-ghcHighlight (tokenizeHaskell -> Just x) =
-  pure $ formatTokens x
+ghcHighlight (tokenizeHaskell -> Just x) = pure $ formatTokens x
   where
     tokenClass :: Token -> Maybe Text
     tokenClass = \case
@@ -102,7 +74,8 @@ highlight = walkM \case
   block -> pure block
  where
    pygs :: String -> String -> Compiler String
-   pygs lang = unixFilter "pygmentize" ["-l", lang, "-f", "html", "-O", "nowrap=True"]
+   pygs lang = Hakyll.unixFilter "pygmentize"
+     ["-l", lang, "-f", "html", "-O", "nowrap=True"]
 
    wrap :: (H.ToMarkup a) => a -> T.Text
    wrap = TL.toStrict . renderHtml
@@ -121,37 +94,99 @@ imgLazyLoad = walk \case
     Image (id, cs, ("loading", "lazy") : kv) alt target
   inline -> inline
 
-pandocCompiler' :: (Item String -> Compiler (Item String)) -> Compiler (Item String)
-pandocCompiler' f =
-  getResourceBody >>= f >>= renderPandocM reader writer
-    (foldl1 (>=>) passes)
+pandocIO :: PandocIO a -> Compiler (Either PandocError a)
+pandocIO = unsafeCompiler . runIO
+
+data BibInfo
+  = BibInfo
+  { csl  :: Item CSL
+  , bibs :: [Item Biblio]
+  }
+  | NoBib
+
+readPandocWith
+  :: ReaderOptions
+  -> Item String
+  -> Compiler (Item Pandoc)
+readPandocWith ropt i@(Item id body) =
+    pandocIO (reader ropt (itemFileType i) (T.pack body)) >>= \case
+      Right (Item id -> item) -> pure item
+      Left err -> fail $
+        "Hakyll.Web.Pandoc.readPandocWith: parse failed: " ++ show err
   where
-    passes :: [Pandoc -> Compiler Pandoc]
-    passes =
-      [ pure . foldl1 (.) [headerShift 1, addSectionLinks, imgLazyLoad]
-      , highlight
-      ]
+    reader ro t = case t of
+      DocBook            -> readDocBook ro
+      Html               -> readHtml ro
+      Jupyter            -> readIpynb ro
+      LaTeX              -> readLaTeX ro
+      LiterateHaskell t' -> reader ro t'
+      Markdown           -> readMarkdown ro
+      MediaWiki          -> readMediaWiki ro
+      OrgMode            -> readOrg ro
+      Rst                -> readRST ro
+      Textile            -> readTextile ro
+      _                  -> error $
+        "Hakyll.Web.readPandocWith: I don't know how to read a file of " ++
+        "the type " ++ show t ++ " for: " ++ show id
 
-    reader :: ReaderOptions
-    reader = defaultHakyllReaderOptions
-      { readerStripComments = True
-      }
+writePandocWith
+  :: WriterOptions
+  -> Item Pandoc
+  -> Compiler (Item String)
+writePandocWith wopt (Item id body) =
+  pandocIO (writeHtml5String wopt body) >>= \case
+    Right (Item id . T.unpack -> body) -> pure body
+    Left err   -> fail $ "Hakyll.Web.Pandoc.writePandocWith: " ++ show err
 
-    writer :: WriterOptions
-    writer = defaultHakyllWriterOptions
-      { writerHTMLMathMethod = KaTeX ""
-      , writerWrapText = WrapNone
-      , writerEmailObfuscation = JavascriptObfuscation
-      , writerHtmlQTags = True
-      , writerHighlightStyle = Nothing
-      }
-
-pandocCompiler :: Compiler (Item String)
-pandocCompiler = pandocCompiler' pure
-
-pandocCompilerM
+renderPandocM
   :: ReaderOptions
   -> WriterOptions
+  -> BibInfo
+  -> (Pandoc -> Compiler Pandoc)
+  -> Item String
+  -> Compiler (Item String)
+renderPandocM ropt wopt NoBib f =
+  readPandocWith ropt >=> traverse f >=> writePandocWith wopt
+renderPandocM ropt wopt (BibInfo cls bibs) f =
+  readPandocWith ropt
+    >=> processPandocBiblios cls bibs
+    >=> traverse f
+    >=> writePandocWith wopt
+
+pandocCompiler :: Compiler (Item String)
+pandocCompiler = pandocCompiler' NoBib
+
+pandocCompiler' :: BibInfo -> Compiler (Item String)
+pandocCompiler' = pandocCompilerM `flip` pure
+
+defaultPostPass :: Pandoc -> Compiler Pandoc
+defaultPostPass  = pure . foldl1 (.) [addSectionLinks, imgLazyLoad]
+
+pandocCompilerM
+  :: BibInfo
+  -> (Item String -> Compiler (Item String))
+  -> Compiler (Item String)
+pandocCompilerM bi f = pandocCompilerRaw bi f $
+  foldl1 (>=>)
+    [ (pure . headerShift 1) >=> defaultPostPass
+    , highlight
+    ]
+
+pandocCompilerRaw
+  :: BibInfo
+  -> (Item String -> Compiler (Item String))
   -> (Pandoc -> Compiler Pandoc)
   -> Compiler (Item String)
-pandocCompilerM ropt wopt f = getResourceBody >>= renderPandocM ropt wopt f
+pandocCompilerRaw = pandocCompilerRaw' readerOptions writerOptions
+
+pandocCompilerRaw'
+  :: ReaderOptions
+  -> WriterOptions
+  -> BibInfo
+  -> (Item String -> Compiler (Item String))
+  -> (Pandoc -> Compiler Pandoc)
+  -> Compiler (Item String)
+pandocCompilerRaw' ropt wopt bi f g =
+  getResourceString
+    >>= f
+    >>= renderPandocM ropt wopt bi g

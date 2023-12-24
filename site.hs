@@ -95,6 +95,21 @@ tagPageEntry = [r|
 staticFiles :: Pattern
 staticFiles = foldr1 (.||.) ["fonts/**"]
 
+bibFiles :: Pattern
+bibFiles = foldr1 (.||.)
+  [ "bib/*.bibtex"
+  , "bib/*.bib"
+  , "bib/*.json"
+  , "bib/*.yaml"
+  ]
+
+pandocBib :: Compiler (Item String)
+pandocBib = do
+  id <- getUnderlying
+  cslFile <- fromMaybe defaultCSLFile <$> getMetadataField id "csl"
+  csl <- load (fromFilePath cslFile)
+  loadAll bibFiles >>= pandocCompiler' . BibInfo csl
+
 main :: IO ()
 main = do
   hakyllArgs <- defaultParser hakyllConfig
@@ -138,6 +153,10 @@ main = do
     match "templates/*" $
       compile templateBodyCompiler
 
+    match bibFiles $ compile biblioCompiler
+
+    match "bib/*.csl" $ compile cslCompiler
+
     match ("css/*.css" .&&. complement ("css/default.css" .||. "css/noscript.css")) $
       compile templateBodyCompiler
 
@@ -172,7 +191,7 @@ main = do
 
     match (fromList ["pages/404.md"]) do
       route $ basename `composeRoutes` setExtension "html"
-      compile $ pandocCompiler
+      compile $ pandocCompilerRaw NoBib pure defaultPostPass
         >>= loadAndApplyTemplate "templates/default.html" defaultContext
 
     match allPostsPattern do
@@ -182,7 +201,7 @@ main = do
             <|> (titleSlug <$> lookupString "title" meta)
         in  constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
 
-      compile $ pandocCompiler
+      compile $ pandocBib
         >>= saveSnapshot "content"
         >>= loadAndApplyTemplate "templates/post.html"    postCtx
         >>= loadAndApplyTemplate "templates/default.html" postCtx
@@ -194,7 +213,8 @@ main = do
         route $ basename `composeRoutes` setExtension "html"
         let indexCtx = listField "posts" postCtx (postList (Only 5))
               <> defaultContext
-        compile $ pandocCompiler' (applyAsTemplate indexCtx)
+        compile $ pandocCompilerRaw NoBib
+            (applyAsTemplate indexCtx) defaultPostPass
           >>= loadAndApplyTemplate "templates/default.html" indexCtx
           >>= relativizeUrls
 
