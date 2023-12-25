@@ -89,4 +89,4 @@ jobs:
 
     - name: deploy to github pages
       id: deployment
-      uses: actions/deploy-pages@v3
+      uses: actions/deploy-pages@v4
