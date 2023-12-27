@@ -5,14 +5,13 @@ module Main
     ( main
     ) where
 
-import Control.Applicative
 import Control.Monad
 import Data.Aeson                 qualified as Aeson
 import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Foldable
 import Data.List                  qualified as L (intercalate)
 import Data.Map.Strict            qualified as Map
-import Data.Maybe                 (fromJust, fromMaybe)
+import Data.Maybe                 (fromMaybe)
 import Data.Set                   qualified as Set
 import Data.Text                  qualified as T
 import Hakyll                     hiding (dateField, defaultContext,
@@ -73,8 +72,8 @@ jsonTagsCtx = field "tags" \(Item id _) -> do
   pure . B.unpack . Aeson.encode . fromMaybe [] $ lookupStringList "tags" meta
 
 data PostList
-  = Tag String
-  | Only Int
+  = Tag !String
+  | Only !Int
   | All
 
 draftsPattern :: Pattern
@@ -196,10 +195,11 @@ main = do
 
     match allPostsPattern do
       route $ metadataRoute \meta ->
-        let
-          slug = fromJust $ lookupString "slug" meta
-            <|> (titleSlug <$> lookupString "title" meta)
-        in  constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
+        case lookupString "title" meta of
+          Nothing -> error "found post with no title"
+          Just (titleSlug -> title) ->
+            let slug = fromMaybe title $ lookupString "slug" meta in
+            constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
 
       compile $ pandocBib
         >>= saveSnapshot "content"

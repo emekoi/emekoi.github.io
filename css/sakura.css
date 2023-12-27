@@ -11,7 +11,7 @@
   --font-family-monospace: "Fira Code", "DejaVu Sans Mono", Menlo, Consolas, "Liberation Mono", Monaco, "Lucida Console", monospace;
   --font-size-base: 1.8rem;
   --main-gap: 13px;
-  --main-width: 80ch;
+  --main-width: 90ch;
 }
 
 @supports (font-variation-settings: normal) {

@@ -28,6 +28,8 @@ import Text.Pandoc.Walk              (walk, walkM)
 readerOptions :: ReaderOptions
 readerOptions = Hakyll.defaultHakyllReaderOptions
   { readerStripComments = True
+  , readerExtensions = enableExtension Ext_alerts $
+      readerExtensions Hakyll.defaultHakyllReaderOptions
   }
 
 writerOptions :: WriterOptions
@@ -37,6 +39,8 @@ writerOptions = Hakyll.defaultHakyllWriterOptions
   , writerEmailObfuscation = JavascriptObfuscation
   , writerHtmlQTags = True
   , writerHighlightStyle = Nothing
+  , writerExtensions = enableExtension Ext_alerts $
+      writerExtensions Hakyll.defaultHakyllWriterOptions
   }
 
 ghcHighlight :: Text -> Maybe H.Html
