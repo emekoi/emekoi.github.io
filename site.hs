@@ -104,12 +104,15 @@ bibFiles = foldr1 (.||.)
   , "bib/*.yaml"
   ]
 
-pandocBib :: Compiler (Item String)
-pandocBib = do
+getBibInfo :: Compiler BibInfo
+getBibInfo = do
   id <- getUnderlying
   cslFile <- fromMaybe defaultCSLFile <$> getMetadataField id "csl"
   csl <- load (fromFilePath cslFile)
-  loadAll bibFiles >>= pandocCompiler' . BibInfo csl
+  BibInfo csl <$> loadAll bibFiles
+
+pandocBib :: Compiler (Item String)
+pandocBib = getBibInfo >>= pandocCompiler'
 
 getPostSlug :: Metadata -> String
 getPostSlug meta =
@@ -216,10 +219,12 @@ main = do
       compile $
         getResourceString >>= (fmap (fmap compressCss) . applyAsTemplate mempty)
 
-    match (fromList ["pages/404.md"]) do
+    match (fromList ["pages/404.md", "pages/bibliography.md"]) do
       route $ basename `composeRoutes` setExtension "html"
-      compile $ pandocCompilerRaw NoBib pure defaultPostPass
-        >>= loadAndApplyTemplate "templates/default.html" defaultContext
+      compile $ do
+        bib <- getBibInfo
+        pandocCompilerRaw bib pure defaultPostPass
+          >>= loadAndApplyTemplate "templates/default.html" defaultContext
 
     match allPostsPattern do
       route $ metadataRoute \meta ->

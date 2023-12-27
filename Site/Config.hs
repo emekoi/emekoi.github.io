@@ -14,4 +14,4 @@ siteSource = "https://github.com/emekoi/emekoi.github.io"
 siteURL = "https://emekoi.github.io"
 
 defaultCSLFile :: String
-defaultCSLFile = "bib/chicago-author-date.csl"
+defaultCSLFile = "bib/ieee.csl"
