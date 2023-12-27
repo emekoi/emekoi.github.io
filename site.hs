@@ -9,7 +9,6 @@ import Control.Monad
 import Data.Aeson                 qualified as Aeson
 import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Foldable
-import Data.List                  qualified as L (intercalate)
 import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromMaybe)
 import Data.Set                   qualified as Set
@@ -22,8 +21,10 @@ import Site.Config
 import Site.Pandoc
 import Site.Slug
 import Site.Utils
-import System.Directory           (doesFileExist)
-import System.FilePath            (hasExtension, (<.>), (</>))
+import System.Directory           (doesDirectoryExist, doesFileExist,
+                                   listDirectory)
+import System.FilePath            (hasExtension, joinPath, takeDirectory, (<.>),
+                                   (</>))
 import System.Process             (readProcess)
 import Text.RawString.QQ
 import WaiAppStatic.Types
@@ -92,7 +93,8 @@ tagPageEntry = [r|
 |]
 
 staticFiles :: Pattern
-staticFiles = foldr1 (.||.) ["fonts/**"]
+-- staticFiles = foldr1 (.||.) ["fonts/**"]
+staticFiles = "fonts/**"
 
 bibFiles :: Pattern
 bibFiles = foldr1 (.||.)
@@ -108,6 +110,13 @@ pandocBib = do
   cslFile <- fromMaybe defaultCSLFile <$> getMetadataField id "csl"
   csl <- load (fromFilePath cslFile)
   loadAll bibFiles >>= pandocCompiler' . BibInfo csl
+
+getPostSlug :: Metadata -> String
+getPostSlug meta =
+  case lookupString "title" meta of
+    Nothing -> error "found post with no title"
+    Just (titleSlug -> title) ->
+      fromMaybe title $ lookupString "slug" meta
 
 main :: IO ()
 main = do
@@ -175,6 +184,25 @@ main = do
             _ <- unsafeCompiler $ readProcess "latexmk" [] []
             makeItem ()
 
+    -- copy post subfiles
+    getAllMetadata allPostsPattern >>=
+      mapM_ \(toFilePath -> filePath, meta) -> do
+        let
+          srcDir = takeDirectory filePath
+          slug = getPostSlug meta
+          src = srcDir </> slug
+
+        files <- preprocess $
+          doesDirectoryExist src >>= \case
+            True ->
+              fmap (fromFilePath . (src </>))
+                <$> listDirectory src
+            False -> pure []
+
+        unless (null files) $ match (fromList files) $ do
+          route $ gsubRoute srcDir (const "posts")
+          compile copyFileCompiler
+
     match staticFiles do
       route idRoute
       compile copyFileCompiler
@@ -195,11 +223,7 @@ main = do
 
     match allPostsPattern do
       route $ metadataRoute \meta ->
-        case lookupString "title" meta of
-          Nothing -> error "found post with no title"
-          Just (titleSlug -> title) ->
-            let slug = fromMaybe title $ lookupString "slug" meta in
-            constRoute $ L.intercalate "/" ["posts", slug, "index.html"]
+        constRoute $ joinPath ["posts", getPostSlug meta, "index.html"]
 
       compile $ pandocBib
         >>= saveSnapshot "content"
