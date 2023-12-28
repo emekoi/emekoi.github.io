@@ -12,6 +12,7 @@ csl: bib/ieee.csl
   <summary>Haskell language extensions and module imports.</summary>
 
 ``` haskell
+{-# OPTIONS_GHC -Wall -Wextra -Wno-name-shadowing #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs                 #-}
@@ -20,14 +21,13 @@ csl: bib/ieee.csl
 {-# LANGUAGE OverloadedRecordDot   #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE PatternSynonyms       #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE StandaloneDeriving    #-}
-{-# LANGUAGE TypeFamilies    #-}
-{-# LANGUAGE ViewPatterns    #-}
 
 module PatternMatching (module PatternMatching) where
 
-import Control.Monad.Trans.Reader
 import Control.Monad
+import Control.Monad.Trans.Reader
 import Data.Foldable              (foldl')
 import Data.Functor               (($>))
 import Data.List                  qualified as List
@@ -41,9 +41,7 @@ import Data.Text                  (Text)
 import Lens.Micro
 import Prettyprinter              ((<+>))
 import Prettyprinter              qualified as P
-import GHC.TypeLits
-import Data.Type.Ord
-import Unsafe.Coerce
+import Unsafe.Coerce              (unsafeCoerce)
 ```
 </details>
 
@@ -59,8 +57,6 @@ ghci -pgmL markdown-unlit <file>.lhs
 ```
 
 # TODOS
-- [ ] &nbsp;make sure that a constructor occurs without a guard when checking if a match is complete
-- [ ] &nbsp;handle specialization of guards in `rowSpecialize`. we have to delete impossible guards and discharge guard patterns so we don't perfrom tests multiple times
 - [ ] &nbsp;to adapt the algorithm shown in the successor ml paper, we have to consider guards in both the defaulting and specialization code
 
 # Introduction
@@ -184,105 +180,41 @@ data Level
 data NESeq x = NESeq x (Seq x)
   deriving (Eq, Foldable, Functor)
 
-data ConPattern where PDataCon :: DataCon -> Seq (Pattern 'High) -> ConPattern
-
 data Pattern (l :: Level) where
   PWild :: Maybe Text -> Pattern 'High
   PAs :: Text -> Pattern 'Low -> Pattern 'High
-  PData' :: ConPattern -> Pattern l
-  POr :: NESeq ConPattern -> Pattern 'High -> Pattern l
-
-pattern PData :: DataCon -> Seq (Pattern 'High) -> Pattern l
-pattern PData c ps = PData' (PDataCon c ps)
-
-data Level0
-  = L1
-  | L2
-  | L3
-
-type instance Compare L1 L1 = EQ
-type instance Compare L1 L2 = LT
-type instance Compare L1 L3 = LT
-type instance Compare L2 L1 = GT
-type instance Compare L2 L2 = EQ
-type instance Compare L2 L3 = LT
-type instance Compare L3 L1 = GT
-type instance Compare L3 L2 = GT
-type instance Compare L3 L3 = EQ
-
-data Pattern0 (l :: Level0) where
-  PWild0 :: Maybe Text -> Pattern0 'L3
-  -- PAs0 :: (Proof l 'L3 (l < 'L3)) -> Text -> Pattern0 l -> Pattern0 'L3
-  PAs0 :: (Compare l 'L3 ~ 'LT) => Text -> Pattern0 l -> Pattern0 'L3
-  POr0 :: NESeq (Pattern0 'L1) -> Maybe (Pattern0 'L3) -> Pattern0 'L2
-  PData0 :: Text -> Seq (Pattern0 l1) -> Pattern0 'L1
-
-data Pattern0LE l2 where Pattern0LE :: (l1 <= l2) => Pattern0 l1 -> Pattern0LE l2
-
-data Pattern0GE l2 where Pattern0GE :: (l1 >= l2) => Pattern0 l1 -> Pattern0GE l2
-
-data Proof a b c where Proof :: c => Proof a b c
-
-proof :: Proof a b (a < b) -> Proof a b (a <= b)
-proof = unsafeCoerce
-
--- lower0 :: (l2 > 'L1) => Pattern0 l2 -> (Maybe (Pattern0LE l2), Maybe Text)
--- lower0 (PWild0 x)                  = (Nothing, x)
--- lower0 (PAs0 (proof -> Proof) x p) = (Just $ Pattern0LE p, Just x)
--- lower0 (POr0 qs p)                 = (Just $ Pattern0LE (POr0 qs p), Nothing)
-
--- lower0 :: Pattern0 l2 -> (Maybe (Pattern0LE l2), Maybe Text)
--- lower0 PWild0        = (Nothing, Nothing)
--- lower0 (PVar0 x)     = (Nothing, Just x)
--- lower0 (PAs0 x p)    = (Just $ Pattern0LE p, Just x)
--- lower0 (PData0 c ps) = (Just $ Pattern0LE (PData0 c ps), Nothing)
--- lower0 (POr0 qs p)   = (Just $ Pattern0LE (POr0 qs p), Nothing)
-
--- raise0 :: Pattern0 l2 -> Maybe (Pattern0GE l2)
--- raise0 PWild0        = Nothing
--- raise0 (PVar0 _)     = Nothing
--- raise0 (PAs0 {})     = Nothing
--- raise0 (POr0 qs p)   = Just $ Pattern0GE (POr0 qs p)
--- raise0 (PData0 c ps) = Just $ Pattern0GE (PData0 c ps)
-
-lower0 :: (l2 > 'L1) => Pattern0 l2 -> (Maybe (Pattern0LE l2), Maybe Text)
-lower0 (PWild0 x)       = (Nothing, x)
-lower0 (PAs0 x p)    = (Just $ Pattern0LE p, Just x)
-lower0 (POr0 qs p)   = (Just $ Pattern0LE (POr0 qs p), Nothing)
-
-raise0 :: (l2 < 'L3) => Pattern0 l2 -> Pattern0GE l2
-raise0 (POr0 qs p)   = Pattern0GE (POr0 qs p)
-raise0 (PData0 c ps) = Pattern0GE (PData0 c ps)
-```
-
-``` {.haskell .ignore}
-data Level
-  = L1
-  | L2
-  | L3
-
-data NESeq x = NESeq x (Seq x)
-  deriving (Functor, Foldable)
-
-data Pattern (l :: Level) where
-  PWild :: Pattern 'L3
-  PVar :: Text -> Pattern 'L3
-  PAs :: Text -> Pattern 'L2 -> Pattern 'L3
-  POr :: NESeq (Pattern 'L1) -> Pattern 'L3 -> Pattern 'L2
-  PData :: Text -> Seq (Pattern 'L3) -> Pattern 'L1
+  POr :: Map DataCon (Seq (Pattern l')) -> Maybe (Pattern 'High) -> Pattern l
+  PData :: DataCon -> Seq (Pattern l') -> Pattern l
 ```
 
 This is probably the most advanced use of Haskell in this post, and while it is not strictly necessary, I find that using GADTs simplifies and the code and reduces repitition.
 
-It is also useful to define a helper function to convert, `High` patterns to `Low` patterns while caputuring any aliases introduced by `as` patterns
+It is also useful to define a helper functions to convert patterns to `Low` patterns while caputuring any aliases introduced by `as` patterns:
 
 ``` haskell
-lower :: Pattern 'High -> (Maybe (Pattern 'Low), Maybe Text)
+lower :: Pattern l -> (Maybe (Pattern 'Low), Maybe Text)
 lower (PWild x)    = (Nothing, x)
-lower (PAs x p)    = (Just p, Just x)
-lower (PData c ps) = (Just (PData c ps), Nothing)
-lower (POr qs p)   = (Just (POr qs p), Nothing)
+lower (PAs x p)    = (Just $ p, Just x)
+lower (POr qs p)   = (Just $ (POr qs p), Nothing)
+lower (PData c ps) = (Just $ (PData c ps), Nothing)
 ```
+
+and convert patterns to `High` patterns
+
+``` haskell
+raise :: Pattern l -> Pattern 'High
+raise p = unsafeCoerce p
+```
+
+``` {.haskell .ignore}
+raise :: Pattern l -> Pattern 'High
+raise (PWild x) = PWild x
+raise (PAs x p) = PAs x p
+raise (POr qs p)   = POr qs p
+raise (PData c ps) = PData c ps
+```
+
+This use of `unsafeCoerce` here is safe only because given some `Pattern l` there is always a way to construct a `Pattern 'High` that has the same runtime representation.
 
 # Matrix Decomposition
 
@@ -360,7 +292,7 @@ data PatternMatrix r = Matrix
 -- add any variables introduced by as patterns to the row
 handlePattern
   :: Var
-  -> Pattern 'High
+  -> Pattern l
   -> MatchRow r
   -> (MatchRow r -> b)
   -> b
@@ -377,116 +309,76 @@ patternDataCons = go mempty
   where
     go :: Set DataCon -> Pattern l -> Set DataCon
     go acc (PData c _) | c `Set.notMember` acc = Set.insert c acc
-    go acc (POr qs p) = foldl' (\a b -> go a (PData' b)) (go acc p) qs
+    go acc (POr qs p) = Map.keysSet qs <> maybe acc (go acc) p
     go acc (PAs _ p) = go acc p
     go acc _ = acc
 ```
 
 ``` haskell
--- | expand the or pattern into multiple rows
-expandOr
-  :: (Foldable t)
-  => Var
-  -> t ConPattern
-  -> Pattern 'High
-  -> MatchRow r
-  -> (b -> MatchRow r -> b)
-  -> b
-  -> b
-expandOr var qs p row f acc =
-  foldl' (\acc q -> f acc $ rowMatchVar var (PData' q) row) acc qs
-    & handlePattern var p row . f
-```
-
-``` {.haskell .ignore}
 rowDefault :: Var -> PatternMatrix r -> PatternMatrix r
 rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
   where
+    hasWildCard :: Pattern l -> Bool
+    hasWildCard (PWild {}) = True
+    hasWildCard (PAs _ p) = hasWildCard p
+    hasWildCard (POr _ (Just p )) = hasWildCard p
+    hasWildCard _ = False
+
+    f acc row | Just (var', _) <- row.guard, var == var' = acc
     f acc row = case Map.lookup var row.cols of
-      -- add the row as is
+      -- add the row as is since its a wildcard
       Nothing         -> acc :|> row
-      -- expand the or pattern into multiple rows
-      Just (POr qs p) -> expandOr var qs p row f acc
-      -- delete rows with constructor patterns
-      Just (PData {}) -> acc
-```
-
-``` haskell
-rowDefault :: Var -> PatternMatrix r -> PatternMatrix r
-rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
-  where
-    f acc row = case Map.lookup var row.cols of
-      -- add the row as is
-      Nothing         -> acc :|> row
-      -- expand the or pattern into multiple rows
-      Just (POr qs p) -> expandOr var qs p row f acc
-      -- delete rows with constructor patterns
-      Just (PData {}) -> acc
-```
-
-
-``` {.haskell .ignore}
--- TODO: remove guarded rows incompatible with con
-rowSpecialize :: Var -> DataCon -> Seq Var -> PatternMatrix r -> PatternMatrix r
-rowSpecialize var con conVars mat = mat { rows = foldl' f Empty mat.rows }
-  where
-    -- guardCompat (Just (var', PData con' _)) = var ==
-    guardCompat Nothing = True
-    f acc row = case Map.lookup var row.cols of
-      -- add the row as is since it's wildcard
-      -- because it places no constraints on `var`
-      Nothing -> acc :|> row
-      -- expand the or pattern into multiple rows
-      Just (POr qs p) -> expandOr var qs p row f acc
-      -- delete the column since there are no sub patterns
-      Just (PData con' Seq.Empty) | con == con' ->
-        acc :|> (row & rColsL %~ Map.delete var)
-      -- otherwise replace the column with its sub patterns
-      Just (PData con' ps) | con == con'-> do
-        case row.guard of
-          Just (var', PData con' _) | var == var', con == con' -> acc
-          Just (var', PData con' _) | var == var', con == con' -> acc
-          _ -> do
-            let g row i p = handlePattern (conVars `Seq.index` i) p row id
-            (acc :|>) $ Seq.foldlWithIndex
-              g (row & rColsL %~ Map.delete var) ps
-      -- since the constrcutors don't match delete the row
-      _ -> acc
-
+      -- we only need to look at the last pattern to decide
+      -- whether we should add an or pattern row
+      Just (POr _ (Just p)) | hasWildCard p -> acc :|> row
+      -- delete every other row
+      Just _ -> acc
 ```
 
 ``` haskell
 rowSpecialize :: Var -> DataCon -> Seq Var -> PatternMatrix r -> PatternMatrix r
 rowSpecialize var con conVars mat = mat { rows = foldl' f Empty mat.rows }
   where
-    -- guardCompat (Just (var', PData con' _)) = var ==
-    guardCompat Nothing = True
+    k :: MatchRow r -> Seq (Pattern l) -> MatchRow r
+    k row =
+      let g row i p = handlePattern (conVars `Seq.index` i) p row id
+       in Seq.foldlWithIndex g (row & rColsL %~ Map.delete var)
+
+    g :: Pattern l -> MatchRow r -> MatchRow r
+    g (PAs _ p) row = g p row
+    g (PData _ args) row = k row args
+    g (POr ps _) row | Just args <- Map.lookup con ps = k row args
+    g (POr _ (Just p)) row = g p row
+    g _ _ = error "unreachable"
+
     f acc row = case Map.lookup var row.cols of
       -- add the row as is since it's wildcard
       -- because it places no constraints on `var`
       Nothing -> acc :|> row
-      -- expand the or pattern into multiple rows
-      Just (POr qs p) -> expandOr var qs p row f acc
-      -- delete the column since there are no sub patterns
-      Just (PData con' Seq.Empty) | con == con' ->
-        acc :|> (row & rColsL %~ Map.delete var)
       -- otherwise replace the column with its sub patterns
       Just (PData con' ps) | con == con'-> do
         case row.guard of
-          Just (var', PData con' _) | var == var', con == con' -> acc
           Just (var', PData con' _) | var == var', con == con' -> acc
           _ -> do
             let g row i p = handlePattern (conVars `Seq.index` i) p row id
             (acc :|>) $ Seq.foldlWithIndex
               g (row & rColsL %~ Map.delete var) ps
       -- since the constrcutors don't match delete the row
+      Just p | con `Set.member` patternDataCons p ->
+        case row.guard of
+          Just (var', PData con' _) | var == var' ->
+            if con == con' then acc :|> g p row { guard = Nothing }
+            else acc
+          _ -> acc :|> g p row
       _ -> acc
 ```
 
 ``` haskell
 patternTypeInfo :: Pattern 'Low -> TypeInfo
 patternTypeInfo (PData (DataCon _ _ t) _) = t
-patternTypeInfo (POr (NESeq p _) _ )      = patternTypeInfo (PData' p)
+patternTypeInfo (POr ps _ )               =
+  let (c, args) = Map.findMin ps in
+  patternTypeInfo (PData c args)
 
 matchComplete :: TypeInfo -> Set DataCon -> Bool
 matchComplete (TypeInfo (Just span)) cons = length cons == fromIntegral span
@@ -494,6 +386,10 @@ matchComplete (TypeInfo Nothing) _        = False
 ```
 
 ``` haskell
+mapFoldlM :: (acc -> k -> v -> MatchM acc) -> acc -> Map k v -> MatchM acc
+mapFoldlM f z0 xs = Map.foldrWithKey c return xs z0
+  where c x y k z = f z x y >>= k; {-# INLINE c #-}
+
 matchCompile :: (Map Text Var -> r -> r') -> PatternMatrix r -> MatchM (Match r')
 matchCompile _ (Matrix Empty _) = pure Fail
 matchCompile k (Matrix (Row col Nothing binds body :<| _) _)
@@ -532,9 +428,9 @@ matchCompile k mat@(Matrix rows pick) = do
     goHead _ acc@(Just {}, _, _) _ = pure acc
     goHead v acc (PData c _)     = specialize v acc c
     goHead v acc (POr qs p)      = do
-      acc <- foldM (\x y -> goHead v x (PData' y)) acc qs
+      acc <- mapFoldlM (\acc c args -> goHead v acc (PData c args)) acc qs
       -- check if we hit a wildcard while compiling subpatterns
-      case fst $ lower p of
+      case maybe Nothing (fst . lower) p of
         -- compile a default case
         Nothing -> defaultCase v <&> \d ->
           acc & _1 ?~ d
@@ -542,10 +438,18 @@ matchCompile k mat@(Matrix rows pick) = do
         Just q -> goHead v acc q
 
     goRow _  acc@(Just {}, _, _) _ = pure acc
-    goRow v acc r = do
-      case Map.lookup v r.cols of
-        Just q -> goHead v acc q
-        _      -> pure acc
+    goRow v acc r =
+      let p     = Map.lookup v r.cols
+          pCons = maybe Set.empty patternDataCons p
+          acc'  = maybe (pure acc) (goHead v acc) p
+        -- don't emit matches where guard and `Alt` contradict
+        in case r.guard of
+          Just (v', p') | v == v'
+                        , Set.disjoint pCons (patternDataCons p') ->
+            pure acc
+          Just _ ->
+            acc' <&> _2 .~ (acc ^. _2)
+          Nothing -> acc'
 ```
 
 # Hueristics
