@@ -23,8 +23,7 @@ import Site.Slug
 import Site.Utils
 import System.Directory           (doesDirectoryExist, doesFileExist,
                                    listDirectory)
-import System.FilePath            (hasExtension, joinPath, takeDirectory, (<.>),
-                                   (</>))
+import System.FilePath            (hasExtension, joinPath, (<.>), (</>))
 import System.Process             (readProcess)
 import Text.RawString.QQ
 import WaiAppStatic.Types
@@ -189,11 +188,8 @@ main = do
 
     -- copy post subfiles
     getAllMetadata allPostsPattern >>=
-      mapM_ \(toFilePath -> filePath, meta) -> do
-        let
-          srcDir = takeDirectory filePath
-          slug = getPostSlug meta
-          src = srcDir </> slug
+      mapM_ \(_, getPostSlug -> slug) -> do
+        let src = "static" </> slug
 
         files <- preprocess $
           doesDirectoryExist src >>= \case
@@ -203,7 +199,7 @@ main = do
             False -> pure []
 
         unless (null files) $ match (fromList files) $ do
-          route $ gsubRoute srcDir (const "posts")
+          route $ gsubRoute "static" (const "posts")
           compile copyFileCompiler
 
     match staticFiles do

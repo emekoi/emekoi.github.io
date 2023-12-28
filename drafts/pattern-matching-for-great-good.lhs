@@ -21,6 +21,8 @@ csl: bib/ieee.csl
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE PatternSynonyms       #-}
 {-# LANGUAGE StandaloneDeriving    #-}
+{-# LANGUAGE TypeFamilies    #-}
+{-# LANGUAGE ViewPatterns    #-}
 
 module PatternMatching (module PatternMatching) where
 
@@ -39,6 +41,9 @@ import Data.Text                  (Text)
 import Lens.Micro
 import Prettyprinter              ((<+>))
 import Prettyprinter              qualified as P
+import GHC.TypeLits
+import Data.Type.Ord
+import Unsafe.Coerce
 ```
 </details>
 
@@ -53,9 +58,13 @@ cabal install -j markdown-unlit
 ghci -pgmL markdown-unlit <file>.lhs
 ```
 
+# TODOS
+- [ ] &nbsp;make sure that a constructor occurs without a guard when checking if a match is complete
+- [ ] &nbsp;handle specialization of guards in `rowSpecialize`. we have to delete impossible guards and discharge guard patterns so we don't perfrom tests multiple times
+- [ ] &nbsp;to adapt the algorithm shown in the successor ml paper, we have to consider guards in both the defaulting and specialization code
+
 # Introduction
 Among the many features that set functional programming languges apart from other
-
 
 First and foremost, we need things to pattern match on before we can start talking about pattern matching algorithms. In the spirit of keeping things relatively simple, our "language" will only have <abbr title="algebraic data types">ADTs</abbr>:
 
@@ -173,14 +182,94 @@ data Level
   | High
 
 data NESeq x = NESeq x (Seq x)
+  deriving (Eq, Foldable, Functor)
+
+data ConPattern where PDataCon :: DataCon -> Seq (Pattern 'High) -> ConPattern
+
+data Pattern (l :: Level) where
+  PWild :: Maybe Text -> Pattern 'High
+  PAs :: Text -> Pattern 'Low -> Pattern 'High
+  PData' :: ConPattern -> Pattern l
+  POr :: NESeq ConPattern -> Pattern 'High -> Pattern l
+
+pattern PData :: DataCon -> Seq (Pattern 'High) -> Pattern l
+pattern PData c ps = PData' (PDataCon c ps)
+
+data Level0
+  = L1
+  | L2
+  | L3
+
+type instance Compare L1 L1 = EQ
+type instance Compare L1 L2 = LT
+type instance Compare L1 L3 = LT
+type instance Compare L2 L1 = GT
+type instance Compare L2 L2 = EQ
+type instance Compare L2 L3 = LT
+type instance Compare L3 L1 = GT
+type instance Compare L3 L2 = GT
+type instance Compare L3 L3 = EQ
+
+data Pattern0 (l :: Level0) where
+  PWild0 :: Maybe Text -> Pattern0 'L3
+  -- PAs0 :: (Proof l 'L3 (l < 'L3)) -> Text -> Pattern0 l -> Pattern0 'L3
+  PAs0 :: (Compare l 'L3 ~ 'LT) => Text -> Pattern0 l -> Pattern0 'L3
+  POr0 :: NESeq (Pattern0 'L1) -> Maybe (Pattern0 'L3) -> Pattern0 'L2
+  PData0 :: Text -> Seq (Pattern0 l1) -> Pattern0 'L1
+
+data Pattern0LE l2 where Pattern0LE :: (l1 <= l2) => Pattern0 l1 -> Pattern0LE l2
+
+data Pattern0GE l2 where Pattern0GE :: (l1 >= l2) => Pattern0 l1 -> Pattern0GE l2
+
+data Proof a b c where Proof :: c => Proof a b c
+
+proof :: Proof a b (a < b) -> Proof a b (a <= b)
+proof = unsafeCoerce
+
+-- lower0 :: (l2 > 'L1) => Pattern0 l2 -> (Maybe (Pattern0LE l2), Maybe Text)
+-- lower0 (PWild0 x)                  = (Nothing, x)
+-- lower0 (PAs0 (proof -> Proof) x p) = (Just $ Pattern0LE p, Just x)
+-- lower0 (POr0 qs p)                 = (Just $ Pattern0LE (POr0 qs p), Nothing)
+
+-- lower0 :: Pattern0 l2 -> (Maybe (Pattern0LE l2), Maybe Text)
+-- lower0 PWild0        = (Nothing, Nothing)
+-- lower0 (PVar0 x)     = (Nothing, Just x)
+-- lower0 (PAs0 x p)    = (Just $ Pattern0LE p, Just x)
+-- lower0 (PData0 c ps) = (Just $ Pattern0LE (PData0 c ps), Nothing)
+-- lower0 (POr0 qs p)   = (Just $ Pattern0LE (POr0 qs p), Nothing)
+
+-- raise0 :: Pattern0 l2 -> Maybe (Pattern0GE l2)
+-- raise0 PWild0        = Nothing
+-- raise0 (PVar0 _)     = Nothing
+-- raise0 (PAs0 {})     = Nothing
+-- raise0 (POr0 qs p)   = Just $ Pattern0GE (POr0 qs p)
+-- raise0 (PData0 c ps) = Just $ Pattern0GE (PData0 c ps)
+
+lower0 :: (l2 > 'L1) => Pattern0 l2 -> (Maybe (Pattern0LE l2), Maybe Text)
+lower0 (PWild0 x)       = (Nothing, x)
+lower0 (PAs0 x p)    = (Just $ Pattern0LE p, Just x)
+lower0 (POr0 qs p)   = (Just $ Pattern0LE (POr0 qs p), Nothing)
+
+raise0 :: (l2 < 'L3) => Pattern0 l2 -> Pattern0GE l2
+raise0 (POr0 qs p)   = Pattern0GE (POr0 qs p)
+raise0 (PData0 c ps) = Pattern0GE (PData0 c ps)
+```
+
+``` {.haskell .ignore}
+data Level
+  = L1
+  | L2
+  | L3
+
+data NESeq x = NESeq x (Seq x)
   deriving (Functor, Foldable)
 
 data Pattern (l :: Level) where
-  PWild :: Pattern 'High
-  PVar :: Text -> Pattern 'High
-  PAs :: Text -> Pattern 'Low -> Pattern 'High
-  PData :: DataCon -> Seq (Pattern 'High) -> Pattern l
-  POr :: NESeq (Pattern 'Low) -> Pattern 'High -> Pattern l
+  PWild :: Pattern 'L3
+  PVar :: Text -> Pattern 'L3
+  PAs :: Text -> Pattern 'L2 -> Pattern 'L3
+  POr :: NESeq (Pattern 'L1) -> Pattern 'L3 -> Pattern 'L2
+  PData :: Text -> Seq (Pattern 'L3) -> Pattern 'L1
 ```
 
 This is probably the most advanced use of Haskell in this post, and while it is not strictly necessary, I find that using GADTs simplifies and the code and reduces repitition.
@@ -189,8 +278,7 @@ It is also useful to define a helper function to convert, `High` patterns to `Lo
 
 ``` haskell
 lower :: Pattern 'High -> (Maybe (Pattern 'Low), Maybe Text)
-lower PWild        = (Nothing, Nothing)
-lower (PVar x)     = (Nothing, Just x)
+lower (PWild x)    = (Nothing, x)
 lower (PAs x p)    = (Just p, Just x)
 lower (PData c ps) = (Just (PData c ps), Nothing)
 lower (POr qs p)   = (Just (POr qs p), Nothing)
@@ -263,8 +351,10 @@ rowMatchVar x p = rColsL %~ Map.insert x p
 rowBindVar :: Text -> Var -> MatchRow r -> MatchRow r
 rowBindVar x v = rVarsL %~ Map.insert x v
 
-newtype PatternMatrix r
-  = Matrix { rows :: Seq (MatchRow r) }
+data PatternMatrix r = Matrix
+  { rows :: Seq (MatchRow r)
+  , pick :: PatternMatrix r -> (Var, TypeInfo)
+  }
 
 -- | convert a `Pattern 'High` to `Pattern 'Low` making sure to
 -- add any variables introduced by as patterns to the row
@@ -280,6 +370,16 @@ handlePattern var pat row f = do
     in f $ case pat' of
       Nothing   -> row' & rColsL %~ Map.delete var
       Just pat' -> rowMatchVar var pat' row'
+
+-- | gather a list of constructors that occur in a pattern
+patternDataCons :: Pattern l -> Set DataCon
+patternDataCons = go mempty
+  where
+    go :: Set DataCon -> Pattern l -> Set DataCon
+    go acc (PData c _) | c `Set.notMember` acc = Set.insert c acc
+    go acc (POr qs p) = foldl' (\a b -> go a (PData' b)) (go acc p) qs
+    go acc (PAs _ p) = go acc p
+    go acc _ = acc
 ```
 
 ``` haskell
@@ -287,22 +387,24 @@ handlePattern var pat row f = do
 expandOr
   :: (Foldable t)
   => Var
-  -> t (Pattern 'Low)
+  -> t ConPattern
   -> Pattern 'High
   -> MatchRow r
   -> (b -> MatchRow r -> b)
   -> b
   -> b
 expandOr var qs p row f acc =
-  foldl' (\acc q -> f acc $ rowMatchVar var q row) acc qs
+  foldl' (\acc q -> f acc $ rowMatchVar var (PData' q) row) acc qs
     & handlePattern var p row . f
+```
 
+``` {.haskell .ignore}
 rowDefault :: Var -> PatternMatrix r -> PatternMatrix r
-rowDefault var (Matrix rows) = Matrix $ foldl' f Empty rows
+rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
   where
     f acc row = case Map.lookup var row.cols of
       -- add the row as is
-      Nothing -> acc :|> row
+      Nothing         -> acc :|> row
       -- expand the or pattern into multiple rows
       Just (POr qs p) -> expandOr var qs p row f acc
       -- delete rows with constructor patterns
@@ -310,9 +412,26 @@ rowDefault var (Matrix rows) = Matrix $ foldl' f Empty rows
 ```
 
 ``` haskell
-rowSpecialize :: Var -> DataCon -> Seq Var -> PatternMatrix r -> PatternMatrix r
-rowSpecialize var con conVars (Matrix rows) = Matrix $ foldl' f Empty rows
+rowDefault :: Var -> PatternMatrix r -> PatternMatrix r
+rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
   where
+    f acc row = case Map.lookup var row.cols of
+      -- add the row as is
+      Nothing         -> acc :|> row
+      -- expand the or pattern into multiple rows
+      Just (POr qs p) -> expandOr var qs p row f acc
+      -- delete rows with constructor patterns
+      Just (PData {}) -> acc
+```
+
+
+``` {.haskell .ignore}
+-- TODO: remove guarded rows incompatible with con
+rowSpecialize :: Var -> DataCon -> Seq Var -> PatternMatrix r -> PatternMatrix r
+rowSpecialize var con conVars mat = mat { rows = foldl' f Empty mat.rows }
+  where
+    -- guardCompat (Just (var', PData con' _)) = var ==
+    guardCompat Nothing = True
     f acc row = case Map.lookup var row.cols of
       -- add the row as is since it's wildcard
       -- because it places no constraints on `var`
@@ -323,10 +442,43 @@ rowSpecialize var con conVars (Matrix rows) = Matrix $ foldl' f Empty rows
       Just (PData con' Seq.Empty) | con == con' ->
         acc :|> (row & rColsL %~ Map.delete var)
       -- otherwise replace the column with its sub patterns
-      Just (PData con' ps) | con == con' -> do
-        let g row i p = handlePattern (conVars `Seq.index` i) p row id
-        (acc :|>) $ Seq.foldlWithIndex
-          g (row & rColsL %~ Map.delete var) ps
+      Just (PData con' ps) | con == con'-> do
+        case row.guard of
+          Just (var', PData con' _) | var == var', con == con' -> acc
+          Just (var', PData con' _) | var == var', con == con' -> acc
+          _ -> do
+            let g row i p = handlePattern (conVars `Seq.index` i) p row id
+            (acc :|>) $ Seq.foldlWithIndex
+              g (row & rColsL %~ Map.delete var) ps
+      -- since the constrcutors don't match delete the row
+      _ -> acc
+
+```
+
+``` haskell
+rowSpecialize :: Var -> DataCon -> Seq Var -> PatternMatrix r -> PatternMatrix r
+rowSpecialize var con conVars mat = mat { rows = foldl' f Empty mat.rows }
+  where
+    -- guardCompat (Just (var', PData con' _)) = var ==
+    guardCompat Nothing = True
+    f acc row = case Map.lookup var row.cols of
+      -- add the row as is since it's wildcard
+      -- because it places no constraints on `var`
+      Nothing -> acc :|> row
+      -- expand the or pattern into multiple rows
+      Just (POr qs p) -> expandOr var qs p row f acc
+      -- delete the column since there are no sub patterns
+      Just (PData con' Seq.Empty) | con == con' ->
+        acc :|> (row & rColsL %~ Map.delete var)
+      -- otherwise replace the column with its sub patterns
+      Just (PData con' ps) | con == con'-> do
+        case row.guard of
+          Just (var', PData con' _) | var == var', con == con' -> acc
+          Just (var', PData con' _) | var == var', con == con' -> acc
+          _ -> do
+            let g row i p = handlePattern (conVars `Seq.index` i) p row id
+            (acc :|>) $ Seq.foldlWithIndex
+              g (row & rColsL %~ Map.delete var) ps
       -- since the constrcutors don't match delete the row
       _ -> acc
 ```
@@ -334,21 +486,7 @@ rowSpecialize var con conVars (Matrix rows) = Matrix $ foldl' f Empty rows
 ``` haskell
 patternTypeInfo :: Pattern 'Low -> TypeInfo
 patternTypeInfo (PData (DataCon _ _ t) _) = t
-patternTypeInfo (POr (NESeq p _) _ )      = patternTypeInfo p
-
--- NOTE: partial Map.!, foldl1
-columnPick :: PatternMatrix r -> (Var, TypeInfo)
-columnPick (Matrix rows@(Row vs _ _ _ :<| _)) =
-  let (k, _) = List.foldl1 findMax . Map.toList $
-        foldl' mkMap (vs $> (0 :: Int)) rows in
-  (k, patternTypeInfo $ vs Map.! k)
-  where
-    findMax a b
-      | snd b > snd a = b
-      | otherwise     = a
-    mkMap acc (Row m _ _ _) =
-      Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
-columnPick (Matrix Empty) = error "empty match matrix"
+patternTypeInfo (POr (NESeq p _) _ )      = patternTypeInfo (PData' p)
 
 matchComplete :: TypeInfo -> Set DataCon -> Bool
 matchComplete (TypeInfo (Just span)) cons = length cons == fromIntegral span
@@ -357,19 +495,16 @@ matchComplete (TypeInfo Nothing) _        = False
 
 ``` haskell
 matchCompile :: (Map Text Var -> r -> r') -> PatternMatrix r -> MatchM (Match r')
-matchCompile _ (Matrix Empty) = pure Fail
-matchCompile k (Matrix (Row col Nothing binds body :<| _))
+matchCompile _ (Matrix Empty _) = pure Fail
+matchCompile k (Matrix (Row col Nothing binds body :<| _) _)
   | null col = pure $ Leaf (k binds body)
-matchCompile k (Matrix (Row col (Just (v, p)) binds body :<| rs))
-  -- NOTE: we should scan the remaining rows for test involving v, including
-  -- guards since there is no need to perform tests later on that are impossible
-  | null col = do
-    error "TODO: is this actually valid?????"
-    let row = Row (Map.fromList [(v, p)]) Nothing binds body in
-      matchCompile k (Matrix $ row :<| rs)
-matchCompile k m@(Matrix rows) = do
+matchCompile k (Matrix (row@(Row col (Just (v, p)) _ _) :<| rs) pick)
+  | null col =
+    let row' = rowMatchVar v p row { guard = Nothing } in
+      matchCompile k (Matrix (row' :<| rs) pick)
+matchCompile k mat@(Matrix rows pick) = do
   -- pick a variable to scrutinize
-  let (var, tinfo) = columnPick m
+  let (var, tinfo) = pick mat
   -- collect the heads of constructors tested against var
   -- then compile the subtrees and combine them into a switch
   (def, cons, cases) <- foldM (goRow var) (Nothing, mempty, Empty) rows
@@ -382,12 +517,12 @@ matchCompile k m@(Matrix rows) = do
       Switch var cases . Just
         <$> defaultCase var
   where
-    defaultCase v = matchCompile k (rowDefault v m)
+    defaultCase v = matchCompile k (rowDefault v mat)
 
     specialize v acc@(d, cs, ms) c = do
       if Set.notMember c cs then do
         xs <- matchConVars c
-        let body = rowSpecialize v c xs m
+        let body = rowSpecialize v c xs mat
         m <- Alt c xs <$> shift (length xs) (matchCompile k body)
         pure (d, Set.insert c cs, ms :|> m)
       else pure acc
@@ -397,7 +532,7 @@ matchCompile k m@(Matrix rows) = do
     goHead _ acc@(Just {}, _, _) _ = pure acc
     goHead v acc (PData c _)     = specialize v acc c
     goHead v acc (POr qs p)      = do
-      acc <- foldM (goHead v) acc qs
+      acc <- foldM (\x y -> goHead v x (PData' y)) acc qs
       -- check if we hit a wildcard while compiling subpatterns
       case fst $ lower p of
         -- compile a default case
@@ -412,6 +547,28 @@ matchCompile k m@(Matrix rows) = do
         Just q -> goHead v acc q
         _      -> pure acc
 ```
+
+# Hueristics
+
+- [ ] &nbsp;what should this hueristic be called?
+
+``` haskell
+-- NOTE: partial Map.!, foldl1
+columnPick :: PatternMatrix r -> (Var, TypeInfo)
+columnPick (Matrix Empty _) = error "empty match matrix"
+columnPick (Matrix rows@(row :<| _) _) =
+  let (k, _) = List.foldl1 findMax . Map.toList $
+        foldl' mkMap (row.cols $> (0 :: Int)) rows in
+  (k, patternTypeInfo $ row.cols Map.! k)
+  where
+    findMax a b
+      | snd b > snd a = b
+      | otherwise     = a
+    mkMap acc (Row m _ _ _) =
+      Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
+```
+- [ ] &nbsp;necessity hueristic
+
 
 # Prettyprinter Instances
 
