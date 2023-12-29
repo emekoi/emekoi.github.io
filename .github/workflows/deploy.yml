@@ -71,8 +71,8 @@ jobs:
 
     - name: build site
       run: |
-        cabal build all
-        cabal exec site -- build
+        cabal -j -O2 build site
+        cabal exec -- site build
 
     - name: build resume
       uses: xu-cheng/latex-action@v3
