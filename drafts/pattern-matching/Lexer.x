@@ -25,8 +25,8 @@ $digit = [0-9]
 $alpha = [a-zA-Z]
 
 @identifier  = ($alpha | $digit | \_ | \')
-@constructor = ([A-Z]) @identifier* (\?)?
-@variable    = ([a-z] @identifier* | \_ @identifier+) (\?)?
+@constructor = ([A-Z]) @identifier* (\? | \!)?
+@variable    = ([a-z] @identifier* | \_ @identifier+) (\? | \!)?
 
 tokens :-
 
@@ -39,9 +39,10 @@ tokens :-
 <0> \"[^\"]*\"   { tokByteString String }
 
 -- keywords
-<0> match { tok Match }
-<0> let   { tok Let }
+<0> data  { tok Data }
 <0> in    { tok In }
+<0> let   { tok Let }
+<0> match { tok Match }
 
 -- operators and symbols
 <0> "{"  { tok LBracket }
@@ -117,9 +118,10 @@ data TokenClass
   | String ByteString
   | Int Integer
   -- keywords
-  | Match
-  | Let
+  | Data
   | In
+  | Let
+  | Match
   -- operators and symbols
   | LBracket
   | RBracket

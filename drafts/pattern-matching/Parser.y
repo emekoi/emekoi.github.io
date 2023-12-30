@@ -1,5 +1,16 @@
 {
-module Parser (parse, Pattern(..), HasRange(..)) where
+module Parser
+  ( HasRange(..)
+  , L.Range(..)
+  , Name(..)
+  , Pattern(..)
+  , DataCon(..)
+  , Decl(..)
+  , Alt(..)
+  , Expr(..)
+  , (<->)
+  , parse
+) where
 
 import Data.ByteString.Lazy.Char8 (ByteString)
 import Data.Foldable              (foldMap')
@@ -18,33 +29,32 @@ import Prettyprinter              ((<+>))
 import Prettyprinter              qualified as P
 }
 
-%name parse pattern_
+%name parse decls
 %tokentype { L.Token }
 %error { parseError }
 %monad { L.Alex } { >>= } { pure }
 %lexer { lexer } { L.Token _ L.EOF }
+%expect 0
 
 %token
   variableT    { L.Token _ (L.Variable _) }
   constructorT { L.Token _ (L.Constructor _) }
   intT         { L.Token _ (L.Int _) }
   stringT      { L.Token _ (L.String _) }
-  -- matchT       { L.Token _ L.Match }
-  letT         { L.Token _ L.Let }
+  dataT        { L.Token _ L.Data }
   inT          { L.Token _ L.In }
-  -- '{'          { L.Token _ L.LBracket }
-  -- '}'          { L.Token _ L.RBracket }
+  letT         { L.Token _ L.Let }
+  matchT       { L.Token _ L.Match }
+  '{'          { L.Token _ L.LBracket }
+  '}'          { L.Token _ L.RBracket }
   '('          { L.Token _ L.LParen }
   ')'          { L.Token _ L.RParen }
-  -- '->'         { L.Token _ L.RArrow }
-  -- '<-'         { L.Token _ L.LArrow }
-  ','          { L.Token _ L.Comma }
+  '->'         { L.Token _ L.RArrow }
+  '<-'         { L.Token _ L.LArrow }
   '|'          { L.Token _ L.Pipe }
   '@'          { L.Token _ L.At }
   '_'          { L.Token _ L.Underscore }
   '='          { L.Token _ L.Eq }
-
--- %right inT
 
 %%
 
@@ -73,38 +83,56 @@ variable :: { Name L.Range }
 constructor :: { Name L.Range }
   : constructorT { unToken $1 \r (L.Constructor name) -> Name r (decodeUtf8 name) }
 
-pattern :: { Pattern L.Range }
-  : pattern_             { $1 }
-  | pattern '|' pattern_ {
+pattern_1 :: { Pattern L.Range }
+  : '(' pattern_3 ')'      { $2 }
+  | '_'                    { unToken $1 \r _ -> PWild r }
+  | intT                   { unToken $1 \r (L.Int i) -> PInt r i }
+  | stringT                { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
+  | variable               { let (Name r _) = $1 in PAs r $1 (PWild r) }
+  | constructor            { PData (range $1) $1 Empty }
+  | variable '@' pattern_1 { PAs ($1 <-> $3) $1 $3  }
+
+pattern_2 :: { Pattern L.Range }
+  : pattern_1                   { $1 }
+  | constructor some(pattern_1) { PData ($1 <-> $2) $1 $2 }
+
+pattern_3 :: { Pattern L.Range }
+  : pattern_2               { $1 }
+  | pattern_3 '|' pattern_2 {
       case $1 of
         POr r ps -> POr (r <-> $3) (ps :|> $3)
         _ -> POr ($1 <-> $3) (Empty :|> $1 :|> $3)
     }
 
-pattern_ :: { Pattern L.Range }
-  : '(' pattern ')'                          { $2 }
-  | '_'                                      { unToken $1 \r _ -> PWild r }
-  | variable                                 { let (Name r _) = $1 in PAs r $1 (PWild r) }
-  | variable '@' pattern_                    { PAs ($1 <-> $3) $1 $3  }
-  -- NOTE: when parsing `many(pattern_)` we get a SR conflict because
-  -- C (<pattern>) and C(<pattern>) look the same
-  | constructor                              { let (Name r c) = $1 in PData r c Empty }
-  | constructor '(' sepBy1(pattern, ',') ')'  { let (Name r c) = $1 in PData (r <-> $3 <-> $4) c $3 }
+alt :: { Alt L.Range }
+  : pattern_3 '->' expr { Alt ($1 <-> $3) $1 Nothing $3 }
+  | pattern_3 '{' pattern_3 '<-' expr '}' '->' expr { Alt ($1 <-> $8) $1 (Just ($3, $5)) $8 }
 
--- row :: { (Pattern L.Range, Maybe (Pattern L.Range, Name L.Range)) }
---   : pattern { ($1, Nothing) }
---   | pattern '{' pattern '<-' variable '}' { ($1, Just ($3, $5)) }
+atom :: { Expr L.Range }
+  : variable     { EVar (range $1) $1 }
+  | intT         { unToken $1 \r (L.Int i) -> EInt r i }
+  | stringT      { unToken $1 \r (L.String s) -> EString r (decodeUtf8 s) }
+  | constructor  { EData (range $1) $1 }
+  | '(' expr ')' { $2 }
 
 expr :: { Expr L.Range }
-  : variable                      { EVar (range $1) $1 }
-  | intT                          { unToken $1 \r (L.Int i) -> EInt r i }
-  | stringT                       { unToken $1 \r (L.String s) -> EString r s }
-  | expr '(' sepBy(expr, ',') ')' { EApp ($1 <-> $4) $1 $3 }
-  -- TODO: is this right?
-  | decl inT expr %shift          { ELet ($1 <-> $3) $1 $3 }
+  : atom                   { $1 }
+  | atom some(atom)        { EApp ($1 <-> $2) $1 $2 }
+  | decl inT expr          { ELet ($1 <-> $3) $1 $3 }
+  | matchT expr '{'
+    optional('|') sepBy(alt, '|')
+    '}'                    { EMatch ($1 <-> $6) $2 $5 }
+
+dataCon_1 :: { DataCon L.Range }
+  : constructor       { DataCon (range $1) $1 Empty }
+  | '(' dataCon_2 ')' { $2 }
+
+dataCon_2 :: { DataCon L.Range }
+  : constructor many(dataCon_1) { DataCon ($1 <-> $2) $1 $2 }
 
 decl :: { Decl L.Range }
-  : letT variable many(pattern) '=' expr { Decl ($1 <-> $5) $2 $3 $5 }
+  : letT variable many(pattern_1) '=' expr { DExpr ($1 <-> $5) $2 $3 $5 }
+  | dataT constructor '=' sepBy(dataCon_2, '|') { DData ($1 <-> $4) $2 $4 }
 
 decls :: { Seq (Decl L.Range) }
   : many(decl) { $1 }
@@ -143,42 +171,76 @@ data Name a
   = Name a Text
   deriving (Show, Foldable, Functor)
 
-data Pattern a
-  = PWild a
-  | PAs a (Name a) (Pattern a)
-  | POr a (Seq (Pattern a))
-  | PData a Text (Seq (Pattern a))
-  deriving (Show, Foldable, Functor)
-
 instance P.Pretty (Name a) where
   pretty (Name _ n) = P.pretty n
+
+data Pattern a
+  = PWild a
+  | PInt a Integer
+  | PString a Text
+  | PAs a (Name a) (Pattern a)
+  | PData a (Name a) (Seq (Pattern a))
+  | POr a (Seq (Pattern a))
+  deriving (Show, Foldable, Functor)
 
 instance P.Pretty (Pattern a) where
   pretty = go False
     where
       go _ (PWild _)           = "_"
+      go _ (PInt _ i)          = P.pretty i
+      go _ (PString _ s)       = P.pretty s
       go _ (PAs _ x (PWild _)) = P.pretty x
       go _ (PAs _ x p)         = P.pretty x <> "@" <> go True p
-      go _ (PData _ c Empty)   = P.pretty c
-      go False (PData _ c ps)  = P.pretty c <>
-        P.parens (P.concatWith (\x y -> x <> "," <+> y) (go False <$> ps))
+      go False (PData _ c ps)  =
+        P.concatWith (<+>) (P.pretty c :<| (go True <$> ps))
       go False (POr _ ps)      =
         P.concatWith (\x y -> x <+> "|" <+> y) (go False <$> ps)
       go True x                = P.parens (go False x)
 
+data DataCon a
+ = DataCon a (Name a) (Seq (DataCon a))
+  deriving (Foldable, Show, Functor)
+
+instance P.Pretty (DataCon a) where
+  pretty = go False
+    where
+      go False (DataCon _ c xs) = P.pretty c <+>
+        P.concatWith (<+>) (go True <$> xs)
+      go True d@(DataCon _ _ xs) =
+        let doc = go False d in
+          if null xs then doc else doc
+
 data Decl a
-  = Decl a (Name a) (Seq (Pattern a)) (Expr a)
+  = DExpr a (Name a) (Seq (Pattern a)) (Expr a)
+  | DData a (Name a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
 instance P.Pretty (Decl a) where
-  pretty (Decl _ n Empty e) = "let" <+> P.pretty n <+> "=" <+> P.pretty e
-  pretty (Decl _ n xs e) = "let" <+> P.pretty n
-    <+> P.concatWith (<+>) (P.pretty <$> xs) <+> "=" <+> P.pretty e
+  pretty (DExpr _ n (fmap P.pretty -> xs) e) =
+    "let" <+> P.concatWith (<+>) (P.pretty n :<| xs) <+> "=" <+> P.pretty e
+  pretty (DData _ c (fmap P.pretty -> xs)) =
+    "data" <+> P.pretty c <+> "="
+      <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
+
+data Alt a
+  = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
+  deriving (Foldable, Show, Functor)
+
+instance P.Pretty (Alt a) where
+  pretty (Alt _ p Nothing e) =
+    P.pretty p <+> "->" <+> P.pretty e
+  pretty (Alt _ p (Just (p', e')) e) =
+    P.pretty p
+      <+> P.braces (P.pretty p' <+> "<-" <+> P.pretty e')
+      <+> "->"
+      <+> P.pretty e
 
 data Expr a
   = EInt a Integer
   | EVar a (Name a)
-  | EString a ByteString
+  | EData a (Name a)
+  | EString a Text
+  | EMatch a (Expr a) (Seq (Alt a))
   | EApp a (Expr a) (Seq (Expr a))
   | ELet a (Decl a) (Expr a)
   deriving (Foldable, Show, Functor)
@@ -186,11 +248,14 @@ data Expr a
 instance P.Pretty (Expr a) where
   pretty = go False
     where
-      go True x                = P.parens (go False x)
-      go _ (EInt _ i)          = P.pretty i
-      go _ (EVar _ v)          = P.pretty v
-      go _ (EString _ s)       = P.pretty $ LE.decodeUtf8 s
-      go _ (EApp _ f xs)       = P.pretty f <>
-        P.parens (P.concatWith (\x y -> x <> "," <+> y) (go False <$> xs))
-      go _ (ELet _ d e)        = P.pretty d <+> "in" <+> (go True e)
+      go _ (EInt _ i)        = P.pretty i
+      go _ (EVar _ v)        = P.pretty v
+      go _ (EData _ c)       = P.pretty c
+      go _ (EString _ s)     = P.pretty s
+      go _ (EMatch _ e xs)   = P.pretty e <+>
+        P.braces (P.concatWith (\x y -> x <+> "|" <+> y) (P.pretty <$> xs))
+      go False (EApp _ f xs) = P.pretty f <+>
+        P.concatWith (<+>) (go True <$> xs)
+      go False (ELet _ d e)  = P.pretty d <+> "in" <+> (go True e)
+      go True x              = P.parens (go False x)
 }
