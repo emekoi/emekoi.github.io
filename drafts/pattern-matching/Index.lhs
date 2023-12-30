@@ -2,29 +2,31 @@
 title: Pattern Matching for Great Good
 published: 2023-11-30
 tags: [pl,haskell]
-packages: [microlens,microlens-ghc,containers,text,prettyprinter,base]
+packages: [microlens,containers,text,prettyprinter,base,transformers]
 slug: pattern-matching
 link-citations: true
-csl: bib/ieee.csl
 ---
 
 <details>
   <summary>Haskell language extensions and module imports.</summary>
 
 ``` haskell
-{-# OPTIONS_GHC -Wall -Wextra -Wno-name-shadowing #-}
-{-# LANGUAGE DataKinds             #-}
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE ImportQualifiedPost   #-}
-{-# LANGUAGE NoFieldSelectors      #-}
-{-# LANGUAGE OverloadedRecordDot   #-}
-{-# LANGUAGE OverloadedStrings     #-}
-{-# LANGUAGE PatternSynonyms       #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE StandaloneDeriving    #-}
+{-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE DeriveTraversable          #-}
+{-# LANGUAGE DuplicateRecordFields      #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ImportQualifiedPost        #-}
+{-# LANGUAGE KindSignatures             #-}
+{-# LANGUAGE NoFieldSelectors           #-}
+{-# LANGUAGE OverloadedRecordDot        #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE PatternSynonyms            #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 
-module PatternMatching (module PatternMatching) where
+
+module Index (module Index) where
 
 import Control.Monad
 import Control.Monad.Trans.Reader
@@ -43,6 +45,7 @@ import Prettyprinter              ((<+>))
 import Prettyprinter              qualified as P
 import Unsafe.Coerce              (unsafeCoerce)
 ```
+
 </details>
 
 # Literate Haskell
@@ -67,14 +70,14 @@ First and foremost, we need things to pattern match on before we can start talki
 ``` haskell
 newtype TypeInfo
   = TypeInfo { span :: Maybe Word }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 data DataCon = DataCon
   { name  :: Text
   , arity :: Int
   , info  :: TypeInfo
   }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 ```
 
 In a "real" language you might want data types such as integers, floats, or chars, but for the purposes of demonstration we can model them as ADTs since the logic will be exactly the same:
@@ -178,13 +181,16 @@ data Level
   | High
 
 data NESeq x = NESeq x (Seq x)
-  deriving (Eq, Foldable, Functor)
+  deriving (Foldable)
 
+-- NOTE: instead of `l'` we can just use `'High`
 data Pattern (l :: Level) where
   PWild :: Maybe Text -> Pattern 'High
   PAs :: Text -> Pattern 'Low -> Pattern 'High
   POr :: Map DataCon (Seq (Pattern l')) -> Maybe (Pattern 'High) -> Pattern l
   PData :: DataCon -> Seq (Pattern l') -> Pattern l
+
+deriving instance Show (Pattern l)
 ```
 
 This is probably the most advanced use of Haskell in this post, and while it is not strictly necessary, I find that using GADTs simplifies and the code and reduces repitition.
@@ -415,6 +421,7 @@ matchCompile k mat@(Matrix rows pick) = do
   where
     defaultCase v = matchCompile k (rowDefault v mat)
 
+    -- filter out repeated test against constructors
     specialize v acc@(d, cs, ms) c = do
       if Set.notMember c cs then do
         xs <- matchConVars c
@@ -423,8 +430,7 @@ matchCompile k mat@(Matrix rows pick) = do
         pure (d, Set.insert c cs, ms :|> m)
       else pure acc
 
-    -- for each constructor, specialize the matrix filtering out repeated
-    -- test against constructors
+    -- for each constructor, specialize the pattern matrix
     goHead _ acc@(Just {}, _, _) _ = pure acc
     goHead v acc (PData c _)     = specialize v acc c
     goHead v acc (POr qs p)      = do
@@ -516,6 +522,9 @@ instance (P.Pretty r) => P.Pretty (Leaf r) where
       <+> P.pretty x
     where
       go (x, v) = P.pretty v <> "/" <> P.pretty x
+
+main :: IO ()
+main = pure ()
 ```
 
 # References {#refs}

@@ -77,10 +77,18 @@ data PostList
   | All
 
 draftsPattern :: Pattern
-draftsPattern = "drafts/*.md" .||. "drafts/*.lhs"
+draftsPattern = foldr1 (.||.)
+  [ "drafts/*.md"
+  , "drafts/*.lhs"
+  , "drafts/*/*.lhs"
+  ]
 
 postsPattern :: Pattern
-postsPattern = "posts/*.md" .||. "posts/*.lhs"
+postsPattern = foldr1 (.||.)
+  [ "posts/*.md"
+  , "posts/*.lhs"
+  , "posts/*/*.lhs"
+  ]
 
 resumePattern :: Pattern
 resumePattern = "resume/*.tex" .||. "resume/*.sty"
