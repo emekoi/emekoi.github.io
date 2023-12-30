@@ -12,7 +12,7 @@ module Lexer
   , Token (..)
   , TokenClass (..)
   , unToken
-  , unToken'
+  , scanMany
   ) where
 
 import Data.ByteString.Lazy.Char8 (ByteString)
@@ -34,13 +34,14 @@ tokens :-
 <0> $white+ ;
 <0> "--" .* ;
 
--- variables and constructors
-<0> @variable     { tokByteString Variable }
-<0> @constructor  { tokByteString Constructor }
+-- literals
+<0> "-"? $digit+ { tokInteger }
+<0> \"[^\"]*\"   { tokByteString String }
 
 -- keywords
-<0> "match" { tok Match }
-<0> "when"  { tok When }
+<0> match { tok Match }
+<0> let   { tok Let }
+<0> in    { tok In }
 
 -- operators and symbols
 <0> "{"  { tok LBracket }
@@ -56,6 +57,11 @@ tokens :-
 <0> "|"  { tok Pipe }
 <0> "@"  { tok At }
 <0> "_"  { tok Underscore }
+<0> "="  { tok Eq }
+
+-- variables and constructors
+<0> @variable     { tokByteString Variable }
+<0> @constructor  { tokByteString Constructor }
 
 {
 data AlexUserState = AlexUserState
@@ -107,6 +113,14 @@ data TokenClass
   = EOF
   | Constructor ByteString
   | Variable ByteString
+  -- literals
+  | String ByteString
+  | Int Integer
+  -- keywords
+  | Match
+  | Let
+  | In
+  -- operators and symbols
   | LBracket
   | RBracket
   | LParen
@@ -116,16 +130,19 @@ data TokenClass
   | Comma
   | Pipe
   | At
+  | Eq
   | Underscore
-  | Match
-  | When
   deriving (Eq, Show)
 
 unToken :: Token -> (Range -> TokenClass -> a) -> a
 unToken (Token range token) f = f range token
 
-unToken' :: Token -> (TokenClass -> a) -> a
-unToken' token f = unToken token (const f)
+tok :: TokenClass -> AlexAction Token
+tok ctor inp len =
+  pure Token
+    { rtRange = mkRange inp len
+    , rtToken = ctor
+    }
 
 tokByteString :: (ByteString -> TokenClass) -> AlexAction Token
 tokByteString t inp@(_, _, str, _) len =
@@ -134,11 +151,11 @@ tokByteString t inp@(_, _, str, _) len =
     , rtToken = t $ BS.take len str
     }
 
-tok :: TokenClass -> AlexAction Token
-tok ctor inp len =
+tokInteger :: AlexAction Token
+tokInteger inp@(_, _, str, _) len =
   pure Token
     { rtRange = mkRange inp len
-    , rtToken = ctor
+    , rtToken = Int . read . BS.unpack $ BS.take len str
     }
 
 alexMonadScan' = do
@@ -164,12 +181,12 @@ runAlex' :: Maybe FilePath -> ByteString -> Alex a -> Either String a
 runAlex' (Just fp) input a = runAlex input (setFilePath fp >> a)
 runAlex' Nothing input a = runAlex input a
 
--- scanMany :: ByteString -> Either String [Token]
--- scanMany input = runAlex input go
---   where
---     go = do
---       output <- alexMonadScan
---       if rtToken output == EOF
---         then pure [output]
---         else (output :) <$> go
+scanMany :: ByteString -> Either String [Token]
+scanMany input = runAlex input go
+  where
+    go = do
+      output <- alexMonadScan
+      if rtToken output == EOF
+        then pure [output]
+        else (output :) <$> go
 }
