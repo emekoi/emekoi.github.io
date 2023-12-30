@@ -89,11 +89,11 @@ decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
 parseError :: L.Token -> L.Alex a
 parseError _ = do
-  (L.AlexPn _ line column, _, _, _) <- L.alexGetInput
-  L.alexError $ "Parse error at line " <> show line <> ", column " <> show column
+  (p, _, _, _) <- L.alexGetInput
+  L.alexError' p "parse error"
 
 lexer :: (L.Token -> L.Alex a) -> L.Alex a
-lexer = (L.alexMonadScan >>=)
+lexer = (L.alexMonadScan' >>=)
 
 class HasRange r where
   range :: r -> L.Range

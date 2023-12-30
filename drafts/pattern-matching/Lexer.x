@@ -5,13 +5,12 @@ module Lexer
   ( Alex
   , AlexPosn (..)
   , alexGetInput
-  , alexError
-  , runAlex
-  , alexMonadScan
+  , alexError'
+  , runAlex'
+  , alexMonadScan'
   , Range (..)
   , Token (..)
   , TokenClass (..)
-  , scanMany
   , unToken
   , unToken'
   ) where
@@ -63,8 +62,20 @@ data AlexUserState = AlexUserState
   { filePath :: FilePath
   }
 
+alexGetUserState :: Alex AlexUserState
+alexGetUserState = Alex $ \s@AlexState{alex_ust=ust} -> Right (s,ust)
+
+alexSetUserState :: AlexUserState -> Alex ()
+alexSetUserState ss = Alex $ \s -> Right (s{alex_ust=ss}, ())
+
 alexInitUserState :: AlexUserState
 alexInitUserState = AlexUserState "<stdin>"
+
+getFilePath :: Alex FilePath
+getFilePath = filePath <$> alexGetUserState
+
+setFilePath :: FilePath -> Alex ()
+setFilePath = alexSetUserState . AlexUserState
 
 alexEOF :: Alex Token
 alexEOF = do
@@ -130,12 +141,35 @@ tok ctor inp len =
     , rtToken = ctor
     }
 
-scanMany :: ByteString -> Either String [Token]
-scanMany input = runAlex input go
-  where
-    go = do
-      output <- alexMonadScan
-      if rtToken output == EOF
-        then pure [output]
-        else (output :) <$> go
+alexMonadScan' = do
+  inp__@(_,_,_,n) <- alexGetInput
+  sc <- alexGetStartCode
+  case alexScan inp__ sc of
+    AlexEOF -> alexEOF
+    AlexError (p,_,_,_) ->
+      alexError' p $ "lexical error"
+    AlexSkip  inp__' _len -> do
+        alexSetInput inp__'
+        alexMonadScan
+    AlexToken inp__'@(_,_,_,n') _ action -> let len = n'-n in do
+        alexSetInput inp__'
+        action (ignorePendingBytes inp__) len
+
+alexError' :: AlexPosn -> String -> Alex a
+alexError' (AlexPn _ l c) msg = do
+  fp <- getFilePath
+  alexError (fp ++ ":" ++ show l ++ ":" ++ show c ++ ": " ++ msg)
+
+runAlex' :: Maybe FilePath -> ByteString -> Alex a -> Either String a
+runAlex' (Just fp) input a = runAlex input (setFilePath fp >> a)
+runAlex' Nothing input a = runAlex input a
+
+-- scanMany :: ByteString -> Either String [Token]
+-- scanMany input = runAlex input go
+--   where
+--     go = do
+--       output <- alexMonadScan
+--       if rtToken output == EOF
+--         then pure [output]
+--         else (output :) <$> go
 }
