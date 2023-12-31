@@ -82,7 +82,7 @@ jobs:
     - name: build blog
       run: |
         cabal -j -O2 build blog
-        cabal exec -- blog build
+        $(cabal list-bin blog) build
 
     - name: build resume
       uses: xu-cheng/latex-action@v3
