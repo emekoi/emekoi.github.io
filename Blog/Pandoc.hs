@@ -1,4 +1,4 @@
-module Site.Pandoc
+module Blog.Pandoc
     ( BibInfo (..)
     , defaultPostPass
     , pandocCompiler

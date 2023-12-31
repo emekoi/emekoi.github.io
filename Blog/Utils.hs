@@ -1,7 +1,8 @@
-module Site.Utils
-    ( module Site.Utils
+module Blog.Utils
+    ( module Blog.Utils
     ) where
 
+import Blog.Config                     qualified as C
 import Control.Applicative
 import Control.Monad
 import Data.Time.Clock
@@ -10,7 +11,6 @@ import Hakyll                          hiding (dateField, defaultContext,
                                         pandocCompiler, relativizeUrls,
                                         relativizeUrlsWith, tagsField, urlField)
 import Hakyll                          qualified as H
-import Site.Config                     qualified as C
 import System.FilePath                 (takeDirectory, takeFileName)
 import System.Process                  (readProcess)
 import Text.Blaze.Html.Renderer.String qualified as H
@@ -105,4 +105,4 @@ gitHash = unsafeCompiler $
 --     isRel ('/' : _)      = True
 --     isRel _              = False
 --     rel _ ('$' : x) = x
---     rel r x         = if isRel x then toSiteRoot r ++ x else x
+--     rel r x         = if isRel x then toBlogRoot r ++ x else x

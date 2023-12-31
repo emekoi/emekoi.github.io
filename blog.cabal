@@ -48,12 +48,12 @@ common base
     , wai ^>= 3.2
     , wai-app-static ^>= 3.1
 
-executable site
+executable blog
   import: base
-  main-is: site.hs
+  main-is: Blog.hs
   other-modules:
-    Site.Config
-    Site.Slug
-    Site.Utils
-    Site.Pandoc
+    Blog.Config
+    Blog.Slug
+    Blog.Utils
+    Blog.Pandoc
   ghc-options: -threaded -rtsopts -with-rtsopts=-N

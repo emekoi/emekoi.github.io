@@ -5,6 +5,10 @@ module Main
     ( main
     ) where
 
+import Blog.Config
+import Blog.Pandoc
+import Blog.Slug
+import Blog.Utils
 import Control.Monad
 import Data.Aeson                    qualified as Aeson
 import Data.ByteString.Lazy.Char8    qualified as B
@@ -19,10 +23,6 @@ import Hakyll.Core.Compiler.Internal
 import Hakyll.Core.Provider
 import Network.HTTP.Types.Status     (status404)
 import Network.Wai                   qualified as W
-import Site.Config
-import Site.Pandoc
-import Site.Slug
-import Site.Utils
 import System.Directory              (doesDirectoryExist, doesFileExist,
                                       listDirectory, makeAbsolute)
 import System.FilePath               (hasExtension, joinPath, takeFileName,

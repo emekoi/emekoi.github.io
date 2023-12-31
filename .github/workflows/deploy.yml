@@ -33,6 +33,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        cache: 'pip' # caching pip dependencies
 
     - name: set up GHC ${{ env.ghc_version }}
       uses: haskell-actions/setup@v2
@@ -69,10 +73,13 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
+    - name: install Pygments
+      run: pip install Pygments
+
     - name: build site
       run: |
-        cabal -j -O2 build site
-        cabal exec -- site build
+        cabal -j -O2 build blog
+        cabal exec -- blog build
 
     - name: build resume
       uses: xu-cheng/latex-action@v3

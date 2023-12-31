@@ -1,5 +1,5 @@
-module Site.Config
-    ( module Site.Config
+module Blog.Config
+    ( module Blog.Config
     ) where
 
 author, email, github :: String
