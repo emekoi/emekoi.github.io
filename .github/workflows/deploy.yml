@@ -39,7 +39,7 @@ jobs:
         cache: 'pip' # caching pip dependencies
 
     - name: install Pygments
-      run: pip install Pygments
+      run: pip install -r requirements.txt
 
     - name: set up GHC ${{ env.ghc_version }}
       uses: haskell-actions/setup@v2
