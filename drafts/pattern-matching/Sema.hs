@@ -12,7 +12,6 @@ module Sema
 -- import Control.Monad.Except
 -- import Control.Monad.Reader
 import Control.Monad.State.Strict
-import Data.Foldable              (foldl')
 import Data.Graph                 qualified as Graph
 import Data.IntMap.Strict         (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
@@ -26,27 +25,36 @@ import Data.Sequence              (Seq (..))
 import Control.Exception
 import Data.Text                  (Text)
 import Data.Text                  qualified as Text
+import Lexer                      (AlexPosn (..))
 import Parser
-import Prettyprinter              ((<+>))
+-- import Prettyprinter              ((<+>))
+import Error.Diagnose
 import Prettyprinter              qualified as P
 import Prettyprinter.Render.Text  qualified as P
 
-import Data.Void
+data ErrMsg where ErrMsg :: P.Doc a -> ErrMsg
 
-data SemaError = SemaError FilePath Range (P.Doc Void)
+instance P.Pretty ErrMsg where
+  pretty (ErrMsg msg) = P.pretty
+    . Text.unpack
+    . P.renderStrict
+    . P.layoutPretty P.defaultLayoutOptions $ msg
+
+newtype SemaError
+  = SemaError (Report ErrMsg)
+
+instance Show SemaError where
+  show = error "uncaught SemaError"
 
 instance Exception SemaError
 
-instance Show SemaError where
-  show (SemaError f (Range s _) t) = render $
-    P.pretty f <> ":" <> P.pretty s <> ":" P.<+> t
-    where
-      render = Text.unpack
-        . P.renderStrict
-        . P.layoutPretty P.defaultLayoutOptions
-
-semaError :: FilePath -> Range -> [P.Doc Void] -> SemaError
-semaError f r ps = SemaError f r (P.hsep ps)
+semaError :: [P.Doc a] -> [(FilePath, Range, Marker (P.Doc a))] -> error
+semaError msg xs = throw . SemaError $ err Nothing (ErrMsg (P.hsep msg)) (f <$> xs) []
+  where
+    f (fp, Range (AlexPn _ l1 c1) (AlexPn _ l2 c2), d) = (Position (l1, c1) (l2, c2) fp, g ErrMsg d)
+    g f (This d)  = This (f d)
+    g f (Where d) = Where (f d)
+    g f (Maybe d) = Maybe (f d)
 
 data UsageInfo r = Usage
   { usageInfo :: IntMap (r, IntSet)
@@ -128,9 +136,11 @@ collectDataCons (Module fp ds) = (`filterM` ds) \case
     mapM_ f xs
     SemaState{..} <- get
     case IntMap.lookup i dataSpans of
-      Just _ -> throw $ semaError fp r
+      Just _ -> semaError
         [ "redefinition of"
         , P.squotes $ P.pretty c
+        ]
+        [ (fp, r, This "redefined here")
         ]
       Nothing ->
         put SemaState
@@ -141,6 +151,9 @@ collectDataCons (Module fp ds) = (`filterM` ds) \case
     f (DataCon _ c xs) = getDataCon c *> mapM_ f xs
     filterM p = foldr `flip` pure Empty $ \x ->
       liftA2 (\b -> if b then (x :<|) else id) (p x)
+
+-- tyCheck :: Seq (Decl Range) -> Seq (Decl Type)
+-- tyCheck xs = error "TODO"
 
 -- data Name a
 --   = Name a Text
@@ -161,7 +174,3 @@ collectDataCons (Module fp ds) = (`filterM` ds) \case
 --   | DData a (Name a) (Seq (DataCon a))
 
 -- data Alt a
---   = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
-
--- data Expr a
---   = EInt a Integer
