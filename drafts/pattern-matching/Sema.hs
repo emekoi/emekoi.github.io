@@ -22,37 +22,12 @@ import Data.Map.Strict            qualified as Map
 import Data.Sequence              (Seq (..))
 -- import Data.IORef                 (IORef)
 -- import Data.IORef                 qualified as IORef
-import Control.Exception
 import Data.Text                  (Text)
-import Data.Text                  qualified as Text
-import Lexer                      (AlexPosn (..))
 import Parser
 -- import Prettyprinter              ((<+>))
+import Error
 import Error.Diagnose
 import Prettyprinter              qualified as P
-import Prettyprinter.Render.Text  qualified as P
-
-data ErrMsg where ErrMsg :: P.Doc a -> ErrMsg
-
-instance P.Pretty ErrMsg where
-  pretty (ErrMsg msg) = P.pretty
-    . Text.unpack
-    . P.renderStrict
-    . P.layoutPretty P.defaultLayoutOptions $ msg
-
-newtype SemaError
-  = SemaError (Report ErrMsg)
-
-instance Show SemaError where
-  show = error "uncaught SemaError"
-
-instance Exception SemaError
-
-semaError :: [P.Doc a] -> [(FilePath, Range, Marker (P.Doc a))] -> error
-semaError msg xs = throw . SemaError $ Err Nothing (ErrMsg (P.hsep msg)) (f <$> xs) []
-  where
-    f (fp, Range (AlexPn _ l1 c1) (AlexPn _ l2 c2), d) =
-      (Position (l1, c1) (l2, c2) fp, ErrMsg <$> d)
 
 data UsageInfo r = Usage
   { usageInfo :: IntMap (r, IntSet)
@@ -134,12 +109,12 @@ collectDataCons (Module fp ds) = (`filterM` ds) \case
     mapM_ f xs
     SemaState{..} <- get
     case IntMap.lookup i dataSpans of
-      Just (r, _) -> semaError
+      Just (r, _) -> throwError'
         [ "redefinition of"
         , P.squotes $ P.pretty c
         ]
-        [ (fp, range c, This "redefined here")
-        , (fp, r, This "defined here")
+        [ (r2p fp c, This "redefined here")
+        , (r2p fp r, This "defined here")
         ]
       Nothing ->
         put SemaState

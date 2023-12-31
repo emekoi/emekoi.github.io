@@ -1,27 +1,29 @@
-{
+{{-# OPTIONS_GHC -funbox-strict-fields #-}
 module Lexer
   ( Alex
   , AlexPosn (..)
   , alexGetInput
   , getFilePath
-  , alexError'
   , runAlex
   , runAlex'
-  , alexMonadScan'
+  , alexMonadScan
   , Range (..)
   , Token (..)
   , TokenClass (..)
   , unToken
   , scanMany
+  , r2p
+  , r2p'
   ) where
 
+import Control.Exception
 import Control.Monad.State.Class
+import Data.ByteString.Internal   qualified as BS (c2w)
 import Data.ByteString.Lazy.Char8 (ByteString)
 import Data.ByteString.Lazy.Char8 qualified as BS
-import Prettyprinter              qualified as P
-import Data.ByteString.Internal   qualified as BS (c2w)
 import Data.Int                   (Int64)
 import Data.Word                  (Word8)
+import Error
 }
 
 $digit = [0-9]
@@ -67,7 +69,7 @@ tokens :-
 <0> @variable     { tokByteString Variable }
 <0> @constructor  { tokByteString Constructor }
 
-{
+{ {-# LINE 73 "Lexer.x" #-}
 -- -----------------------------------------------------------------------------
 -- The input type
 type AlexInput = (AlexPosn, -- current position,
@@ -131,71 +133,85 @@ data AlexState = AlexState
     -- AlexUserState will be defined in the user program
   }
 
--- Compile with -funbox-strict-fields for best results!
-runAlex :: ByteString -> Alex a -> Either String a
-runAlex input__ (Alex f)
-   = case f (AlexState {alex_bpos = 0,
-                        alex_pos = alexStartPos,
-                        alex_inp = input__,
-                        alex_chr = '\n',
-                        alex_ust = alexInitUserState,
-                        alex_scd = 0}) of Left msg       -> Left msg
-                                          Right ( _, a ) -> Right a
-
 newtype Alex a
-  = Alex { unAlex :: AlexState -> Either String (AlexState, a) }
+  = MkAlex { unAlex :: AlexState -> (AlexState, a) }
+
+pattern Alex :: (AlexState -> (AlexState, a)) -> Alex a
+pattern Alex f <- MkAlex f
+  where Alex f = MkAlex (oneShot f)
+{-# COMPLETE Alex #-}
 
 instance Functor Alex where
-  fmap f a = Alex $ \s -> case unAlex a s of
-                            Left msg       -> Left msg
-                            Right (s', a') -> Right (s', f a')
+  fmap f (Alex ma) = Alex \(ma -> (s, a)) -> (s, f a)
+  {-# INLINE fmap #-}
 
 instance Applicative Alex where
-  pure a = Alex $ \s -> Right (s, a)
-  fa <*> a = Alex $ \s -> case unAlex fa s of
-                            Left msg -> Left msg
-                            Right (s', f) -> case unAlex a s' of
-                                               Left msg -> Left msg
-                                               Right (s'', b) -> Right (s'', f b)
+  pure a = Alex \s -> (s, a)
+  {-# INLINE pure #-}
+
+  (Alex mf) <*> (Alex ma) = Alex \s ->
+    let
+      (s', f) = mf s
+      (s'', a) = ma s'
+     in (s'', f a)
+  {-# INLINE (<*>) #-}
+
 instance Monad Alex where
-  m >>= k = Alex $ \s -> case unAlex m s of
-                                Left msg     -> Left msg
-                                Right (s',a) -> unAlex (k a) s'
+  (Alex ma) >>= k = Alex \(ma -> (s, a)) -> unAlex (k a) s
+  {-# INLINE (>>=) #-}
+
+instance MonadState AlexUserState Alex where
+  get    = Alex \s@AlexState{alex_ust=ust} -> (s,ust)
+  put ss = Alex \s -> (s{alex_ust=ss}, ())
+
+-- Compile with -funbox-strict-fields for best results!
+runAlex :: ByteString -> Alex a -> a
+runAlex input__ (Alex f) = snd $
+  f (AlexState {alex_bpos = 0,
+                alex_pos = alexStartPos,
+                alex_inp = input__,
+                alex_chr = '\n',
+                alex_ust = alexInitUserState,
+                alex_scd = 0})
+
+runAlex' :: FilePath -> ByteString -> Alex a -> a
+runAlex' fp input a = runAlex input (setFilePath fp >> a)
 
 alexGetInput :: Alex AlexInput
 alexGetInput
- = Alex $ \s@AlexState{alex_pos=pos,alex_bpos=bpos,alex_chr=c,alex_inp=inp__} ->
-        Right (s, (pos,c,inp__,bpos))
+ = Alex \s@AlexState{alex_pos=pos,alex_bpos=bpos,alex_chr=c,alex_inp=inp__} ->
+    (s, (pos,c,inp__,bpos))
 
 alexSetInput :: AlexInput -> Alex ()
 alexSetInput (pos,c,inp__,bpos)
- = Alex $ \s -> case s{alex_pos=pos,
+  -- NOTE: forces the strict fields
+ = Alex \s -> case s{alex_pos=pos,
                        alex_bpos=bpos,
                        alex_chr=c,
                        alex_inp=inp__} of
-                    state__@(AlexState{}) -> Right (state__, ())
-
-alexError :: String -> Alex a
-alexError message = Alex $ const $ Left message
+                    state__@(AlexState{}) -> (state__, ())
 
 alexGetStartCode :: Alex Int
-alexGetStartCode = Alex $ \s@AlexState{alex_scd=sc} -> Right (s, sc)
+alexGetStartCode = Alex \s@AlexState{alex_scd=sc} -> (s, sc)
 
 alexSetStartCode :: Int -> Alex ()
-alexSetStartCode sc = Alex $ \s -> Right (s{alex_scd=sc}, ())
+alexSetStartCode sc = Alex \s -> (s{alex_scd=sc}, ())
 
 alexGetUserState :: Alex AlexUserState
-alexGetUserState = Alex $ \s@AlexState{alex_ust=ust} -> Right (s,ust)
+alexGetUserState = Alex \s@AlexState{alex_ust=ust} -> (s,ust)
 
 alexSetUserState :: AlexUserState -> Alex ()
-alexSetUserState ss = Alex $ \s -> Right (s{alex_ust=ss}, ())
+alexSetUserState ss = Alex \s -> (s{alex_ust=ss}, ())
 
+alexMonadScan :: Alex Token
 alexMonadScan = do
   inp__@(_,_,_,n) <- alexGetInput
   sc <- alexGetStartCode
   case alexScan inp__ sc of
     AlexEOF -> alexEOF
-    AlexError ((AlexPn _ line column),_,_,_) -> alexError $ "lexical error at line " ++ (show line) ++ ", column " ++ (show column)
+    AlexError (p@(AlexPn a l c),_,_,_) -> do
+      p <- r2p' (Range p (AlexPn (a + 1) l (c + 1)))
+      throwError "lexical error" [(p, This "unexpected character")]
     AlexSkip inp__' _len -> do
         alexSetInput inp__'
         alexMonadScan
@@ -227,10 +243,6 @@ token t input__ len = pure (t input__ len)
 -- -----------------------------------------------------------------------------
 -- epilogue
 
-instance MonadState AlexUserState Alex where
-  get    = Alex $ \s@AlexState{alex_ust=ust} -> Right (s,ust)
-  put ss = Alex $ \s -> Right (s{alex_ust=ss}, ())
-
 alexInitUserState :: AlexUserState
 alexInitUserState = AlexUserState "<stdin>"
 
@@ -253,8 +265,11 @@ data Range = Range
 instance Semigroup Range where
   Range start _ <> Range _ end = Range start end
 
-instance P.Pretty AlexPosn where
-  pretty (AlexPn _ l c) = P.pretty l <> ":" <> P.pretty c
+r2p :: FilePath -> Range -> Position
+r2p fp (Range (AlexPn _ l1 c1) (AlexPn _ l2 c2)) = Position (l1, c1) (l2, c2) fp
+
+r2p' :: Range -> Alex Position
+r2p' r = (`r2p` r) <$> getFilePath
 
 data Token = Token
   { rtRange :: Range
@@ -316,30 +331,9 @@ tokInteger inp@(_, _, str, _) len =
     , rtToken = Int . read . BS.unpack $ BS.take len str
     }
 
-alexMonadScan' = do
-  inp__@(_,_,_,n) <- alexGetInput
-  sc <- alexGetStartCode
-  case alexScan inp__ sc of
-    AlexEOF -> alexEOF
-    AlexError (p,_,_,_) ->
-      alexError' p $ "lexical error"
-    AlexSkip  inp__' _len -> do
-        alexSetInput inp__'
-        alexMonadScan
-    AlexToken inp__'@(_,_,_,n') _ action -> let len = n'-n in do
-        alexSetInput inp__'
-        action (ignorePendingBytes inp__) len
-
-alexError' :: AlexPosn -> String -> Alex a
-alexError' (AlexPn _ l c) msg = do
-  fp <- getFilePath
-  alexError (fp ++ ":" ++ show l ++ ":" ++ show c ++ ": " ++ msg)
-
-runAlex' :: FilePath -> ByteString -> Alex a -> Either String a
-runAlex' fp input a = runAlex input (setFilePath fp >> a)
-
-scanMany :: ByteString -> Either String [Token]
-scanMany input = runAlex input go
+scanMany :: ByteString -> IO [Token]
+-- scanMany input = pure (runAlex input go) `catch` \(Error {}) -> pure []
+scanMany input = catch @Error (pure $ runAlex input go) (\_ -> pure [])
   where
     go = do
       output <- alexMonadScan

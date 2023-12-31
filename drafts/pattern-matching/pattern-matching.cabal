@@ -19,6 +19,7 @@ common base
     FlexibleContexts
     FlexibleInstances
     GADTs
+    GeneralizedNewtypeDeriving
     ImportQualifiedPost
     LambdaCase
     MultiParamTypeClasses
@@ -53,4 +54,5 @@ executable pattern-matching
     Lexer
     Parser
     Sema
+    Error
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -pgmL markdown-unlit

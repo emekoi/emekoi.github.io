@@ -13,6 +13,7 @@ module Parser
   , Module(..)
   , (<->)
   , parse
+  , r2p
 ) where
 
 import Data.ByteString.Lazy.Char8 (ByteString)
@@ -25,6 +26,7 @@ import Data.Sequence              qualified as Seq
 import Data.Text                  (Text)
 import Data.Text.Lazy             qualified as LT
 import Data.Text.Lazy.Encoding    qualified as LE
+import Error
 import Lexer                      (unToken)
 import Lexer                      qualified as L
 import Prettyprinter              ((<+>))
@@ -139,17 +141,19 @@ decl :: { Decl L.Range }
 decls :: { Module }
   : many(decl) {% flip Module $1 `fmap` L.getFilePath }
 
-{
+{ {-# LINE 144 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
 parseError :: L.Token -> L.Alex a
-parseError _ = do
-  (p, _, _, _) <- L.alexGetInput
-  L.alexError' p "parse error"
+parseError (L.Token r t) = do
+  p <- L.r2p' r
+  throwError "parse error" [
+    (p, This . ErrDoc $ P.hsep ["unexpected token:", P.viaShow t])
+   ]
 
 lexer :: (L.Token -> L.Alex a) -> L.Alex a
-lexer = (L.alexMonadScan' >>=)
+lexer = (L.alexMonadScan >>=)
 
 class HasRange r where
   range :: r -> L.Range
@@ -159,6 +163,9 @@ class HasRange r where
 
 (<->) :: (HasRange r, HasRange r') => r -> r' -> L.Range
 (range -> a) <-> (range -> b) = a <> b
+
+r2p :: (HasRange r) => FilePath -> r -> Position
+r2p fp r = L.r2p fp (range r)
 
 instance HasRange L.Range where
   range = id
