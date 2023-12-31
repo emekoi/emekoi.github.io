@@ -19,7 +19,7 @@ on:
     branches: [master]
 
 env:
-  ghc_version: '9.6'
+  ghc_version: '9.8.1'
 
 jobs:
   build:

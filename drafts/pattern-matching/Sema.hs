@@ -49,12 +49,10 @@ instance Show SemaError where
 instance Exception SemaError
 
 semaError :: [P.Doc a] -> [(FilePath, Range, Marker (P.Doc a))] -> error
-semaError msg xs = throw . SemaError $ err Nothing (ErrMsg (P.hsep msg)) (f <$> xs) []
+semaError msg xs = throw . SemaError $ Err Nothing (ErrMsg (P.hsep msg)) (f <$> xs) []
   where
-    f (fp, Range (AlexPn _ l1 c1) (AlexPn _ l2 c2), d) = (Position (l1, c1) (l2, c2) fp, g ErrMsg d)
-    g f (This d)  = This (f d)
-    g f (Where d) = Where (f d)
-    g f (Maybe d) = Maybe (f d)
+    f (fp, Range (AlexPn _ l1 c1) (AlexPn _ l2 c2), d) =
+      (Position (l1, c1) (l2, c2) fp, ErrMsg <$> d)
 
 data UsageInfo r = Usage
   { usageInfo :: IntMap (r, IntSet)
@@ -106,7 +104,7 @@ data Type
 data SemaState = SemaState
   { fresh     :: Int
   , dataCons  :: Map Text Int
-  , dataSpans :: IntMap Int
+  , dataSpans :: IntMap (Range, Int)
   }
 
 newtype Sema s
@@ -131,20 +129,21 @@ getDataCon (Name _ n) = do
 
 collectDataCons :: Module -> Sema (Seq (Decl Range))
 collectDataCons (Module fp ds) = (`filterM` ds) \case
-  DData r c xs -> do
+  DData _ c xs -> do
     i <- getDataCon c
     mapM_ f xs
     SemaState{..} <- get
     case IntMap.lookup i dataSpans of
-      Just _ -> semaError
+      Just (r, _) -> semaError
         [ "redefinition of"
         , P.squotes $ P.pretty c
         ]
-        [ (fp, r, This "redefined here")
+        [ (fp, range c, This "redefined here")
+        , (fp, r, This "defined here")
         ]
       Nothing ->
         put SemaState
-          { dataSpans = IntMap.insert i (length xs) dataSpans, .. }
+          { dataSpans = IntMap.insert i (range c, length xs) dataSpans, .. }
     pure False
   DExpr {} -> pure True
   where
