@@ -5,7 +5,9 @@ module Lexer
   ( Alex
   , AlexPosn (..)
   , alexGetInput
+  , getFilePath
   , alexError'
+  , runAlex
   , runAlex'
   , alexMonadScan'
   , Range (..)
@@ -15,8 +17,10 @@ module Lexer
   , scanMany
   ) where
 
+import Control.Monad.State.Class
 import Data.ByteString.Lazy.Char8 (ByteString)
-import qualified Data.ByteString.Lazy.Char8 as BS
+import Data.ByteString.Lazy.Char8 qualified as BS
+import Prettyprinter              qualified as P
 }
 
 %wrapper "monadUserState-bytestring"
@@ -69,20 +73,18 @@ data AlexUserState = AlexUserState
   { filePath :: FilePath
   }
 
-alexGetUserState :: Alex AlexUserState
-alexGetUserState = Alex $ \s@AlexState{alex_ust=ust} -> Right (s,ust)
-
-alexSetUserState :: AlexUserState -> Alex ()
-alexSetUserState ss = Alex $ \s -> Right (s{alex_ust=ss}, ())
+instance MonadState AlexUserState Alex where
+  get    = Alex $ \s@AlexState{alex_ust=ust} -> Right (s,ust)
+  put ss = Alex $ \s -> Right (s{alex_ust=ss}, ())
 
 alexInitUserState :: AlexUserState
 alexInitUserState = AlexUserState "<stdin>"
 
 getFilePath :: Alex FilePath
-getFilePath = filePath <$> alexGetUserState
+getFilePath = gets filePath
 
 setFilePath :: FilePath -> Alex ()
-setFilePath = alexSetUserState . AlexUserState
+setFilePath = put . AlexUserState
 
 alexEOF :: Alex Token
 alexEOF = do
@@ -97,8 +99,8 @@ data Range = Range
 instance Semigroup Range where
   Range start _ <> Range _ end = Range start end
 
-instance Monoid Range where
-  mempty = Range alexStartPos alexStartPos
+instance P.Pretty AlexPosn where
+  pretty (AlexPn _ l c) = P.pretty l <> ":" <> P.pretty c
 
 data Token = Token
   { rtRange :: Range
@@ -179,9 +181,8 @@ alexError' (AlexPn _ l c) msg = do
   fp <- getFilePath
   alexError (fp ++ ":" ++ show l ++ ":" ++ show c ++ ": " ++ msg)
 
-runAlex' :: Maybe FilePath -> ByteString -> Alex a -> Either String a
-runAlex' (Just fp) input a = runAlex input (setFilePath fp >> a)
-runAlex' Nothing input a = runAlex input a
+runAlex' :: FilePath -> ByteString -> Alex a -> Either String a
+runAlex' fp input a = runAlex input (setFilePath fp >> a)
 
 scanMany :: ByteString -> Either String [Token]
 scanMany input = runAlex input go

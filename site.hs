@@ -6,25 +6,28 @@ module Main
     ) where
 
 import Control.Monad
-import Data.Aeson                 qualified as Aeson
-import Data.ByteString.Lazy.Char8 qualified as B
+import Data.Aeson                    qualified as Aeson
+import Data.ByteString.Lazy.Char8    qualified as B
 import Data.Foldable
-import Data.Map.Strict            qualified as Map
-import Data.Maybe                 (fromMaybe)
-import Data.Set                   qualified as Set
-import Data.Text                  qualified as T
-import Hakyll                     hiding (dateField, defaultContext,
-                                   pandocCompiler)
-import Network.HTTP.Types.Status  (status404)
-import Network.Wai                qualified as W
+import Data.Map.Strict               qualified as Map
+import Data.Maybe                    (fromMaybe)
+import Data.Set                      qualified as Set
+import Data.Text                     qualified as T
+import Hakyll                        hiding (dateField, defaultContext,
+                                      pandocCompiler)
+import Hakyll.Core.Compiler.Internal
+import Hakyll.Core.Provider
+import Network.HTTP.Types.Status     (status404)
+import Network.Wai                   qualified as W
 import Site.Config
 import Site.Pandoc
 import Site.Slug
 import Site.Utils
-import System.Directory           (doesDirectoryExist, doesFileExist,
-                                   listDirectory)
-import System.FilePath            (hasExtension, joinPath, (<.>), (</>))
-import System.Process             (readProcess)
+import System.Directory              (doesDirectoryExist, doesFileExist,
+                                      listDirectory, makeAbsolute)
+import System.FilePath               (hasExtension, joinPath, takeFileName,
+                                      (<.>), (</>))
+import System.Process                (readProcess)
 import Text.RawString.QQ
 import WaiAppStatic.Types
 
@@ -194,9 +197,9 @@ main = do
             _ <- unsafeCompiler $ readProcess "latexmk" [] []
             makeItem ()
 
-    -- copy post subfiles
+    -- copy post subfiles and source files
     getAllMetadata allPostsPattern >>=
-      mapM_ \(_, getPostSlug -> slug) -> do
+      mapM_ \(id, getPostSlug -> slug) -> do
         let src = "static" </> slug
 
         files <- preprocess $
@@ -209,6 +212,17 @@ main = do
         unless (null files) $ match (fromList files) $ do
           route $ gsubRoute "static" (const "posts")
           compile copyFileCompiler
+
+        filePath <- preprocess . makeAbsolute $ joinPath
+          ["_site" , "posts" , slug
+          , takeFileName (toFilePath id)
+          ]
+
+        create [fromFilePath filePath] $ do
+          route idRoute
+          compile $ do
+            provider <- compilerProvider <$> compilerAsk
+            makeItem . CopyFile $ resourceFilePath provider id
 
     match staticFiles do
       route idRoute

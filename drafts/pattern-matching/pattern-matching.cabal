@@ -21,6 +21,7 @@ common base
     GADTs
     ImportQualifiedPost
     LambdaCase
+    MultiParamTypeClasses
     OverloadedRecordDot
     OverloadedStrings
     PatternSynonyms
@@ -36,6 +37,7 @@ common base
     , bytestring ^>= 0.11
     , containers ^>= 0.6
     , microlens ^>= 0.4
+    , mtl ^>= 2.3
     , prettyprinter ^>= 1.7
     , text ^>= 2.0
     , transformers ^>= 0.6
@@ -50,5 +52,5 @@ executable pattern-matching
   other-modules:
     Lexer
     Parser
-    Index
+    Sema
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -pgmL markdown-unlit

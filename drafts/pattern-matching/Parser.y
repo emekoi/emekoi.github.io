@@ -1,4 +1,6 @@
 {
+{-# LANGUAGE DefaultSignatures #-}
+
 module Parser
   ( HasRange(..)
   , L.Range(..)
@@ -8,12 +10,12 @@ module Parser
   , Decl(..)
   , Alt(..)
   , Expr(..)
+  , Module(..)
   , (<->)
   , parse
 ) where
 
 import Data.ByteString.Lazy.Char8 (ByteString)
-import Data.Foldable              (foldMap')
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromJust)
@@ -94,7 +96,7 @@ pattern_1 :: { Pattern L.Range }
 
 pattern_2 :: { Pattern L.Range }
   : pattern_1                   { $1 }
-  | constructor some(pattern_1) { PData ($1 <-> $2) $1 $2 }
+  | constructor some(pattern_1) { PData (rangeSeq $1 $2) $1 $2 }
 
 pattern_3 :: { Pattern L.Range }
   : pattern_2               { $1 }
@@ -105,7 +107,7 @@ pattern_3 :: { Pattern L.Range }
     }
 
 alt :: { Alt L.Range }
-  : pattern_3 '->' expr { Alt ($1 <-> $3) $1 Nothing $3 }
+  : pattern_3 '->' expr                             { Alt ($1 <-> $3) $1 Nothing $3 }
   | pattern_3 '{' pattern_3 '<-' expr '}' '->' expr { Alt ($1 <-> $8) $1 (Just ($3, $5)) $8 }
 
 atom :: { Expr L.Range }
@@ -117,7 +119,7 @@ atom :: { Expr L.Range }
 
 expr :: { Expr L.Range }
   : atom                   { $1 }
-  | atom some(atom)        { EApp ($1 <-> $2) $1 $2 }
+  | atom some(atom)        { EApp (rangeSeq $1 $2) $1 $2 }
   | decl inT expr          { ELet ($1 <-> $3) $1 $3 }
   | matchT expr '{'
     optional('|') sepBy(alt, '|')
@@ -128,14 +130,14 @@ dataCon_1 :: { DataCon L.Range }
   | '(' dataCon_2 ')' { $2 }
 
 dataCon_2 :: { DataCon L.Range }
-  : constructor many(dataCon_1) { DataCon ($1 <-> $2) $1 $2 }
+  : constructor many(dataCon_1) { DataCon (rangeSeq $1 $2) $1 $2 }
 
 decl :: { Decl L.Range }
-  : letT variable many(pattern_1) '=' expr { DExpr ($1 <-> $5) $2 $3 $5 }
-  | dataT constructor '=' sepBy(dataCon_2, '|') { DData ($1 <-> $4) $2 $4 }
+  : letT variable many(pattern_1) '=' expr      { DExpr ($1 <-> $5) $2 $3 $5 }
+  | dataT constructor '=' sepBy(dataCon_2, '|') { DData (rangeSeq $1 $4) $2 $4 }
 
-decls :: { Seq (Decl L.Range) }
-  : many(decl) { $1 }
+decls :: { Module }
+  : many(decl) {% flip Module $1 `fmap` L.getFilePath }
 
 {
 decodeUtf8 :: ByteString -> Text
@@ -152,6 +154,9 @@ lexer = (L.alexMonadScan' >>=)
 class HasRange r where
   range :: r -> L.Range
 
+  default range :: (Foldable f, r ~ f L.Range) => r -> L.Range
+  range = fromJust . getFirst . foldMap pure
+
 (<->) :: (HasRange r, HasRange r') => r -> r' -> L.Range
 (range -> a) <-> (range -> b) = a <> b
 
@@ -161,15 +166,16 @@ instance HasRange L.Range where
 instance HasRange L.Token where
   range (L.Token r _) = r
 
-instance (Foldable f) => HasRange (f L.Range) where
-  range = foldMap' id
-
-instance (Foldable f, Foldable g, HasRange (f L.Range)) => HasRange (g (f L.Range)) where
-  range = range . foldMap range
+rangeSeq :: (HasRange x, HasRange y) => x -> Seq y -> L.Range
+rangeSeq x Empty     = range x
+rangeSeq x (_ :|> y) = range x <> range y
 
 data Name a
   = Name a Text
   deriving (Show, Foldable, Functor)
+
+instance HasRange (Name L.Range) where
+  range (Name r _) = r
 
 instance P.Pretty (Name a) where
   pretty (Name _ n) = P.pretty n
@@ -182,6 +188,8 @@ data Pattern a
   | PData a (Name a) (Seq (Pattern a))
   | POr a (Seq (Pattern a))
   deriving (Show, Foldable, Functor)
+
+instance HasRange (Pattern L.Range)
 
 instance P.Pretty (Pattern a) where
   pretty = go False
@@ -201,6 +209,8 @@ data DataCon a
  = DataCon a (Name a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
+instance HasRange (DataCon L.Range)
+
 instance P.Pretty (DataCon a) where
   pretty = go False
     where
@@ -215,6 +225,8 @@ data Decl a
   | DData a (Name a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
+instance HasRange (Decl L.Range)
+
 instance P.Pretty (Decl a) where
   pretty (DExpr _ n (fmap P.pretty -> xs) e) =
     "let" <+> P.concatWith (<+>) (P.pretty n :<| xs) <+> "=" <+> P.pretty e
@@ -225,6 +237,8 @@ instance P.Pretty (Decl a) where
 data Alt a
   = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
   deriving (Foldable, Show, Functor)
+
+instance HasRange (Alt L.Range)
 
 instance P.Pretty (Alt a) where
   pretty (Alt _ p Nothing e) =
@@ -245,6 +259,8 @@ data Expr a
   | ELet a (Decl a) (Expr a)
   deriving (Foldable, Show, Functor)
 
+instance HasRange (Expr L.Range)
+
 instance P.Pretty (Expr a) where
   pretty = go False
     where
@@ -258,4 +274,11 @@ instance P.Pretty (Expr a) where
         P.concatWith (<+>) (go True <$> xs)
       go False (ELet _ d e)  = P.pretty d <+> "in" <+> (go True e)
       go True x              = P.parens (go False x)
+
+data Module = Module FilePath (Seq (Decl L.Range))
+  deriving (Show)
+
+instance P.Pretty Module where
+  pretty (Module _ ds) =
+    P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds)
 }
