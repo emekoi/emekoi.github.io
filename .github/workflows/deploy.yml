@@ -49,10 +49,7 @@ jobs:
 
     - name: configure build
       run: |
-        echo 'packages: .' > cabal.project
-        echo 'constraints: blog +ci' >> cabal.project
-        echo 'constraints: hakyll -watchServer -previewServer -checkExternal' >> cabal.project
-        cabal configure
+        cabal configure -f 'ci' --constraint 'hakyll -watchServer -previewServer -checkExternal'
         cabal build all --dry-run
 
     - name: restore cached dependencies
@@ -81,8 +78,7 @@ jobs:
 
     - name: build blog
       run: |
-        cabal -j -O2 build blog
-        $(cabal list-bin blog) build
+        cabal -j -O2 run -- blog build
 
     - name: build resume
       uses: xu-cheng/latex-action@v3
