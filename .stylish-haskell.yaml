@@ -370,8 +370,9 @@ newline: lf
 #
 # No language extensions are enabled by default.
 language_extensions:
-  - TemplateHaskell
+  - CPP
   - PatternSynonyms
+  - TemplateHaskell
 
 # Attempt to find the cabal file in ancestors of the current directory, and
 # parse options (currently only language extensions) from that.

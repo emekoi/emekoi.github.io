@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP             #-}
 {-# LANGUAGE QuasiQuotes     #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -16,24 +17,29 @@ import Data.Foldable
 import Data.Map.Strict               qualified as Map
 import Data.Maybe                    (fromMaybe)
 import Data.Set                      qualified as Set
-import Data.Text                     qualified as T
 import Hakyll                        hiding (dateField, defaultContext,
                                       pandocCompiler)
 import Hakyll.Core.Compiler.Internal
 import Hakyll.Core.Provider
-import Network.HTTP.Types.Status     (status404)
-import Network.Wai                   qualified as W
-import System.Directory              (doesDirectoryExist, doesFileExist,
-                                      listDirectory, makeAbsolute)
-import System.FilePath               (hasExtension, joinPath, takeFileName,
-                                      (<.>), (</>))
+import System.Directory              (doesDirectoryExist, listDirectory,
+                                      makeAbsolute)
+import System.FilePath               (joinPath, takeFileName, (</>))
 import System.Process                (readProcess)
 import Text.RawString.QQ
-import WaiAppStatic.Types
 
--- https://github.com/LightAndLight/lightandlight.github.io/blob/a29bac1b084b86abe43e28c4062ca963d0647b98/site.hs#L31-L55
+#if defined(PREVIEW_SERVER)
+import Data.Text                     qualified as T
+import Network.HTTP.Types.Status     (status404)
+import Network.Wai                   qualified as W
+import System.Directory              (doesFileExist)
+import System.FilePath               (hasExtension, (<.>))
+import WaiAppStatic.Types
+#endif
+
 hakyllConfig :: Configuration
 hakyllConfig = defaultConfiguration
+#if defined(PREVIEW_SERVER)
+  -- https://github.com/LightAndLight/lightandlight.github.io/blob/a29bac1b084b86abe43e28c4062ca963d0647b98/site.hs#L31-L55
   { previewSettings = \path ->
       let s@StaticSettings{..} = config.previewSettings path in s
         { ss404Handler = Just \_ respond ->
@@ -59,6 +65,7 @@ hakyllConfig = defaultConfiguration
 
     config :: Configuration
     config = defaultConfiguration
+#endif
 
 feedConfig :: FeedConfiguration
 feedConfig = FeedConfiguration

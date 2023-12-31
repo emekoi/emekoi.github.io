@@ -1,4 +1,4 @@
-name: Deploy site
+name: Deploy blog
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
@@ -76,8 +76,11 @@ jobs:
     - name: install Pygments
       run: pip install Pygments
 
-    - name: build site
+    - name: build blog
       run: |
+        echo 'packages: .' > cabal.project
+        echo 'constraints: blog +ci' >> cabal.project
+        echo 'constraints: hakyll -watchServer -previewServer -checkExternal' >> cabal.project
         cabal -j -O2 build blog
         cabal exec -- blog build
 

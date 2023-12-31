@@ -9,6 +9,10 @@ maintainer:         emekankurumeh@outlook.com
 name:               blog
 version:            0.1.0.0
 
+flag ci
+  description: are we on a ci runner?
+  default:     False
+
 common base
   ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing -fsplit-sections
   default-language: Haskell2010
@@ -56,4 +60,6 @@ executable blog
     Blog.Slug
     Blog.Utils
     Blog.Pandoc
+  if !flag(ci)
+    cpp-options: -DPREVIEW_SERVER
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
