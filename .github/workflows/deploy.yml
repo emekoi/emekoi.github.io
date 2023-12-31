@@ -38,6 +38,9 @@ jobs:
         python-version: '3.9'
         cache: 'pip' # caching pip dependencies
 
+    - name: install Pygments
+      run: pip install Pygments
+
     - name: set up GHC ${{ env.ghc_version }}
       uses: haskell-actions/setup@v2
       id: setup
@@ -46,6 +49,9 @@ jobs:
 
     - name: configure build
       run: |
+        echo 'packages: .' > cabal.project
+        echo 'constraints: blog +ci' >> cabal.project
+        echo 'constraints: hakyll -watchServer -previewServer -checkExternal' >> cabal.project
         cabal configure
         cabal build all --dry-run
 
@@ -73,14 +79,8 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: install Pygments
-      run: pip install Pygments
-
     - name: build blog
       run: |
-        echo 'packages: .' > cabal.project
-        echo 'constraints: blog +ci' >> cabal.project
-        echo 'constraints: hakyll -watchServer -previewServer -checkExternal' >> cabal.project
         cabal -j -O2 build blog
         cabal exec -- blog build
 
