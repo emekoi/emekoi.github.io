@@ -64,6 +64,7 @@ tokens :-
 <0> "@"  { tok At }
 <0> "_"  { tok Underscore }
 <0> "="  { tok Eq }
+<0> ":"  { tok Colon }
 
 -- variables and constructors
 <0> @variable     { tokByteString Variable }
@@ -301,6 +302,7 @@ data TokenClass
   | RArrow
   | LArrow
   | Comma
+  | Colon
   | Pipe
   | At
   | Eq

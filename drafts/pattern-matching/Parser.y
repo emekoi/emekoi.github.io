@@ -4,13 +4,14 @@
 module Parser
   ( HasRange(..)
   , L.Range(..)
-  , Name(..)
-  , Pattern(..)
+  , Alt(..)
   , DataCon(..)
   , Decl(..)
-  , Alt(..)
   , Expr(..)
+  , ExprDecl(..)
   , Module(..)
+  , Name(..)
+  , Pattern(..)
   , (<->)
   , parse
   , r2p
@@ -59,6 +60,7 @@ import Prettyprinter              qualified as P
   '@'          { L.Token _ L.At }
   '_'          { L.Token _ L.Underscore }
   '='          { L.Token _ L.Eq }
+  ':'          { L.Token _ L.Colon }
 
 %%
 
@@ -88,13 +90,14 @@ constructor :: { Name L.Range }
   : constructorT { unToken $1 \r (L.Constructor name) -> Name r (decodeUtf8 name) }
 
 pattern_1 :: { Pattern L.Range }
-  : '(' pattern_3 ')'      { $2 }
-  | '_'                    { unToken $1 \r _ -> PWild r }
-  | intT                   { unToken $1 \r (L.Int i) -> PInt r i }
-  | stringT                { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
-  | variable               { let (Name r _) = $1 in PAs r $1 (PWild r) }
-  | constructor            { PData (range $1) $1 Empty }
-  | variable '@' pattern_1 { PAs ($1 <-> $3) $1 $3  }
+  : '(' pattern_3 ')'                 { $2 }
+  | '(' pattern_3 ':' constructor ')' { PType ($1 <-> $5) $2 $4 }
+  | '_'                               { unToken $1 \r _ -> PWild r }
+  | intT                              { unToken $1 \r (L.Int i) -> PInt r i }
+  | stringT                           { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
+  | variable                          { let (Name r _) = $1 in PAs r $1 (PWild r) }
+  | constructor                       { PData (range $1) $1 Empty }
+  | variable '@' pattern_1            { PAs ($1 <-> $3) $1 $3  }
 
 pattern_2 :: { Pattern L.Range }
   : pattern_1                   { $1 }
@@ -134,14 +137,17 @@ dataCon_1 :: { DataCon L.Range }
 dataCon_2 :: { DataCon L.Range }
   : constructor many(dataCon_1) { DataCon (rangeSeq $1 $2) $1 $2 }
 
+edecl :: { ExprDecl L.Range }
+  : letT variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $5) $2 $3 $5 }
+
 decl :: { Decl L.Range }
-  : letT variable many(pattern_1) '=' expr      { DExpr ($1 <-> $5) $2 $3 $5 }
+  : edecl                                       { DExpr $1 }
   | dataT constructor '=' sepBy(dataCon_2, '|') { DData (rangeSeq $1 $4) $2 $4 }
 
 decls :: { Module }
-  : many(decl) {% flip Module $1 `fmap` L.getFilePath }
+  : many(decl) { Module $1 }
 
-{ {-# LINE 144 "Parser.y" #-}
+{ {-# LINE 151 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
@@ -187,12 +193,17 @@ instance HasRange (Name L.Range) where
 instance P.Pretty (Name a) where
   pretty (Name _ n) = P.pretty n
 
+type Variable = Name
+type Constructor = Name
+type Type = Name
+
 data Pattern a
   = PWild a
   | PInt a Integer
   | PString a Text
   | PAs a (Name a) (Pattern a)
-  | PData a (Name a) (Seq (Pattern a))
+  | PType a (Pattern a) (Type a)
+  | PData a (Constructor a) (Seq (Pattern a))
   | POr a (Seq (Pattern a))
   deriving (Show, Foldable, Functor)
 
@@ -206,6 +217,8 @@ instance P.Pretty (Pattern a) where
       go _ (PString _ s)       = P.pretty s
       go _ (PAs _ x (PWild _)) = P.pretty x
       go _ (PAs _ x p)         = P.pretty x <> "@" <> go True p
+      go _ (PType _ p t)       = P.parens $ go False p <+> ":" <+> P.pretty t
+      go _ (PData _ c Empty)   = P.pretty c
       go False (PData _ c ps)  =
         P.concatWith (<+>) (P.pretty c :<| (go True <$> ps))
       go False (POr _ ps)      =
@@ -213,7 +226,7 @@ instance P.Pretty (Pattern a) where
       go True x                = P.parens (go False x)
 
 data DataCon a
- = DataCon a (Name a) (Seq (DataCon a))
+ = DataCon a (Constructor a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
 instance HasRange (DataCon L.Range)
@@ -227,16 +240,25 @@ instance P.Pretty (DataCon a) where
         let doc = go False d in
           if null xs then doc else doc
 
+data ExprDecl a
+  = ExprDecl a (Variable a) (Seq (Pattern a)) (Expr a)
+  deriving (Foldable, Show, Functor)
+
+instance HasRange (ExprDecl L.Range)
+
+instance P.Pretty (ExprDecl a) where
+  pretty (ExprDecl _ n (fmap P.pretty -> xs) e) =
+    "let" <+> P.concatWith (<+>) (P.pretty n :<| xs) <+> "=" <+> P.pretty e
+
 data Decl a
-  = DExpr a (Name a) (Seq (Pattern a)) (Expr a)
-  | DData a (Name a) (Seq (DataCon a))
+  = DExpr (ExprDecl a)
+  | DData a (Constructor a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
 instance HasRange (Decl L.Range)
 
 instance P.Pretty (Decl a) where
-  pretty (DExpr _ n (fmap P.pretty -> xs) e) =
-    "let" <+> P.concatWith (<+>) (P.pretty n :<| xs) <+> "=" <+> P.pretty e
+  pretty (DExpr e) = P.pretty e
   pretty (DData _ c (fmap P.pretty -> xs)) =
     "data" <+> P.pretty c <+> "="
       <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
@@ -258,8 +280,8 @@ instance P.Pretty (Alt a) where
 
 data Expr a
   = EInt a Integer
-  | EVar a (Name a)
-  | EData a (Name a)
+  | EVar a (Variable a)
+  | EData a (Constructor a)
   | EString a Text
   | EMatch a (Expr a) (Seq (Alt a))
   | EApp a (Expr a) (Seq (Expr a))
@@ -275,17 +297,17 @@ instance P.Pretty (Expr a) where
       go _ (EVar _ v)        = P.pretty v
       go _ (EData _ c)       = P.pretty c
       go _ (EString _ s)     = P.pretty s
-      go _ (EMatch _ e xs)   = P.pretty e <+>
+      go _ (EMatch _ e xs)   = "match" <+> P.pretty e <+>
         P.braces (P.concatWith (\x y -> x <+> "|" <+> y) (P.pretty <$> xs))
       go False (EApp _ f xs) = P.pretty f <+>
         P.concatWith (<+>) (go True <$> xs)
       go False (ELet _ d e)  = P.pretty d <+> "in" <+> (go True e)
       go True x              = P.parens (go False x)
 
-data Module = Module FilePath (Seq (Decl L.Range))
+data Module = Module (Seq (Decl L.Range))
   deriving (Show)
 
 instance P.Pretty Module where
-  pretty (Module _ ds) =
+  pretty (Module ds) =
     P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds)
 }
