@@ -4,7 +4,7 @@
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE NoFieldSelectors           #-}
 {-# LANGUAGE RecordWildCards            #-}
-{-# LANGUAGE UndecidableInstances       #-}
+{-# LANGUAGE OverloadedLists            #-}
 
 module Sema
     ( Sema
@@ -149,8 +149,8 @@ throwSema :: ErrMsg -> [(Range, Marker ErrMsg)] -> Sema a
 throwSema msg xs = Sema $ ReaderT \s -> throwIO . Error $
   [Err' msg (first (r2p s.fileName) <$> xs)]
 
-throwSema' :: [P.Doc a] -> [(Range, Marker ErrMsg)] -> Sema a
-throwSema' = throwSema . ErrDoc . P.hsep
+errQuote :: (P.Pretty p) => p -> ErrMsg
+errQuote = ErrDoc . P.squotes . P.pretty
 
 runSema :: FilePath -> Sema s -> IO s
 runSema fp (Sema s) = do
@@ -180,8 +180,8 @@ findTypeId (Name r n) = do
   SemaState{types} <- ask
   readIORef types >>= Map.lookup n .- \case
     Just id -> pure id
-    Nothing -> throwSema'
-      [ "unkown type", P.squotes $ P.pretty n ]
+    Nothing -> throwSema
+      [ "unkown type", errQuote n ]
       [ (r, This "used here") ]
 
 findTypeInfo :: TypeId -> Sema TypeInfo
@@ -207,8 +207,8 @@ findConId (Name r n) = do
   SemaState{dataCons} <- ask
   readIORef dataCons >>= Map.lookup n .- \case
     Just id -> pure id
-    Nothing -> throwSema'
-      [ "unknown constructor", P.squotes $ P.pretty n ]
+    Nothing -> throwSema
+      [ "unknown constructor", errQuote n ]
       [ (r, This "used here") ]
 
 findConInfo :: ConId -> Sema ConInfo
@@ -229,17 +229,17 @@ makeConId (Name r c) = do
       pure id
     Just id -> do
       info <- findConInfo id
-      throwSema'
-        [ "redefinition of constructor", P.squotes $ P.pretty c ]
+      throwSema
+        [ "redefinition of constructor", errQuote c ]
         [ (range info.name, This "first defined here"), (r, This "redefined here") ]
 
 tyErrorExpect
   :: (HasRange r, P.Pretty a2, P.Pretty a3)
   => P.Doc a1 -> a2 -> a3 -> r -> Sema a1
 tyErrorExpect thing expect got r =
-  throwSema' [ "expected", thing, "of type", P.squotes $ P.pretty expect ]
-    [ (range r, This . ErrDoc . P.hsep $ [
-        thing, "has type", P.squotes $ P.pretty got
+  throwSema [ "expected", ErrDoc thing, "of type", errQuote expect ]
+    [ (range r, This [
+        ErrDoc thing, "has type", errQuote got
       ])
     ]
 
@@ -262,14 +262,14 @@ tyErrorExpect thing expect got r =
 tyCheckDataDecl :: Name Range -> Seq (DataCon Range) -> Sema ()
 tyCheckDataDecl t cs = do
   tid@(TypeId id) <- makeTypeId t
-  when (tid < 0) $ throwSema'
-    [ "redefinition of builtin type", P.squotes $ P.pretty t ]
+  when (tid < 0) $ throwSema
+    [ "redefinition of builtin type", errQuote t ]
     [ (range t, This "redefined here") ]
   SemaState{typeInfo,dataConInfo} <- ask
   readIORef typeInfo >>= IntMap.lookup id .- \case
     Just info -> do
-      throwSema'
-        [ "redefinition of type", P.squotes $ P.pretty t ]
+      throwSema
+        [ "redefinition of type", errQuote t ]
         [ (range info.name, This "first defined here")
         , (range t, This "redefined here")
         ]
@@ -297,9 +297,9 @@ tyCheckPat (PAs r n p) = do
   pure (PAs (r, t) ((,t) <$> n) p')
 tyCheckPat (PData r c ps) = do
   cinfo <- findConId c >>= findConInfo
-  unless (length ps == cinfo.span) $ throwSema'
-    [ "constructor", P.squotes $ P.pretty c, "has arity", P.pretty cinfo.span ]
-    [ (r, This . ErrDoc . P.hsep $ ["used with arity", P.pretty $ length ps]) ]
+  unless (length ps == cinfo.span) $ throwSema
+    [ "constructor", errQuote c, "has arity", ErrPretty cinfo.span ]
+    [ (r, This ["used with arity", ErrPretty $ length ps]) ]
   ty <- findTypeInfo cinfo.typeOf <&> \i ->
     TData (getName i.name) cinfo.typeOf
   PData (r, ty) ((, ty) <$> c) <$> mapM tyCheckPat ps
