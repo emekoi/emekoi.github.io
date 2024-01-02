@@ -1,8 +1,11 @@
 {
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
 module Parser
-  ( HasRange(..)
+  ( HasRange
+  , HasInfo(..)
   , L.Range(..)
   , Alt(..)
   , DataCon(..)
@@ -10,11 +13,16 @@ module Parser
   , Expr(..)
   , ExprDecl(..)
   , Module(..)
-  , Name(..)
+  , Name(Name, getName)
   , Pattern(..)
+  , Constructor
+  , Variable
+  , Type
   , (<->)
   , parse
   , r2p
+  , range
+  , rangeSeq
 ) where
 
 import Data.ByteString.Lazy.Char8 (ByteString)
@@ -107,8 +115,8 @@ pattern_3 :: { Pattern L.Range }
   : pattern_2               { $1 }
   | pattern_3 '|' pattern_2 {
       case $1 of
-        POr r ps -> POr (r <-> $3) (ps :|> $3)
-        _ -> POr ($1 <-> $3) (Empty :|> $1 :|> $3)
+        POr r p ps -> POr (r <-> $3) p (ps :|> $3)
+        _ -> POr ($1 <-> $3) $1 (Seq.singleton $3)
     }
 
 alt :: { Alt L.Range }
@@ -147,7 +155,7 @@ decl :: { Decl L.Range }
 decls :: { Module }
   : many(decl) { Module $1 }
 
-{ {-# LINE 151 "Parser.y" #-}
+{ {-# LINE 158 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
@@ -161,11 +169,22 @@ parseError (L.Token r t) = do
 lexer :: (L.Token -> L.Alex a) -> L.Alex a
 lexer = (L.alexMonadScan >>=)
 
-class HasRange r where
-  range :: r -> L.Range
+-- class HasRange r where
+--   range :: r -> L.Range
 
-  default range :: (Foldable f, r ~ f L.Range) => r -> L.Range
-  range = fromJust . getFirst . foldMap pure
+--   default range :: (Foldable f, r ~ f L.Range) => r -> L.Range
+--   range = fromJust . getFirst . foldMap pure
+
+class HasInfo r i | r -> i where
+  info :: r -> i
+
+  default info :: (Foldable f, r ~ f i) => r -> i
+  info = fromJust . getFirst . foldMap pure
+
+type HasRange r = HasInfo r L.Range
+
+range :: (HasInfo r L.Range) => r -> L.Range
+range = info
 
 (<->) :: (HasRange r, HasRange r') => r -> r' -> L.Range
 (range -> a) <-> (range -> b) = a <> b
@@ -173,22 +192,21 @@ class HasRange r where
 r2p :: (HasRange r) => FilePath -> r -> Position
 r2p fp r = L.r2p fp (range r)
 
-instance HasRange L.Range where
-  range = id
+instance HasInfo L.Range L.Range where
+  info = id
 
-instance HasRange L.Token where
-  range (L.Token r _) = r
+instance HasInfo L.Token L.Range where
+  info (L.Token r _) = r
 
 rangeSeq :: (HasRange x, HasRange y) => x -> Seq y -> L.Range
 rangeSeq x Empty     = range x
 rangeSeq x (_ :|> y) = range x <> range y
 
 data Name a
-  = Name a Text
-  deriving (Show, Foldable, Functor)
+  = Name { nameInfo :: a, getName :: Text }
+  deriving (Show, Foldable, Functor, Traversable, Eq)
 
-instance HasRange (Name L.Range) where
-  range (Name r _) = r
+instance HasInfo (Name i) i
 
 instance P.Pretty (Name a) where
   pretty (Name _ n) = P.pretty n
@@ -204,10 +222,10 @@ data Pattern a
   | PAs a (Name a) (Pattern a)
   | PType a (Pattern a) (Type a)
   | PData a (Constructor a) (Seq (Pattern a))
-  | POr a (Seq (Pattern a))
+  | POr a (Pattern a) (Seq (Pattern a))
   deriving (Show, Foldable, Functor)
 
-instance HasRange (Pattern L.Range)
+instance HasInfo (Pattern i) i
 
 instance P.Pretty (Pattern a) where
   pretty = go False
@@ -221,15 +239,15 @@ instance P.Pretty (Pattern a) where
       go _ (PData _ c Empty)   = P.pretty c
       go False (PData _ c ps)  =
         P.concatWith (<+>) (P.pretty c :<| (go True <$> ps))
-      go False (POr _ ps)      =
-        P.concatWith (\x y -> x <+> "|" <+> y) (go False <$> ps)
+      go False (POr _ p ps)    =
+        P.concatWith (\x y -> x <+> "|" <+> y) (go False <$> (p :<| ps))
       go True x                = P.parens (go False x)
 
 data DataCon a
  = DataCon a (Constructor a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
-instance HasRange (DataCon L.Range)
+instance HasInfo (DataCon i) i
 
 instance P.Pretty (DataCon a) where
   pretty = go False
@@ -241,10 +259,10 @@ instance P.Pretty (DataCon a) where
           if null xs then doc else doc
 
 data ExprDecl a
-  = ExprDecl a (Variable a) (Seq (Pattern a)) (Expr a)
+  = ExprDecl a (Name a) (Seq (Pattern a)) (Expr a)
   deriving (Foldable, Show, Functor)
 
-instance HasRange (ExprDecl L.Range)
+instance HasInfo (ExprDecl i) i
 
 instance P.Pretty (ExprDecl a) where
   pretty (ExprDecl _ n (fmap P.pretty -> xs) e) =
@@ -252,10 +270,10 @@ instance P.Pretty (ExprDecl a) where
 
 data Decl a
   = DExpr (ExprDecl a)
-  | DData a (Constructor a) (Seq (DataCon a))
+  | DData a (Name a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
-instance HasRange (Decl L.Range)
+instance HasInfo (Decl i) i
 
 instance P.Pretty (Decl a) where
   pretty (DExpr e) = P.pretty e
@@ -267,7 +285,7 @@ data Alt a
   = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
   deriving (Foldable, Show, Functor)
 
-instance HasRange (Alt L.Range)
+instance HasInfo (Alt i) i
 
 instance P.Pretty (Alt a) where
   pretty (Alt _ p Nothing e) =
@@ -288,7 +306,7 @@ data Expr a
   | ELet a (Decl a) (Expr a)
   deriving (Foldable, Show, Functor)
 
-instance HasRange (Expr L.Range)
+instance HasInfo (Expr i) i
 
 instance P.Pretty (Expr a) where
   pretty = go False

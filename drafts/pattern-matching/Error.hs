@@ -1,4 +1,4 @@
-module Error (module Error, Position(..), Marker(..), IsString(..)) where
+module Error (module Error, Position(..), Marker(..), IsString(..), Report(..)) where
 
 import Control.Exception
 import Data.Text                 (Text)
@@ -23,18 +23,18 @@ instance P.Pretty ErrMsg where
     . P.layoutPretty P.defaultLayoutOptions $ doc
 
 newtype Error
-  = Error (Report ErrMsg)
+  = Error [Report ErrMsg]
 
 instance Show Error where
   show = error "uncaught SemaError"
 
 instance Exception Error
 
+pattern Err' :: msg -> [(Position, Marker msg)] -> Report msg
+pattern Err' msg xs = Err Nothing msg xs []
+
 throwError :: ErrMsg -> [(Position, Marker ErrMsg)] -> error
-throwError msg xs = throw . Error $ Err Nothing msg xs []
-  -- where
-  --   f (fp, Range (AlexPn _ l1 c1) (AlexPn _ l2 c2), d) =
-  --     (Position (l1, c1) (l2, c2) fp, d)
+throwError msg = throw . Error . (:[]) . Err' msg
 
 throwError' :: [P.Doc a] -> [(Position, Marker ErrMsg)] -> error
 throwError' = throwError . ErrDoc . P.hsep

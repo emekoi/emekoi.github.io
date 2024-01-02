@@ -261,7 +261,7 @@ alexEOF = do
 data Range = Range
   { start :: AlexPosn
   , stop :: AlexPosn
-  } deriving (Eq, Show)
+  } deriving (Eq, Show, Ord)
 
 instance Semigroup Range where
   Range start _ <> Range _ end = Range start end
