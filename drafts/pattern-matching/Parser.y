@@ -2,6 +2,7 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE OverloadedLists #-}
 
 module Parser
   ( HasRange
@@ -138,24 +139,20 @@ expr :: { Expr L.Range }
     optional('|') sepBy(alt, '|')
     '}'                    { EMatch ($1 <-> $6) $2 $5 }
 
-dataCon_1 :: { DataCon L.Range }
-  : constructor       { DataCon (range $1) $1 Empty }
-  | '(' dataCon_2 ')' { $2 }
-
-dataCon_2 :: { DataCon L.Range }
-  : constructor many(dataCon_1) { DataCon (rangeSeq $1 $2) $1 $2 }
+dataCon :: { DataCon L.Range }
+  : constructor many(constructor) { DataCon (rangeSeq $1 $2) $1 $2 }
 
 edecl :: { ExprDecl L.Range }
   : letT variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $5) $2 $3 $5 }
 
 decl :: { Decl L.Range }
   : edecl                                       { DExpr $1 }
-  | dataT constructor '=' sepBy(dataCon_2, '|') { DData (rangeSeq $1 $4) $2 $4 }
+  | dataT constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $4) $2 $4 }
 
 decls :: { Module }
   : many(decl) { Module $1 }
 
-{ {-# LINE 158 "Parser.y" #-}
+{ {-# LINE 156 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
@@ -163,17 +160,11 @@ parseError :: L.Token -> L.Alex a
 parseError (L.Token r t) = do
   p <- L.r2p' r
   throwError "parse error" [
-    (p, This . ErrDoc $ P.hsep ["unexpected token:", P.viaShow t])
+    (p, This ["unexpected token:", ErrShow t ])
    ]
 
 lexer :: (L.Token -> L.Alex a) -> L.Alex a
 lexer = (L.alexMonadScan >>=)
-
--- class HasRange r where
---   range :: r -> L.Range
-
---   default range :: (Foldable f, r ~ f L.Range) => r -> L.Range
---   range = fromJust . getFirst . foldMap pure
 
 class HasInfo r i | r -> i where
   info :: r -> i
@@ -244,19 +235,13 @@ instance P.Pretty (Pattern a) where
       go True x                = P.parens (go False x)
 
 data DataCon a
- = DataCon a (Constructor a) (Seq (DataCon a))
+ = DataCon a (Constructor a) (Seq (Type a))
   deriving (Foldable, Show, Functor)
 
 instance HasInfo (DataCon i) i
 
 instance P.Pretty (DataCon a) where
-  pretty = go False
-    where
-      go False (DataCon _ c xs) = P.pretty c <+>
-        P.concatWith (<+>) (go True <$> xs)
-      go True d@(DataCon _ _ xs) =
-        let doc = go False d in
-          if null xs then doc else doc
+  pretty (DataCon _ c xs) = P.concatWith (<+>) (P.pretty <$> (c :<| xs))
 
 data ExprDecl a
   = ExprDecl a (Name a) (Seq (Pattern a)) (Expr a)

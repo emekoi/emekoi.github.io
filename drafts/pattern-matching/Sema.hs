@@ -13,7 +13,7 @@ module Sema
     , analyze
     ) where
 
-import Control.Category     hiding ((.))
+import Control.Category    ((>>>))
 import Control.Exception
 import Control.Monad
 import Control.Monad.Reader
@@ -31,11 +31,14 @@ import Data.IORef           qualified as IORef
 import Data.Map.Strict      (Map)
 import Data.Map.Strict      qualified as Map
 import Data.Sequence        (Seq (..))
+import Data.Sequence        qualified as Seq
 import Data.Text            (Text)
 import Error
 import Parser               hiding (Type)
 import Prettyprinter        qualified as P
 import Witherable
+import Lens.Micro
+import GHC.Stack
 
 newIORef :: (MonadIO m) => x -> m (IORef x)
 newIORef = liftIO . IORef.newIORef
@@ -116,10 +119,13 @@ data TypeInfo = TypeInfo
   }
   deriving (Show)
 
+tyInfo2Ty :: TypeInfo -> Type
+tyInfo2Ty t = TData (getName t.name) t.id
+
 data ConInfo = ConInfo
   { name   :: Name Range
   , id     :: ConId
-  , span   :: Int
+  , fields :: Seq TypeId
   , typeOf :: TypeId
   }
   deriving (Show)
@@ -150,7 +156,7 @@ throwSema msg xs = Sema $ ReaderT \s -> throwIO . Error $
   [Err' msg (first (r2p s.fileName) <$> xs)]
 
 errQuote :: (P.Pretty p) => p -> ErrMsg
-errQuote = ErrDoc . P.squotes . P.pretty
+errQuote = ErrPretty P.squotes
 
 runSema :: FilePath -> Sema s -> IO s
 runSema fp (Sema s) = do
@@ -172,7 +178,7 @@ fresh = ask >>= \s -> do
   pure fresh
 
 -- fixity helper
-(.-) :: (Category cat) => cat a b -> cat b c -> cat a c
+(.-) :: (a -> b) -> (b -> c) -> (a -> c)
 (.-) = (>>>)
 
 findTypeId :: Name Range -> Sema TypeId
@@ -184,7 +190,7 @@ findTypeId (Name r n) = do
       [ "unkown type", errQuote n ]
       [ (r, This "used here") ]
 
-findTypeInfo :: TypeId -> Sema TypeInfo
+findTypeInfo :: HasCallStack => TypeId -> Sema TypeInfo
 findTypeInfo (TypeId id) = do
   SemaState{typeInfo} <- ask
   readIORef typeInfo >>= IntMap.lookup id .- \case
@@ -211,7 +217,7 @@ findConId (Name r n) = do
       [ "unknown constructor", errQuote n ]
       [ (r, This "used here") ]
 
-findConInfo :: ConId -> Sema ConInfo
+findConInfo :: HasCallStack => ConId -> Sema ConInfo
 findConInfo (ConId id) = do
   SemaState{dataConInfo} <- ask
   readIORef dataConInfo >>= IntMap.lookup id .- \case
@@ -235,11 +241,11 @@ makeConId (Name r c) = do
 
 tyErrorExpect
   :: (HasRange r, P.Pretty a2, P.Pretty a3)
-  => P.Doc a1 -> a2 -> a3 -> r -> Sema a1
+  => ErrMsg -> a2 -> a3 -> r -> Sema a1
 tyErrorExpect thing expect got r =
-  throwSema [ "expected", ErrDoc thing, "of type", errQuote expect ]
+  throwSema [ "expected", thing, "of type", errQuote expect ]
     [ (range r, This [
-        ErrDoc thing, "has type", errQuote got
+        thing, "has type", errQuote got
       ])
     ]
 
@@ -258,8 +264,7 @@ tyErrorExpect thing expect got r =
 --   }
 --   deriving (Show)
 
-
-tyCheckDataDecl :: Name Range -> Seq (DataCon Range) -> Sema ()
+tyCheckDataDecl :: HasCallStack => Name Range -> Seq (DataCon Range) -> Sema ()
 tyCheckDataDecl t cs = do
   tid@(TypeId id) <- makeTypeId t
   when (tid < 0) $ throwSema
@@ -275,51 +280,55 @@ tyCheckDataDecl t cs = do
         ]
     Nothing -> modifyIORef typeInfo . IntMap.insert id $
       TypeInfo { name = t, id = tid, span = length cs }
-  forM_ cs \(DataCon _ c xs) -> do
-    cid@(ConId id) <- makeConId c
-    modifyIORef dataConInfo . IntMap.insert id $
-      ConInfo { name = c, id = cid, span = length xs, typeOf = tid }
-    mapM_ f xs
-  where
-    f (DataCon _ c xs) = makeTypeId c *> mapM_ f xs
+  forM_ cs \(DataCon _ name xs) -> do
+    id@(ConId cid) <- makeConId name
+    fields <- mapM makeTypeId xs
+    modifyIORef dataConInfo . IntMap.insert cid $
+      ConInfo { typeOf = tid, .. }
 
-tyCheckPat :: Pattern Range -> Sema (Pattern (Range, Type))
-tyCheckPat (PType r p t@(Name _ tn)) = do
-    p' <- tyCheckPat p
-    ty <- TData tn <$> findTypeId t
-    case snd $ info p' of
-      ty' | ty == ty' -> pure $ PType (r, ty) p' ((,ty) <$> t)
-      TUnknown        -> pure $ PType (r, ty) p' ((,ty) <$> t)
-      ty'             -> tyErrorExpect "pattern" ty ty' p
-tyCheckPat (PAs r n p) = do
-  p' <- tyCheckPat p
+-- TODO: use "unification" instead of type equality checks
+tyInferPat :: HasCallStack => Pattern Range -> Sema (Pattern (Range, Type))
+tyInferPat (PType _ p t@(Name _ tn)) = do
+  ty <- TData tn <$> findTypeId t
+  tyCheckPat ty p
+tyInferPat (PAs r n p) = do
+  p' <- tyInferPat p
   let (_, t) = info p'
   pure (PAs (r, t) ((,t) <$> n) p')
-tyCheckPat (PData r c ps) = do
+tyInferPat (PData r c ps) = do
   cinfo <- findConId c >>= findConInfo
-  unless (length ps == cinfo.span) $ throwSema
-    [ "constructor", errQuote c, "has arity", ErrPretty cinfo.span ]
-    [ (r, This ["used with arity", ErrPretty $ length ps]) ]
-  ty <- findTypeInfo cinfo.typeOf <&> \i ->
-    TData (getName i.name) cinfo.typeOf
-  PData (r, ty) ((, ty) <$> c) <$> mapM tyCheckPat ps
-tyCheckPat (POr r p ps)  = do
-  p <- tyCheckPat p
+  unless (length ps == length cinfo.fields) $ throwSema
+    [ "constructor", errQuote c, "has arity", p . length $ cinfo.fields ]
+    [ (r, This ["used with arity", p $ length ps]) ]
+  ty <- tyInfo2Ty <$> findTypeInfo cinfo.typeOf
+  PData (r, ty) ((, ty) <$> c) <$> sequence (Seq.zipWith f cinfo.fields ps)
+  where
+    f tid p = do
+      t <- tyInfo2Ty <$> findTypeInfo tid
+      tyCheckPat t p
+tyInferPat (POr r p ps)  = do
+  p <- tyInferPat p
   let ty = snd $ info p
-  ps <- mapM tyCheckPat ps
-  forM_ ps $ info >>> \(r, ty') -> unless (ty == ty') do
-    tyErrorExpect "pattern" ty ty' r
-  pure $ POr (r, snd $ info p) p ps
-tyCheckPat x@(PInt {})    = pure $ (, TInt) <$> x
-tyCheckPat x@(PString {}) = pure $ (, TString) <$> x
-tyCheckPat x              = pure $ (, TUnknown) <$> x
+  POr (r, snd $ info p) p
+    <$> mapM (tyCheckPat ty) ps
+tyInferPat x@(PInt {})    = pure $ (, TInt) <$> x
+tyInferPat x@(PString {}) = pure $ (, TString) <$> x
+tyInferPat x              = pure $ (, TUnknown) <$> x
 
-tyCheckExprDecl :: ExprDecl Range -> Sema (ExprDecl (Range, Type))
+tyCheckPat :: HasCallStack => Type -> Pattern Range -> Sema (Pattern (Range, Type))
+tyCheckPat ty p = do
+  p' <- tyInferPat p
+  case snd $ info p' of
+    ty' | ty == ty' -> pure p'
+    TUnknown        -> pure $ (_2 .~ ty) <$> p'
+    ty'             -> tyErrorExpect "pattern" ty ty' p
+
+tyCheckExprDecl :: HasCallStack => ExprDecl Range -> Sema (ExprDecl (Range, Type))
 tyCheckExprDecl x@(ExprDecl _ _ _ps _) = do
-  _ps' <- mapM_ tyCheckPat _ps
+  _ps' <- mapM_ tyInferPat _ps
   pure ((,TUnknown) <$> x)
 
-analyze :: Module -> Sema (Seq (ExprDecl (Range, Type)))
+analyze :: HasCallStack => Module -> Sema (Seq (ExprDecl (Range, Type)))
 analyze (Module ds) = do
   ds <- (`witherM` ds) \case
     DData _ c xs -> tyCheckDataDecl c xs $> Nothing
@@ -347,3 +356,5 @@ analyze (Module ds) = do
 --   | DData a (Name a) (Seq (DataCon a))
 
 -- data Alt a
+p :: (P.Pretty p) => p -> ErrMsg
+p = ErrPretty id
