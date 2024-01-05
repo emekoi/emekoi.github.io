@@ -52,8 +52,10 @@ executable pattern-matching
     , happy:happy ^>= 1.20
   main-is: Main.hs
   other-modules:
+    Core
+    Error
     Lexer
     Parser
     Sema
-    Error
+    Elab
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -pgmL markdown-unlit

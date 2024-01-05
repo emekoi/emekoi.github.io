@@ -1,14 +1,14 @@
+{-# LANGUAGE Rank2Types   #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE Rank2Types #-}
 
 module Error (module Error, Position(..), Marker(..), IsString(..), Report(..)) where
 
 import Control.Exception
-import Data.Text                 (Text)
+import Data.Text         (Text)
 -- import Data.Text                 qualified as Text
 import Error.Diagnose
-import GHC.Exts                  (IsString (..), IsList (..))
-import Prettyprinter             qualified as P
+import GHC.Exts          (IsList (..), IsString (..))
+import Prettyprinter     qualified as P
 -- import Prettyprinter.Render.Text qualified as P
 
 data ErrMsg where
@@ -24,9 +24,9 @@ instance IsString ErrMsg where
 instance IsList ErrMsg where
   type Item ErrMsg = ErrMsg
   fromList [x] = x
-  fromList xs = ErrList xs
+  fromList xs  = ErrList xs
   toList (ErrList l) = l
-  toList e = [e]
+  toList e           = [e]
 
 instance P.Pretty ErrMsg where
   pretty (ErrText txt) = P.pretty txt

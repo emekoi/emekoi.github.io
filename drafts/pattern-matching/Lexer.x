@@ -65,6 +65,7 @@ tokens :-
 <0> "_"  { tok Underscore }
 <0> "="  { tok Eq }
 <0> ":"  { tok Colon }
+<0> "#"  { tok Hash }
 
 -- variables and constructors
 <0> @variable     { tokByteString Variable }
@@ -307,6 +308,7 @@ data TokenClass
   | At
   | Eq
   | Underscore
+  | Hash
   deriving (Eq, Show)
 
 unToken :: Token -> (Range -> TokenClass -> a) -> a

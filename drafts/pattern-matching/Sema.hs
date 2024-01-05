@@ -3,8 +3,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE NoFieldSelectors           #-}
-{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE OverloadedLists            #-}
+{-# LANGUAGE RecordWildCards            #-}
 
 module Sema
     ( Sema
@@ -13,19 +13,14 @@ module Sema
     , analyze
     ) where
 
-import Control.Category    ((>>>))
+import Control.Category     ((>>>))
 import Control.Exception
 import Control.Monad
 import Control.Monad.Reader
--- import Control.Monad.State.Strict
 import Data.Bifunctor
-import Data.Default.Class
 import Data.Functor
--- import Data.Graph                 qualified as Graph
 import Data.IntMap.Strict   (IntMap)
 import Data.IntMap.Strict   qualified as IntMap
-import Data.IntSet          (IntSet)
--- import Data.IntSet                qualified as IntSet
 import Data.IORef           (IORef)
 import Data.IORef           qualified as IORef
 import Data.Map.Strict      (Map)
@@ -34,11 +29,10 @@ import Data.Sequence        (Seq (..))
 import Data.Sequence        qualified as Seq
 import Data.Text            (Text)
 import Error
+import GHC.Stack
 import Parser               hiding (Type)
 import Prettyprinter        qualified as P
 import Witherable
-import Lens.Micro
-import GHC.Stack
 
 newIORef :: (MonadIO m) => x -> m (IORef x)
 newIORef = liftIO . IORef.newIORef
@@ -46,48 +40,14 @@ newIORef = liftIO . IORef.newIORef
 readIORef :: (MonadIO m) => IORef x -> m x
 readIORef = liftIO . IORef.readIORef
 
--- writeIORef :: (MonadIO m) => IORef x -> x -> m ()
--- writeIORef r = liftIO . IORef.writeIORef r
+writeIORef :: (MonadIO m) => IORef x -> x -> m ()
+writeIORef r = liftIO . IORef.writeIORef r
 
 -- modifyIORef' :: (MonadIO m) => IORef x -> (x -> x) -> m ()
 -- modifyIORef' k = liftIO . IORef.modifyIORef k
 
 modifyIORef :: (MonadIO m) => IORef x -> (x -> x) -> m ()
 modifyIORef k = liftIO . IORef.modifyIORef' k
-
-data UsageInfo r = Usage
-  { usageInfo :: IntMap (r, IntSet)
-  , termIds   :: Map Text Int
-  , fresh     :: Int
-  }
-  deriving (Show)
-
-instance Default (UsageInfo r) where
-  def = Usage mempty mempty 0
-
--- usageId :: (MonadState (UsageInfo r) m) => Text -> m Int
--- usageId x = state \u@(Usage {..}) ->
---   case Map.lookup x termIds of
---     Just i -> (i, u)
---     Nothing ->
---       ( fresh
---       , u
---         { fresh = fresh + 1
---         , termIds = Map.insert x fresh termIds}
---       )
-
--- usageDepend :: (MonadState (UsageInfo r) m) => Int -> r -> IntSet -> m ()
--- usageDepend x r d = modify' \Usage{..} ->
---   Usage { usageInfo = IntMap.insert x (r, d) usageInfo, .. }
-
--- usageDepend' :: (Semigroup r, MonadState (UsageInfo r) m) => Int -> r -> IntSet -> m ()
--- usageDepend' x r d = modify' \Usage{..} ->
---   Usage { usageInfo = IntMap.insertWith (<>) x (r, d) usageInfo, .. }
-
--- usageSCCs :: (MonadState (UsageInfo r) m) => m [Graph.SCC r]
--- usageSCCs = gets \(Usage {..}) ->
---   Graph.stronglyConnComp $ IntMap.foldrWithKey go [] usageInfo
---   where go x (k, xs) r = (k, x, IntSet.toList xs) : r
 
 newtype TypeId
   = TypeId Int
@@ -97,8 +57,19 @@ newtype ConId
   = ConId Int
   deriving (Eq, Num, Ord, Show)
 
+newtype TermId
+  = TermId Int
+  deriving (Eq, Num, Ord, Show)
+
+newtype NoShow a
+  = NoShow a
+  deriving (Eq, Functor, Ord)
+
+instance Show (NoShow a) where
+  show _ = "<omitted>"
+
 data Type
-  = TUnknown
+  = TUnknown Int (NoShow (IORef (Maybe Type)))
   | TData Text TypeId
   deriving (Eq, Show)
 
@@ -109,8 +80,8 @@ pattern TString :: Type
 pattern TString = TData "String" (-2)
 
 instance P.Pretty Type where
-  pretty TUnknown    = "?"
-  pretty (TData c _) = P.pretty c
+  pretty (TUnknown i _) = "?" <> P.pretty i
+  pretty (TData c _)    = P.pretty c
 
 data TypeInfo = TypeInfo
   { name :: Name Range
@@ -137,6 +108,8 @@ data SemaState = SemaState
   , typeInfo    :: IORef (IntMap TypeInfo)
   , dataCons    :: IORef (Map Text ConId)
   , dataConInfo :: IORef (IntMap ConInfo)
+  , termNames   :: IORef (Map Text TermId)
+  , termLevel   :: Int
   }
 
 newtype Sema s
@@ -166,9 +139,11 @@ runSema fp (Sema s) = do
     <*> newIORef initTypeInfo
     <*> newIORef mempty
     <*> newIORef mempty
+    <*> newIORef mempty
+    <*> pure 0
   runReaderT s ctx
   where
-    initTypes = Map.fromList [("Int", -1), ("String", -2)]
+    initTypes = Map.fromList []
     initTypeInfo = IntMap.fromList []
 
 fresh :: Sema Int
@@ -176,6 +151,33 @@ fresh = ask >>= \s -> do
   fresh <- readIORef s.fresh
   modifyIORef s.fresh succ
   pure fresh
+
+freshMeta :: Sema Type
+freshMeta = do
+  id <- fresh
+  m <- newIORef Nothing
+  pure $ TUnknown id (NoShow m)
+
+tyUnify :: Type -> Type -> Sema Bool
+tyUnify ty ty' | ty == ty' = pure True
+tyUnify (TUnknown _ (NoShow ty)) ty' = do
+  readIORef ty >>= \case
+    Just ty -> tyUnify ty ty'
+    Nothing ->
+      -- TODO: occurs check
+      writeIORef ty (Just ty') $> True
+tyUnify ty ty'@(TUnknown {}) = tyUnify ty' ty
+tyUnify _ _ = pure False
+
+tyErrorExpect
+  :: (HasRange r, P.Pretty a2, P.Pretty a3)
+  => ErrMsg -> a2 -> a3 -> r -> Sema a1
+tyErrorExpect thing expect got r =
+  throwSema [ "expected", thing, "of type", errQuote expect ]
+    [ (range r, This [
+        thing, "has type", errQuote got
+      ])
+    ]
 
 -- fixity helper
 (.-) :: (a -> b) -> (b -> c) -> (a -> c)
@@ -198,15 +200,18 @@ findTypeInfo (TypeId id) = do
     Nothing -> error
       "compiler error: assigned type id to non-existent type"
 
-makeTypeId :: Name Range -> Sema TypeId
-makeTypeId (Name _ n) = do
+makeTypeId :: Bool -> Name Range -> Sema TypeId
+makeTypeId m (Name _ n) = do
   SemaState{types} <- ask
   readIORef types >>= Map.lookup n .- \case
     Just id -> pure id
     Nothing -> do
-      id <- TypeId <$> fresh
+      id <- TypeId . f <$> fresh
       modifyIORef types (Map.insert n id)
       pure id
+  where
+    f n | m = negate (n + 1)
+    f n = n
 
 findConId :: Name Range -> Sema ConId
 findConId (Name r n) = do
@@ -239,42 +244,14 @@ makeConId (Name r c) = do
         [ "redefinition of constructor", errQuote c ]
         [ (range info.name, This "first defined here"), (r, This "redefined here") ]
 
-tyErrorExpect
-  :: (HasRange r, P.Pretty a2, P.Pretty a3)
-  => ErrMsg -> a2 -> a3 -> r -> Sema a1
-tyErrorExpect thing expect got r =
-  throwSema [ "expected", thing, "of type", errQuote expect ]
-    [ (range r, This [
-        thing, "has type", errQuote got
-      ])
-    ]
-
--- data TypeInfo = TypeInfo
---   { name :: Name Range
---   , id   :: TypeId
---   , span :: Int
---   }
---   deriving (Show)
-
--- data ConInfo = ConInfo
---   { name   :: Name Range
---   , id     :: ConId
---   , span   :: Int
---   , typeOf :: TypeId
---   }
---   deriving (Show)
-
 tyCheckDataDecl :: HasCallStack => Name Range -> Seq (DataCon Range) -> Sema ()
 tyCheckDataDecl t cs = do
-  tid@(TypeId id) <- makeTypeId t
-  when (tid < 0) $ throwSema
-    [ "redefinition of builtin type", errQuote t ]
-    [ (range t, This "redefined here") ]
+  tid@(TypeId id) <- findTypeId t
   SemaState{typeInfo,dataConInfo} <- ask
   readIORef typeInfo >>= IntMap.lookup id .- \case
     Just info -> do
       throwSema
-        [ "redefinition of type", errQuote t ]
+        [ "redefinition of",if id < 0 then "builtin" else "", "type", errQuote t ]
         [ (range info.name, This "first defined here")
         , (range t, This "redefined here")
         ]
@@ -282,11 +259,10 @@ tyCheckDataDecl t cs = do
       TypeInfo { name = t, id = tid, span = length cs }
   forM_ cs \(DataCon _ name xs) -> do
     id@(ConId cid) <- makeConId name
-    fields <- mapM makeTypeId xs
+    fields <- mapM findTypeId xs
     modifyIORef dataConInfo . IntMap.insert cid $
       ConInfo { typeOf = tid, .. }
 
--- TODO: use "unification" instead of type equality checks
 tyInferPat :: HasCallStack => Pattern Range -> Sema (Pattern (Range, Type))
 tyInferPat (PType _ p t@(Name _ tn)) = do
   ty <- TData tn <$> findTypeId t
@@ -303,6 +279,8 @@ tyInferPat (PData r c ps) = do
   ty <- tyInfo2Ty <$> findTypeInfo cinfo.typeOf
   PData (r, ty) ((, ty) <$> c) <$> sequence (Seq.zipWith f cinfo.fields ps)
   where
+    p = ErrPretty id
+
     f tid p = do
       t <- tyInfo2Ty <$> findTypeInfo tid
       tyCheckPat t p
@@ -313,48 +291,35 @@ tyInferPat (POr r p ps)  = do
     <$> mapM (tyCheckPat ty) ps
 tyInferPat x@(PInt {})    = pure $ (, TInt) <$> x
 tyInferPat x@(PString {}) = pure $ (, TString) <$> x
-tyInferPat x              = pure $ (, TUnknown) <$> x
+tyInferPat x              = do
+  ty <- freshMeta
+  pure $ (, ty) <$> x
 
 tyCheckPat :: HasCallStack => Type -> Pattern Range -> Sema (Pattern (Range, Type))
 tyCheckPat ty p = do
   p' <- tyInferPat p
-  case snd $ info p' of
-    ty' | ty == ty' -> pure p'
-    TUnknown        -> pure $ (_2 .~ ty) <$> p'
-    ty'             -> tyErrorExpect "pattern" ty ty' p
+  let ty' = snd $ info p'
+  u <- tyUnify ty ty'
+  unless u $
+    tyErrorExpect "pattern" ty ty' p
+  pure p'
+
+tyInferExpr :: HasCallStack => Expr Range -> Sema (Expr (Range, Type))
+tyInferExpr = error "TODO"
 
 tyCheckExprDecl :: HasCallStack => ExprDecl Range -> Sema (ExprDecl (Range, Type))
-tyCheckExprDecl x@(ExprDecl _ _ _ps _) = do
-  _ps' <- mapM_ tyInferPat _ps
-  pure ((,TUnknown) <$> x)
+tyCheckExprDecl (ExprDecl r f ps e) = do
+  ps <- mapM tyInferPat ps
+  e <- tyInferExpr e
+  let ty = snd $ info e
+  pure $ ExprDecl (r, ty) ((,ty) <$> f) ps e
 
 analyze :: HasCallStack => Module -> Sema (Seq (ExprDecl (Range, Type)))
 analyze (Module ds) = do
+  forM_ ds \case
+    DData _ c m _ -> makeTypeId m c $> ()
+    DExpr _ -> pure ()
   ds <- (`witherM` ds) \case
-    DData _ c xs -> tyCheckDataDecl c xs $> Nothing
+    DData _ c _ xs -> tyCheckDataDecl c xs $> Nothing
     DExpr e -> pure (Just e)
-  -- TODO: error on types we haven't seen? or maybe we can do multiple passes...
-  -- dumpSema
   mapM tyCheckExprDecl ds
-
--- data Name a
---   = Name a Text
-
--- data Pattern a
---   = PWild a
---   | PInt a Integer
---   | PString a Text
---   | PAs a (Name a) (Pattern a)
---   | PData a (Name a) (Seq (Pattern a))
---   | POr a (Seq (Pattern a))
-
--- data DataCon a
---  = DataCon a (Name a) (Seq (DataCon a))
-
--- data Decl a
---   = DExpr a (Name a) (Seq (Pattern a)) (Expr a)
---   | DData a (Name a) (Seq (DataCon a))
-
--- data Alt a
-p :: (P.Pretty p) => p -> ErrMsg
-p = ErrPretty id

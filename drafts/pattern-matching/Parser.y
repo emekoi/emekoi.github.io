@@ -70,12 +70,17 @@ import Prettyprinter              qualified as P
   '_'          { L.Token _ L.Underscore }
   '='          { L.Token _ L.Eq }
   ':'          { L.Token _ L.Colon }
+  '#'          { L.Token _ L.Hash }
 
 %%
 
 optional(p)
   :   { Nothing }
   | p { Just $1 }
+
+optionalB(p)
+  :   { False }
+  | p { True }
 
 many(p)
   :           { Empty }
@@ -126,6 +131,7 @@ alt :: { Alt L.Range }
 
 atom :: { Expr L.Range }
   : variable     { EVar (range $1) $1 }
+  | variable '#' { EPrim ($1 <-> $2) $1 }
   | intT         { unToken $1 \r (L.Int i) -> EInt r i }
   | stringT      { unToken $1 \r (L.String s) -> EString r (decodeUtf8 s) }
   | constructor  { EData (range $1) $1 }
@@ -146,13 +152,14 @@ edecl :: { ExprDecl L.Range }
   : letT variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $5) $2 $3 $5 }
 
 decl :: { Decl L.Range }
-  : edecl                                       { DExpr $1 }
-  | dataT constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $4) $2 $4 }
+  : edecl                                                    { DExpr $1 }
+  | dataT optionalB('#') constructor                         { DData ($1 <-> $3) $3 $2 Empty }
+  | dataT optionalB('#') constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $5) $3 $2 $5 }
 
 decls :: { Module }
   : many(decl) { Module $1 }
 
-{ {-# LINE 156 "Parser.y" #-}
+{ {-# LINE 163 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
@@ -250,21 +257,27 @@ data ExprDecl a
 instance HasInfo (ExprDecl i) i
 
 instance P.Pretty (ExprDecl a) where
-  pretty (ExprDecl _ n (fmap P.pretty -> xs) e) =
-    "let" <+> P.concatWith (<+>) (P.pretty n :<| xs) <+> "=" <+> P.pretty e
+  pretty (ExprDecl _ n xs e) =
+    "let" <+> P.concatWith (<+>) (P.pretty n :<| (wrap <$> xs)) <+> "=" <+> P.pretty e
+    where
+      wrap p@(PData _ _ ps) | not (null ps) = P.parens $ P.pretty p
+      wrap p@(POr {}) = P.parens $ P.pretty p
+      wrap p = P.pretty p
 
 data Decl a
   = DExpr (ExprDecl a)
-  | DData a (Name a) (Seq (DataCon a))
+  | DData a (Name a) Bool (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
 instance HasInfo (Decl i) i
 
 instance P.Pretty (Decl a) where
   pretty (DExpr e) = P.pretty e
-  pretty (DData _ c (fmap P.pretty -> xs)) =
-    "data" <+> P.pretty c <+> "="
+  pretty (DData _ c m (fmap P.pretty -> xs)) =
+    "data" <+> n <+> "="
       <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
+    where
+      n = if m then P.pretty c <> "#" else P.pretty c
 
 data Alt a
   = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
@@ -284,6 +297,7 @@ instance P.Pretty (Alt a) where
 data Expr a
   = EInt a Integer
   | EVar a (Variable a)
+  | EPrim a (Name a)
   | EData a (Constructor a)
   | EString a Text
   | EMatch a (Expr a) (Seq (Alt a))
@@ -298,6 +312,7 @@ instance P.Pretty (Expr a) where
     where
       go _ (EInt _ i)        = P.pretty i
       go _ (EVar _ v)        = P.pretty v
+      go _ (EPrim _ p)       = P.pretty p <> "#"
       go _ (EData _ c)       = P.pretty c
       go _ (EString _ s)     = P.pretty s
       go _ (EMatch _ e xs)   = "match" <+> P.pretty e <+>
