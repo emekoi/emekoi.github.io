@@ -23,8 +23,9 @@ main = do
   let diagFile = addFile mempty file (BS.unpack input)
   handle (handleErr diagFile) do
     let ds = runAlex' file input parse
-    ds' <- runSema file (analyze ds)
-    P.putDoc $ P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds')
+    -- ds' <- runSema file (analyze ds)
+    -- P.putDoc $ P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds')
+    P.putDoc $ P.pretty ds
     System.putChar '\n'
   where
     handleErr file (Error err) = do

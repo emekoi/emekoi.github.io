@@ -140,7 +140,7 @@ atom :: { Expr L.Range }
 expr :: { Expr L.Range }
   : atom                   { $1 }
   | atom some(atom)        { EApp (rangeSeq $1 $2) $1 $2 }
-  | decl inT expr          { ELet ($1 <-> $3) $1 $3 }
+  | letT edecl inT expr    { ELet ($1 <-> $4) $2 $4 }
   | matchT expr '{'
     optional('|') sepBy(alt, '|')
     '}'                    { EMatch ($1 <-> $6) $2 $5 }
@@ -149,10 +149,10 @@ dataCon :: { DataCon L.Range }
   : constructor many(constructor) { DataCon (rangeSeq $1 $2) $1 $2 }
 
 edecl :: { ExprDecl L.Range }
-  : letT variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $5) $2 $3 $5 }
+  : variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $4) $1 $2 $4 }
 
 decl :: { Decl L.Range }
-  : edecl                                                    { DExpr $1 }
+  : letT edecl                                               { DExpr $2 }
   | dataT optionalB('#') constructor                         { DData ($1 <-> $3) $3 $2 Empty }
   | dataT optionalB('#') constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $5) $3 $2 $5 }
 
@@ -274,10 +274,11 @@ instance HasInfo (Decl i) i
 instance P.Pretty (Decl a) where
   pretty (DExpr e) = P.pretty e
   pretty (DData _ c m (fmap P.pretty -> xs)) =
-    "data" <+> n <+> "="
-      <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
+    if null xs then d <+> P.pretty c else
+      d <+> P.pretty c <+> "="
+        <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
     where
-      n = if m then P.pretty c <> "#" else P.pretty c
+      d = if m then "data#" else "data"
 
 data Alt a
   = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
@@ -302,7 +303,7 @@ data Expr a
   | EString a Text
   | EMatch a (Expr a) (Seq (Alt a))
   | EApp a (Expr a) (Seq (Expr a))
-  | ELet a (Decl a) (Expr a)
+  | ELet a (ExprDecl a) (Expr a)
   deriving (Foldable, Show, Functor)
 
 instance HasInfo (Expr i) i

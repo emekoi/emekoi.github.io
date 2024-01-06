@@ -9,14 +9,15 @@ import Data.Text         (Text)
 import Error.Diagnose
 import GHC.Exts          (IsList (..), IsString (..))
 import Prettyprinter     qualified as P
--- import Prettyprinter.Render.Text qualified as P
 
 data ErrMsg where
   ErrText :: Text -> ErrMsg
-  -- ErrDoc :: P.Doc a -> ErrMsg
   ErrList :: [ErrMsg] -> ErrMsg
   ErrShow :: Show s => s -> ErrMsg
   ErrPretty :: P.Pretty p => (forall a. P.Doc a -> P.Doc a) -> p -> ErrMsg
+
+errPretty :: (P.Pretty p) => p -> ErrMsg
+errPretty = ErrPretty id
 
 instance IsString ErrMsg where
   fromString = ErrText . fromString
@@ -30,10 +31,6 @@ instance IsList ErrMsg where
 
 instance P.Pretty ErrMsg where
   pretty (ErrText txt) = P.pretty txt
-  -- pretty (ErrDoc doc) = P.pretty
-  --   . Text.unpack
-  --   . P.renderStrict
-  --   . P.layoutPretty P.defaultLayoutOptions $ doc
   pretty (ErrList xs) = P.hsep $
     P.pretty <$> xs
   pretty (ErrShow s) = P.viaShow s
