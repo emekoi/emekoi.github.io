@@ -91,7 +91,7 @@ newtype TypeId
 data TypeInfo = TypeInfo
   { name  :: Name
   , range :: Range
-  , span  :: Int
+  , span  :: Maybe Int
   }
   deriving (Show)
 
@@ -141,25 +141,20 @@ data Value where
   deriving (Eq, Show)
 
 data AltCon
-  = AltData DataId
+  = AltData DataId (TrivialEq (Seq Var))
   | AltString Text
   | AltInt Integer
   deriving (Eq, Ord, Show)
 
 -- TODO: use Level?
 data Alt = Alt
-  { alt   :: AltCon
-  , binds :: Seq Var
-  , body  :: Term
+  { alt  :: AltCon
+  , body :: Term
   }
   deriving (Eq, Show)
 
 data PrimOp = PrimOp Text
   deriving (Eq, Show)
-
-newtype Level
-  = Level Int
-  deriving (Eq, Num, Ord, Show)
 
 data Term where
   -- | binding of values to variables
@@ -167,9 +162,9 @@ data Term where
   -- | bindings of the result of prim-ops
   TLetP :: Var -> PrimOp -> Seq Var -> Term -> Term
   -- | declaration of continuations
-  TLetK :: Label -> Level -> Term -> Term -> Term
+  TLetK :: Label -> Seq Var -> Term -> Term -> Term
   -- | declaration of functions
-  TLetF :: Var -> Label -> Level -> Term -> Term -> Term
+  TLetF :: Var -> Label -> Seq Var -> Term -> Term -> Term
   -- | continuation application
   TJmp :: Label -> Seq Var -> Term
   -- | function application
