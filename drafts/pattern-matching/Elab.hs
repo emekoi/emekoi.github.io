@@ -26,6 +26,7 @@ import Data.Bifunctor
 import Data.Bool                  (bool)
 import Data.Foldable
 import Data.Functor
+import Data.Functor.Identity
 import Data.IntMap.Strict         (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
 import Data.IORef                 (IORef)
@@ -38,9 +39,8 @@ import Data.Sequence              qualified as Seq
 import Data.Set                   (Set)
 import Data.Set                   qualified as Set
 import Data.Text                  (Text)
-import Data.Tuple
 import Error
-import GHC.Exts                   (oneShot)
+import GHC.Exts                   (coerce, oneShot)
 import GHC.Stack
 import Lens.Micro
 import Parser                     qualified as P
@@ -311,7 +311,7 @@ withBound' ts k = do
     }) (k vs)
 
 withBound :: Type -> (Var -> Elab r) -> Elab r
-withBound t k = withBound' (MkSolo t) (\(MkSolo v) -> k v)
+withBound t k = withBound' @Identity (coerce t) (\v -> k (coerce v))
 
 freshBound :: Type -> Cont -> Elab (Term, Var)
 freshBound t k = do
@@ -344,7 +344,6 @@ tyZonk t@(TyMeta _ (Trivial m)) =
 tyZonk (TyFun a b)  = TyFun <$> traverse tyZonk a <*> tyZonk b
 tyZonk x            = pure x
 
-
 data Level
   = Low
   | High
@@ -357,7 +356,7 @@ data Pattern l where
   PString :: Text -> Pattern l
   PData :: DataId -> Seq (Pattern 'High) -> Pattern l
   POr :: Map AltCon (Seq (Pattern 'High)) -> Maybe (Pattern 'High) -> Pattern l
-  PWild :: Maybe (P.Name Range) -> Pattern 'High
+  PWild :: Maybe (P.Name Range) -> Type -> Pattern 'High
   PAs :: P.Name Range -> Pattern 'Low -> Pattern 'High
 
 lower :: Pattern l -> (Maybe (Pattern 'Low), Maybe Text)
@@ -365,7 +364,7 @@ lower (PInt i)     = (Just $ (PInt i), Nothing)
 lower (PString i)  = (Just $ (PString i), Nothing)
 lower (PData c ps) = (Just $ (PData c ps), Nothing)
 lower (POr qs p)   = (Just $ (POr qs p), Nothing)
-lower (PWild x)    = (Nothing, P.getName <$> x)
+lower (PWild x _)  = (Nothing, P.getName <$> x)
 lower (PAs x p)    = (Just $ p, Just $ P.getName x)
 
 raise :: Pattern l -> Pattern 'High
@@ -401,45 +400,122 @@ patternTypeInfo (POr ps _ )               =
       dinfo <- findDataInfo did
       findTypeInfo dinfo.typeOf
 
--- tyInferPat :: HasCallStack => Pattern Range -> Sema (Pattern (Range, Type))
--- tyInferPat (PType _ p t@(Name _ tn)) = do
---   ty <- TData tn <$> findTypeId t
---   tyCheckPat ty p
--- tyInferPat (PAs r n p) = do
---   p' <- tyInferPat p
---   let (_, t) = info p'
---   pure (PAs (r, t) ((,t) <$> n) p')
--- tyInferPat (PData r c ps) = do
---   cinfo <- findConId c >>= findConInfo
---   unless (length ps == length cinfo.fields) $ throwSema
---     [ "constructor", errQuote c, "has arity", p . length $ cinfo.fields ]
---     [ (r, This ["used with arity", p $ length ps]) ]
---   ty <- tyInfo2Ty <$> findTypeInfo cinfo.typeOf
---   PData (r, ty) ((, ty) <$> c) <$> sequence (Seq.zipWith f cinfo.fields ps)
+-- bindPattern' :: P.Pattern Range -> Elab r -> Elab r
+-- bindPattern' p k = do
+--   ElabState{termLevel,localTerms} <- ask
+--   (patternBinds, termLevel') <- flip runStateT termLevel $ go mempty p
+--   local (\ctx -> ctx
+--     { termLevel = termLevel'
+--     , localTerms = fmap fst patternBinds <> localTerms
+--     }) k
 --   where
---     p = ErrPretty id
+--     nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
+--     go m (P.PWild {})             = pure m
+--     go m (P.PInt {})              = pure m
+--     go m (P.PString {})           = pure m
+--     go m (P.PAs _ (P.Name r n) p) =
+--       case Map.lookup n m of
+--         Nothing -> do
+--           v <- nextVar undefined
+--           go (Map.insert n (v, r) m) p
+--         Just (_, r') -> lift $ throwElab
+--           [ "non-linear occurence of variable", errPretty n ]
+--           [ (r', This "first defined here"), (r, This "redefined here") ]
+--     go m (P.PType _ p _)          = go m p
+--     go m (P.PData _ _ ps)         = foldM go m ps
+--     go m (P.POr _ p ps)           =
+--       -- TODO: we need to make sure all variables bound in p are bound in each
+--       -- of the ps with the same type
+--       go m p >>= (foldM go `flip` ps)
 
---     f tid p = do
---       t <- tyInfo2Ty <$> findTypeInfo tid
---       tyCheckPat t p
--- tyInferPat (POr r p ps)  = do
---   p <- tyInferPat p
---   let ty = snd $ info p
---   POr (r, snd $ info p) p
---     <$> mapM (tyCheckPat ty) ps
--- tyInferPat x@(PInt {})    = pure $ (, TInt) <$> x
--- tyInferPat x@(PString {}) = pure $ (, TString) <$> x
--- tyInferPat x              = do
---   ty <- freshMeta
---   pure $ (, ty) <$> x
+bindPattern' :: P.Pattern Range -> Elab r -> Elab r
+bindPattern' p k = do
+  ElabState{termLevel,localTerms} <- ask
+  (patternBinds, termLevel') <- flip runStateT termLevel $ go mempty p
+  local (\ctx -> ctx
+    { termLevel = termLevel'
+    , localTerms = fmap fst patternBinds <> localTerms
+    }) k
+  where
+    nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
+
+    -- tyCheckPat :: HasCallStack => P.Pattern Range -> Type -> Elab (Pattern (Range, Type))
+    -- tyCheckPat p t = do
+    --   p' <- tyInferPat p
+    --   -- let ty' = snd $ info p'
+    --   -- tyUnify t t' >>= flip unless
+    --   --   (tyErrorExpect "pattern" ty ty' e)
+    --   pure p'
+
+    -- tyInferPat :: HasCallStack => Pattern Range -> Sema (Pattern (Range, Type))
+    -- tyInferPat (P.PType _ p t) = do
+    --   t <- TyData <$> findTypeId t
+    --   tyCheckPat p t
+    -- tyInferPat (P.PAs _ n p) = do
+    --   PAs n <$> tyInferPat p
+    -- tyInferPat (P.PData r c ps) = do
+    --   cid <- findDataId c
+    --   cinfo <- findDataInfo cid
+    --   let
+    --     arity = length cinfo.fields
+    --     arity' = length ps
+    --   unless (arity == arity') $ throwElab
+    --     [ "constructor", errQuote c, "has arity", errPretty arity ]
+    --     [ (r, This ["used with arity", errPretty arity']) ]
+    --   PData cid <$> sequence (Seq.zipWith tyCheckPat ps cinfo.fields)
+    -- -- tyInferPat (POr r p ps)  = do
+    -- --   p <- tyInferPat p
+    -- --   let ty = snd $ info p
+    -- --   POr (r, snd $ info p) p
+    -- --     <$> mapM (tyCheckPat ty) ps
+    tyInferPat m (P.PInt _ i)    = do
+      t <- tyInt
+      pure (m, t, PInt i)
+    tyInferPat m (P.PString _ s) = do
+      t <- tyString
+      pure (m, t, PString s)
+    tyInferPat m (P.PWild _)     = do
+      t <- freshMeta
+      pure (m, t, PWild Nothing t)
+
+    go m (P.PWild {})             = pure m
+    go m (P.PInt {})              = pure m
+    go m (P.PString {})           = pure m
+    go m (P.PAs _ (P.Name r n) p) =
+      case Map.lookup n m of
+        Nothing -> do
+          v <- nextVar undefined
+          go (Map.insert n (v, r) m) p
+        Just (_, r') -> lift $ throwElab
+          [ "non-linear occurence of variable", errPretty n ]
+          [ (r', This "first defined here"), (r, This "redefined here") ]
+    go m (P.PType _ p _)          = go m p
+    go m (P.PData _ _ ps)         = foldM go m ps
+    go m (P.POr _ p ps)           =
+      -- TODO: we need to make sure all variables bound in p are bound in each
+      -- of the ps with the same type
+      go m p >>= (foldM go `flip` ps)
 
 -- tyCheckPat :: HasCallStack => P.Pattern Range -> Type -> Elab (Pattern (Range, Type))
--- tyCheckPat ty p = do
+-- tyCheckPat p t = do
 --   p' <- tyInferPat p
---   let ty' = snd $ info p'
---   tyUnify t t' >>= flip unless
---     (tyErrorExpect "pattern" ty ty' e)
+--   -- let ty' = snd $ info p'
+--   -- tyUnify t t' >>= flip unless
+--   --   (tyErrorExpect "pattern" ty ty' e)
 --   pure p'
+
+-- tyCheckExprAll
+--   :: (Foldable f)
+--   => f (P.Expr Range)
+--   -> f Type
+--   -> (Seq Var -> Elab (Term, Type))
+--   -> Elab (Term, Type)
+-- -- NOTE: this is modified version of foldM
+-- tyCheckExprAll xs ts k = foldr2 c k xs ts []
+--   where
+--     {-# INLINE c #-}
+--     c x t k zs = (,t)
+--       <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
 
 tyCheckExpr :: HasCallStack => P.Expr Range -> Type -> Cont-> Elab Term
 tyCheckExpr e t k = do

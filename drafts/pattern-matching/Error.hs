@@ -4,11 +4,12 @@
 module Error (module Error, Position(..), Marker(..), IsString(..), Report(..)) where
 
 import Control.Exception
-import Data.Text         (Text)
+import Data.Text              (Text)
 -- import Data.Text                 qualified as Text
+import Control.Monad.IO.Class
 import Error.Diagnose
-import GHC.Exts          (IsList (..), IsString (..))
-import Prettyprinter     qualified as P
+import GHC.Exts               (IsList (..), IsString (..))
+import Prettyprinter          qualified as P
 
 data ErrMsg where
   ErrText :: Text -> ErrMsg
@@ -49,3 +50,6 @@ pattern Err' msg xs = Err Nothing msg xs []
 
 throwError :: ErrMsg -> [(Position, Marker ErrMsg)] -> error
 throwError msg = throw . Error . (:[]) . Err' msg
+
+throwError' :: (MonadIO m) => ErrMsg -> [(Position, Marker ErrMsg)] -> m error
+throwError' msg = liftIO . throwIO . Error . (:[]) . Err' msg
