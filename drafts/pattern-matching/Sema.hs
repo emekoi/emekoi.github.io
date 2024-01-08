@@ -143,8 +143,8 @@ runSema fp (Sema s) = do
     <*> pure 0
   runReaderT s ctx
   where
-    initTypes = Map.fromList []
-    initTypeInfo = IntMap.fromList []
+    initTypes = Map.empty
+    initTypeInfo = IntMap.empty
 
 fresh :: Sema Int
 fresh = ask >>= \s -> do

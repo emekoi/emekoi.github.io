@@ -4,6 +4,7 @@
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE NoFieldSelectors           #-}
 {-# LANGUAGE OverloadedLists            #-}
+{-# LANGUAGE OverloadedRecordDot        #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE RecursiveDo                #-}
 {-# LANGUAGE StandaloneDeriving         #-}
@@ -36,9 +37,9 @@ import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Sequence              (Seq (..))
 -- import Data.Sequence              qualified as Seq
+import Data.Maybe                 (isJust)
 import Data.Set                   (Set)
--- import Data.Maybe                   (fromJust)
--- import Data.Set                   qualified as Set
+import Data.Set                   qualified as Set
 import Data.Text                  (Text)
 import Error
 import GHC.Exts                   (coerce, oneShot)
@@ -319,7 +320,7 @@ withBound' ts k = do
     }) (k vs)
 
 withBound :: Type -> (Var -> Elab r) -> Elab r
-withBound t k = withBound' @Identity (coerce t) (\v -> k (coerce v))
+withBound t k = withBound' @Identity (coerce t) (k . coerce)
 
 freshBound :: Type -> Cont -> Elab (Term, Var)
 freshBound t k = do
@@ -357,30 +358,28 @@ data Level
   | High
 
 data NESeq x = NESeq x (Seq x)
-  deriving (Foldable, Eq, Ord)
+  deriving (Eq, Foldable, Ord)
 
 fromSeq :: HasCallStack => Seq a -> NESeq a
-fromSeq Empty = error "empty Seq"
+fromSeq Empty      = error "empty Seq"
 fromSeq (x :<| xs) = NESeq x xs
 
 data Pattern l where
-  -- PAs :: P.Name Range -> Pattern 'Low -> Pattern 'High
-  PWild :: Maybe (P.Name Range) -> Type -> Pattern 'High
+  PWild :: Var -> Pattern 'High
   PInt :: Integer -> Pattern l
   PString :: Text -> Pattern l
   PData :: DataId -> Seq (Pattern 'High) -> Pattern l
-  POr :: NESeq (Seq (Pattern 'Low)) -> Maybe (Pattern 'High) -> Pattern l
+  POr :: NESeq (Pattern 'Low) -> Maybe (Pattern 'High) -> Pattern l
 
 deriving instance Eq (Pattern l)
 deriving instance Ord (Pattern l)
 
--- lower :: Pattern l -> (Maybe (Pattern 'Low), Maybe Text)
--- lower (PInt i)     = (Just $ (PInt i), Nothing)
--- lower (PString i)  = (Just $ (PString i), Nothing)
--- lower (PData c ps) = (Just $ (PData c ps), Nothing)
--- lower (POr qs p)   = (Just $ (POr qs p), Nothing)
--- lower (PWild x _)  = (Nothing, P.getName <$> x)
--- lower (PAs x p)    = (Just $ p, Just $ P.getName x)
+lowerPat :: Pattern l -> Maybe (Pattern 'Low)
+lowerPat (PInt i)     = Just $ PInt i
+lowerPat (PString i)  = Just $ PString i
+lowerPat (PData c ps) = Just $ PData c ps
+lowerPat (POr qs p)   = Just $ POr qs p
+lowerPat _            = Nothing
 
 -- raise :: Pattern l -> Pattern 'High
 -- raise p = unsafeCoerce p
@@ -415,48 +414,20 @@ deriving instance Ord (Pattern l)
 --       dinfo <- findDataInfo did
 --       findTypeInfo dinfo.typeOf
 
--- bindPattern' :: P.Pattern Range -> Elab r -> Elab r
--- bindPattern' p k = do
---   ElabState{termLevel,localTerms} <- ask
---   (patternBinds, termLevel') <- flip runStateT termLevel $ go mempty p
---   local (\ctx -> ctx
---     { termLevel = termLevel'
---     , localTerms = fmap fst patternBinds <> localTerms
---     }) k
---   where
---     nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
---     go m (P.PWild {})             = pure m
---     go m (P.PInt {})              = pure m
---     go m (P.PString {})           = pure m
---     go m (P.PAs _ (P.Name r n) p) =
---       case Map.lookup n m of
---         Nothing -> do
---           v <- nextVar undefined
---           go (Map.insert n (v, r) m) p
---         Just (_, r') -> lift $ throwElab
---           [ "non-linear occurence of variable", errPretty n ]
---           [ (r', This "first defined here"), (r, This "redefined here") ]
---     go m (P.PType _ p _)          = go m p
---     go m (P.PData _ _ ps)         = foldM go m ps
---     go m (P.POr _ p ps)           =
---       -- TODO: we need to make sure all variables bound in p are bound in each
---       -- of the ps with the same type
---       go m p >>= (foldM go `flip` ps)
-
 localState :: (Applicative m) => (s -> s) -> StateT s m a -> StateT s m a
 localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
 
 localState' :: (Applicative m) => StateT s m a -> StateT s m a
 localState' = localState id
 
-bindPattern' :: P.Pattern Range -> Type -> Elab r -> Elab r
-bindPattern' p t k = do
+withPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Elab r) -> Elab r
+withPattern p t k = do
   ElabState{termLevel,localTerms} <- ask
   ((patternBinds, p), termLevel') <- flip runStateT termLevel $ tyCheckPat mempty p t
   local (\ctx -> ctx
     { termLevel = termLevel'
     , localTerms = fmap fst patternBinds <> localTerms
-    }) k
+    }) (k p)
   where
     nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
 
@@ -474,7 +445,8 @@ bindPattern' p t k = do
       pure (m, t, PString s)
     tyInferPat m (P.PWild _)     = do
       t <- lift freshMeta
-      pure (m, t, PWild Nothing t)
+      v <- nextVar t
+      pure (m, t, PWild v)
     tyInferPat m (P.PAs _ (P.Name r n) p) =
       case Map.lookup n m of
         Nothing -> do
@@ -505,48 +477,41 @@ bindPattern' p t k = do
         ) (m, Empty) ps cinfo.fields
       pure (m, TyData cinfo.typeOf, PData cid ps)
     tyInferPat m (P.POr _ p ps)  = do
-      (m', t, p) <- localState' $ tyInferPat m p
-      -- p <- (uncurry POr) <$> tyCheckOrPat m m' t (NESeq p [], Nothing) ps
-      pure (m', t, p)
-      -- case Map.keysSet m `Set.intersection` Map.keysSet m' of
-      --   i | null i -> pure (m <> m', t, POr om ol)
-      --   i ->
-      --     let
-      --       n  = Set.findMin i
-      --       r  = snd . fromJust $ Map.lookup n m
-      --       r' = snd . fromJust $ Map.lookup n m'
-      --     in lift $ throwElab
-      --       [ "non-linear occurence of variable", errPretty n ]
-      --       [ (r, This "first defined here"), (r', This "redefined here") ]
+      (m', t, p') <- localState' $ tyInferPat m p
+      case lowerPat p' of
+        Nothing -> pure (m', t, p')
+        Just p' -> do
+          (om, ol) <- tyCheckOrPat (range p) m m' t ([p'], Nothing) ps
+          pure (m', t, POr (fromSeq om) ol)
 
-    tyCheckOrPat _ _ _ acc Empty = pure acc
-    -- tyCheckOrPat m m' t acc (P.POr _ p ps :<| ps') =
-    --   tyCheckOrPat m m' t acc (p :<| (ps <> ps'))
-    tyCheckOrPat m m' t acc@(om, ol) (p :<| ps) = do
-      {-
-        1. check that the pattern has type t
-        2. if the pattern is a wildcard stop
-        3. make sure that the captures are the same as om
-      -}
-      case p of
-        P.PWild _ -> do
-          (_, p) <- tyCheckPat m p t
-          pure (om, Just p)
-        P.POr _ p ps' -> tyCheckOrPat m m' t acc (p :<| (ps <> ps'))
-        _ -> do
-          (m'', p') <- tyCheckPat m p t
-          unless (m' == m'') $ error "TODO: missing variables"
-          undefined
-
-      -- \p -> do
-      --   (m', p) <- tyCheckPat mempty p t
-      --   undefined
-      -- case Map.keysSet m `Set.intersection` Map.keysSet m' of
-      --   i | null i -> pure (m <> m', t, p)
-      --   i -> undefined
-      -- let ty = snd $ info p
-      -- POr (r, snd $ info p) p
-      --   <$> mapM (tyCheckPat ty) ps
+    tyCheckOrPat _ _ _ _ acc Empty                   = pure acc
+    -- tyCheckOrPat _ _ _ acc@(_, Just _) _           = pure acc
+    tyCheckOrPat r m m' t acc (P.POr r' p ps :<| ps') = do
+      acc@(_, ol) <- tyCheckOrPat r m m' t acc (p :<| ps)
+      if isJust ol then pure acc else
+        tyCheckOrPat r' m m' t acc ps'
+    tyCheckOrPat r m m' t (om, ol) (p :<| ps) = do
+      (m'', p') <- tyCheckPat m p t
+      -- TODO: better error messages
+      unless (m' == m'') $
+        -- NOTE: this is safe since m' and m'' cannot both be empty.
+        if length m' > length m'' then do
+          let n = Set.findMin (Map.keysSet m' Set.\\ Map.keysSet m'')
+          lift $ throwElab
+            [ "missing occurence of variable", errPretty n, "in or pattern" ]
+            [ (snd $ m' Map.! n, This "first defined here")
+            , (range p, This "missing in this alternative")
+            ]
+        else do
+          let n = Set.findMin (Map.keysSet m'' Set.\\ Map.keysSet m')
+          lift $ throwElab
+            [ "missing occurence of variable", errPretty n, "in or pattern" ]
+            [ (snd $ m'' Map.! n, This "first defined here")
+            , (r, This "missing in this alternative")
+            ]
+      case lowerPat p' of
+        Nothing -> pure (om, Just p')
+        Just p' -> tyCheckOrPat (range p) m m' t (om :|> p', ol) ps
 
 -- tyCheckExprAll
 --   :: (Foldable f)
@@ -710,7 +675,6 @@ elaborate (P.Module ds) = do
     P.DData _ c m xs -> tyCheckDataDecl m c xs $> Nothing
     P.DExpr e -> pure (Just e)
   mapM_ tyCheckExprDecl exprs
-  pure ()
 
 data MatchRow = Row
   { cols  :: Map Var (Pattern 'Low)
@@ -815,7 +779,7 @@ rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
 --       Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
 
 matchComplete :: TypeInfo -> Set DataId -> Bool
-matchComplete (TypeInfo{span}) cons = maybe False (length cons ==) span
+matchComplete (TypeInfo{span}) cons = Just (length cons) == span
 
 mapFoldlM :: (acc -> k -> v -> Elab acc) -> acc -> Map k v -> Elab acc
 mapFoldlM f z0 xs = Map.foldrWithKey c return xs z0

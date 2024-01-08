@@ -1,9 +1,6 @@
 {-# LANGUAGE DerivingVia           #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE NoFieldSelectors      #-}
-{-# LANGUAGE OverloadedLists       #-}
-{-# LANGUAGE RecordWildCards       #-}
 
 module Core (module Core, module Export) where
 
@@ -153,7 +150,8 @@ data Alt = Alt
   }
   deriving (Eq, Show)
 
-data PrimOp = PrimOp Text
+newtype PrimOp
+  = PrimOp Text
   deriving (Eq, Show)
 
 data Term where
