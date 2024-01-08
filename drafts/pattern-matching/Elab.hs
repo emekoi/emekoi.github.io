@@ -8,7 +8,6 @@
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE RecursiveDo                #-}
 {-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE CPP #-}
 
 module Elab
     ( Elab
@@ -36,9 +35,9 @@ import Data.IORef                 qualified as IORef
 import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
+import Data.Maybe                 (isJust)
 import Data.Sequence              (Seq (..))
 import Data.Sequence              qualified as Seq
-import Data.Maybe                 (isJust)
 import Data.Set                   (Set)
 import Data.Set                   qualified as Set
 import Data.Text                  (Text)
@@ -303,28 +302,6 @@ tyInt = tyMagic "Int"
 tyString :: Elab Type
 tyString = tyMagic "String"
 
-data Cont where
-  Abstract :: Label -> Cont
-  Wrap :: (Var -> Elab (Term, Type)) -> Cont
-
-contArityError :: HasCallStack => a
-contArityError =
-  error "abstract continuation called with wrong number of arguments"
-
-apply :: Cont -> Var -> Elab Term
-apply (Abstract k@(Label _ [t])) x@(Var _ t') = do
-  -- TODO: do we actually need this unification?
-  -- TODO: check return value of unification
-  -- b <- tyUnify t t'
-  -- tyUnify t t' >>= flip unless
-  --   (tyErrorExpect "expression" t t1 e1)
-  -- t1 <- tyForce t
-  -- t2 <- tyForce t'
-  -- liftIO $ print (b, t1, t2)
-  tyUnify t t' $> TJmp k [x]
-apply (Abstract _) _ = contArityError
-apply (Wrap k) x = fst <$> k x
-
 lookupVar :: P.Name Range -> Elab Var
 lookupVar (P.Name r v) = do
   ElabState{localTerms, globalTerms} <- ask
@@ -349,17 +326,6 @@ withBound' ts k = do
 
 withBound :: Type -> (Var -> Elab r) -> Elab r
 withBound t k = withBound' @Identity (coerce t) (k . coerce)
-
-freshBound :: Type -> Cont -> Elab (Term, Var)
-freshBound t k = do
-  ElabState{termLevel} <- ask
-  let v = Var (Bound "x" termLevel) t
-  case k of
-    Abstract k -> pure (TJmp k [v], v)
-    Wrap k ->
-      local (\ctx -> ctx
-        { termLevel = termLevel + 1
-        }) ((_2 .~ v) <$> k v)
 
 data Level
   = Low
@@ -526,6 +492,30 @@ withPattern p t k = do
         Nothing -> pure (om, Just p')
         Just p' -> tyCheckOrPat (range p) m m' t (om :|> p', ol) ps
 
+data Cont where
+  Abstract :: Label -> Cont
+  Wrap :: (Var -> Elab (Term, Type)) -> Cont
+
+contArityError :: HasCallStack => a
+contArityError =
+  error "abstract continuation called with wrong number of arguments"
+
+apply :: Cont -> Var -> Elab Term
+apply (Abstract k@(Label _ [_])) x =  pure $ TJmp k [x]
+apply (Abstract _) _               = contArityError
+apply (Wrap k) x                   = fst <$> k x
+
+freshBound :: Type -> Cont -> Elab (Term, Var)
+freshBound t k = do
+  ElabState{termLevel} <- ask
+  let v = Var (Bound "x" termLevel) t
+  case k of
+    Abstract k -> pure (TJmp k [v], v)
+    Wrap k ->
+      local (\ctx -> ctx
+        { termLevel = termLevel + 1
+        }) ((_2 .~ v) <$> k v)
+
 tyCheckExpr :: HasCallStack => P.Expr Range -> Type -> Cont-> Elab Term
 tyCheckExpr e t k = do
   fmap fst . tyInferExpr e $ Wrap \x@(Var _ t') -> do
@@ -546,6 +536,8 @@ tyCheckExprAll xs ts k = foldr2 c k xs ts []
     c x t k zs = (,t)
       <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
 
+-- TODO: this is all wrong. if i have some int `i` that gets converted to
+-- so some `k i` where `k` never returns. it does not have type `i`.
 tyInferExpr :: HasCallStack => P.Expr Range -> Cont -> Elab (Term, Type)
 tyInferExpr (P.EInt _ i) k = do
   t <- tyInt
@@ -661,10 +653,9 @@ tyInferExprDecl (P.ExprDecl _r _f _ps e) = do
   -- ps <- mapM tyInferPat ps
   t <- freshMeta
   k <- freshLabel "k" [t]
-  e <- tyCheckExpr e t (Abstract k)
+  tyCheckExpr e t (Abstract k)
   -- let ty = snd $ info e
   -- pure $ ExprDecl (r, ty) ((,ty) <$> f) ps e
-  pure e
 
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
@@ -679,11 +670,10 @@ elaborate (P.Module ds) = do
 -- mapM_ tyCheckExprDecl exprs
   forM_ exprs $ \x -> do
     -- liftIO $ Pretty.putDoc (Pretty.pretty x) >> putChar '\n'
-    liftIO $ print (fmap (const ()) x)
+    liftIO $ print (void x)
     x <- tyInferExprDecl x
     liftIO $ print x >> putChar '\n'
-  -- where
-  --   f x = fmap f
+
 data MatchRow = Row
   { cols  :: Map Var (Pattern 'Low)
   , guard :: Maybe (P.Expr Range, Pattern 'Low)

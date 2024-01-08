@@ -4,13 +4,13 @@ module Main
 
 import Control.Exception
 import Data.ByteString.Lazy.Char8 qualified as BS
+import Elab
 import Error
 import Error.Diagnose
 import Lexer
 import Parser
 import Prettyprinter              qualified as P
 import Prettyprinter.Render.Text  qualified as P
-import Elab
 import System.Environment         qualified as System
 import System.Exit                qualified as System
 import System.IO                  qualified as System
