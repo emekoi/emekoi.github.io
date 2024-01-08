@@ -202,7 +202,10 @@ rangeSeq x (_ :|> y) = range x <> range y
 
 data Name a
   = Name { nameInfo :: a, getName :: Text }
-  deriving (Show, Foldable, Functor, Traversable)
+  deriving (Foldable, Functor, Traversable)
+
+instance Show (Name a) where
+  show (Name _ n) = show n
 
 instance Eq (Name a) where
   x == y = getName x == getName y

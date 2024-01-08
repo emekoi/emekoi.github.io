@@ -8,6 +8,7 @@
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE RecursiveDo                #-}
 {-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE CPP #-}
 
 module Elab
     ( Elab
@@ -527,18 +528,10 @@ withPattern p t k = do
 
 tyCheckExpr :: HasCallStack => P.Expr Range -> Type -> Cont-> Elab Term
 tyCheckExpr e t k = do
-  (e', t') <- tyInferExpr e k
-  t1 <- tyZonk t
-  t2 <- tyZonk t'
-  liftIO $ print (t1, t2)
-
--- b <- tyUnify t t'
-  -- -- tyUnify t t' >>= flip unless
-  -- --   (tyErrorExpect "expression" t t1 e1)
-
-  tyUnify t t' >>= flip unless
-    (tyErrorExpect "expression" t t' e)
-  pure e'
+  fmap fst . tyInferExpr e $ Wrap \x@(Var _ t') -> do
+    tyUnify t t' >>= flip unless
+      (tyErrorExpect "expression" t t' e)
+    (,t') <$> apply k x
 
 tyCheckExprAll
   :: (Foldable f)
@@ -550,12 +543,8 @@ tyCheckExprAll
 tyCheckExprAll xs ts k = foldr2 c k xs ts []
   where
     {-# INLINE c #-}
-    -- c x t k zs = (,t)
-    --   <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
-    c x t k zs = do
-      -- t' <- tyForce t
-      -- liftIO $ print (fmap (const ()) x, t')
-      (,t) <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
+    c x t k zs = (,t)
+      <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
 
 tyInferExpr :: HasCallStack => P.Expr Range -> Cont -> Elab (Term, Type)
 tyInferExpr (P.EInt _ i) k = do
@@ -586,26 +575,6 @@ tyInferExpr (P.EData r c) k = do
   x <- freshLocal "d" t
   e <- apply k x
   pure (TLetV x (VData cid []) e, t)
--- tyInferExpr (P.EApp r (P.EData _ c) [x]) k = do
---   cid <- findDataId c
---   cinfo <- findDataInfo cid
---   let
---     t = TyData cinfo.typeOf
---     arity = length cinfo.fields
---   unless (arity == 1) $ throwElab
---     [ "constructor", errQuote c, "has arity", errPretty arity ]
---     [ (r, This ["used with arity 1"]) ]
---   z <- tyCheckExpr x (cinfo.fields `Seq.index` 0) $ Wrap \x1 -> do
---     x <- freshLocal "d" t
---     e <- apply k x
---     -- case k of
---     --   Abstract (Label _ [t]) -> do
---     --     t <- tyForce t
---     --     liftIO $ print t
---     --   _ -> pure ()
---     liftIO $ print t
---     pure (TLetV x (VData cid [x1]) e, t)
---   pure (z, t)
 tyInferExpr (P.EApp r (P.EData _ c) xs) k = do
   cid <- findDataId c
   cinfo <- findDataInfo cid
@@ -688,11 +657,10 @@ tyInferExpr (P.EMatch _ e alts) k = do
          } :<| rows)
 
 -- tyCheckExprDecl :: HasCallStack => P.ExprDecl Range -> Elab a
-tyCheckExprDecl (P.ExprDecl _r _f _ps e) = do
+tyInferExprDecl (P.ExprDecl _r _f _ps e) = do
   -- ps <- mapM tyInferPat ps
   t <- freshMeta
   k <- freshLabel "k" [t]
-  -- e <- tyInferExpr e (Abstract k)
   e <- tyCheckExpr e t (Abstract k)
   -- let ty = snd $ info e
   -- pure $ ExprDecl (r, ty) ((,ty) <$> f) ps e
@@ -708,17 +676,11 @@ elaborate (P.Module ds) = do
     P.DData _ c m xs -> tyCheckDataDecl m c xs $> Nothing
     P.DExpr e -> pure (Just e)
 
-  -- ElabState{..} <- ask
-  -- readIORef types >>= liftIO . print
-  -- readIORef typeInfo >>= liftIO . print
-  -- readIORef dataCons >>= liftIO . print
-  -- readIORef dataConInfo >>= liftIO . print
-
 -- mapM_ tyCheckExprDecl exprs
   forM_ exprs $ \x -> do
     -- liftIO $ Pretty.putDoc (Pretty.pretty x) >> putChar '\n'
     liftIO $ print (fmap (const ()) x)
-    x <- tyCheckExprDecl x
+    x <- tyInferExprDecl x
     liftIO $ print x >> putChar '\n'
   -- where
   --   f x = fmap f
