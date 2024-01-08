@@ -180,10 +180,10 @@ data Term where
   deriving (Eq, Show)
 
 data Decl where
-  -- | top-level value declarations
-  DValue :: Var -> Value -> Decl
+  -- -- | top-level value declarations
+  -- DValue :: Var -> Value -> Decl
   -- | top-level term declarations
-  DTerm :: Var -> Term -> Decl
+  DTerm :: Label -> Label -> Term -> Decl
   deriving (Eq, Show)
 
 instance P.Pretty Type where

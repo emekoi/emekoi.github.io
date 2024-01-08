@@ -22,6 +22,7 @@ import Control.Monad
 import Control.Monad.Fix
 import Control.Monad.Reader
 import Control.Monad.State.Strict
+import Control.Monad.Zip
 import Core                       as C
 import Data.Bifunctor
 import Data.Bool                  (bool)
@@ -314,8 +315,11 @@ lookupVar (P.Name r v) = do
           throwElab "variable not in scope"
           [(r, This $ errPretty v)]
 
-withBound' :: (Traversable t) => t Type -> (t Var -> Elab r) -> Elab r
-withBound' ts k = do
+bindVar :: Type -> (Var -> Elab r) -> Elab r
+bindVar t k = bindVars @Identity (coerce t) (k . coerce)
+
+bindVars :: (Traversable t) => t Type -> (t Var -> Elab r) -> Elab r
+bindVars ts k = do
   ElabState{termLevel} <- ask
   let
     (vs, termLevel') = flip runState termLevel $
@@ -323,9 +327,6 @@ withBound' ts k = do
   local (\ctx -> ctx
     { termLevel = termLevel'
     }) (k vs)
-
-withBound :: Type -> (Var -> Elab r) -> Elab r
-withBound t k = withBound' @Identity (coerce t) (k . coerce)
 
 data Level
   = Low
@@ -394,50 +395,59 @@ localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
 localState' :: (Applicative m) => StateT s m a -> StateT s m a
 localState' = localState id
 
-withPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Seq Var -> Elab r) -> Elab r
-withPattern p t k = do
+bindPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Seq Var -> Elab r) -> Elab r
+bindPattern p t k = bindPatterns @Identity (coerce p) (coerce t) (k . coerce)
+
+bindPatterns
+  :: (Traversable t, MonadZip t)
+  => t (P.Pattern Range)
+  -> t Type
+  -> (t (Pattern 'High) -> Seq Var -> Elab r)
+  -> Elab r
+bindPatterns ps ts k = do
   ElabState{termLevel,localTerms} <- ask
-  ((fmap fst -> bound, p), termLevel') <- flip runStateT termLevel $
-    tyCheckPat mempty p t
+  (ps, (fmap fst -> bound, termLevel')) <- flip runStateT (mempty, termLevel) $
+    sequence $ mzipWith tyCheckPat ps ts
   local (\ctx -> ctx
     { termLevel = termLevel'
     , localTerms = bound <> localTerms
-    }) (k p $ Seq.fromList . List.sort $ Map.elems bound)
+    }) (k ps $ Seq.fromList . List.sort $ Map.elems bound)
   where
-    nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
+    nextVar t = StateT \(m, i) ->
+      pure (Var (Bound "x" i) t, (m, i + 1))
 
-    tyCheckPat m p t = do
-      (m, t', p') <- tyInferPat m p
+    bindVar (P.Name r n) t = StateT \(m, i) ->
+      pure ((), (Map.insert n (Var (Bound "x" i) t, r) m, i + 1))
+
+    tyCheckPat p t = do
+      (p', t') <- tyInferPat p
       lift $ tyUnify t t' >>= flip unless
         (tyErrorExpect "pattern" t t' (range p))
-      pure (m, p')
+      pure p'
 
-    tyInferPat m (P.PInt _ i)    = do
-      t <- lift tyInt
-      pure (m, t, PInt i)
-    tyInferPat m (P.PString _ s) = do
-      t <- lift tyString
-      pure (m, t, PString s)
-    tyInferPat m (P.PWild _)     = do
+    tyInferPat (P.PInt _ i)    = do
+      (PInt i,) <$> lift tyInt
+    tyInferPat (P.PString _ s) = do
+      (PString s,) <$> lift tyString
+    tyInferPat (P.PWild _)     = do
       t <- lift freshMeta
       v <- nextVar t
-      pure (m, t, PWild v)
-    tyInferPat m (P.PAs _ (P.Name r n) p) =
-      case Map.lookup n m of
+      pure (PWild v, t)
+    tyInferPat (P.PAs _ n p) = do
+      m <- gets fst
+      case Map.lookup (P.getName n) m of
         Nothing -> do
           -- TODO: can we clean this up?
           t <- lift freshMeta
-          v <- nextVar t
-          (m, p) <- tyCheckPat (Map.insert n (v, r) m) p t
-          pure (m, t, p)
+          bindVar n t
+          (,t) <$> tyCheckPat p t
         Just (_, r') -> lift $ throwElab
           [ "non-linear occurence of variable", errPretty n ]
-          [ (r', This "first defined here"), (r, This "redefined here") ]
-    tyInferPat m (P.PType _ p t) = do
+          [ (r', This "first defined here"), (P.range n, This "redefined here") ]
+    tyInferPat (P.PType _ p t) = do
       t <- TyData <$> lift (findTypeId t)
-      (m, p) <- tyCheckPat m p t
-      pure (m, t, p)
-    tyInferPat m (P.PData r c ps) = do
+      (,t) <$> tyCheckPat p t
+    tyInferPat (P.PData r c ps) = do
       cid <- lift $ findDataId c
       cinfo <- lift $ findDataInfo cid
       let
@@ -450,27 +460,33 @@ withPattern p t k = do
       -- constructor, even if the field is never named? i think this makes
       -- consistent naming easier later on
       -- modify' (+ length cinfo.fields)
-      (m, ps) <- foldM2 (\(m, ps) p t -> do
-          (m, p) <- tyCheckPat m p t
-          pure (m, p :<| ps)
-        ) (m, Empty) ps cinfo.fields
-      pure (m, TyData cinfo.typeOf, PData cid ps)
-    tyInferPat m (P.POr _ p ps)  = do
-      (m', t, p') <- localState' $ tyInferPat m p
+      -- ps <- foldM2 (\ps p t -> do
+      --     p <- tyCheckPat p t
+      --     pure (p :<| ps)
+      --   ) Empty ps cinfo.fields
+      ps <- sequence $ Seq.zipWith tyCheckPat ps cinfo.fields
+      pure (PData cid ps, TyData cinfo.typeOf)
+    tyInferPat (P.POr _ p ps)  = do
+      (p', t, m') <- localState' do
+        (p', t) <- tyInferPat p
+        m <- gets fst
+        pure (p', t, m)
       case lowerPat p' of
-        Nothing -> pure (m', t, p')
+        Nothing -> pure (p', t)
         Just p' -> do
-          (om, ol) <- tyCheckOrPat (range p) m m' t ([p'], Nothing) ps
-          pure (m', t, POr (fromSeq om) ol)
+          (om, ol) <- tyCheckOrPat (range p) m' t ([p'], Nothing) ps
+          pure (POr (fromSeq om) ol, t)
 
-    tyCheckOrPat _ _ _ _ acc Empty                   = pure acc
-    -- tyCheckOrPat _ _ _ acc@(_, Just _) _           = pure acc
-    tyCheckOrPat r m m' t acc (P.POr r' p ps :<| ps') = do
-      acc@(_, ol) <- tyCheckOrPat r m m' t acc (p :<| ps)
+    tyCheckOrPat _ _ _ acc Empty                    = pure acc
+    -- tyCheckOrPat _ _ _ acc@(_, Just _) _            = pure acc
+    tyCheckOrPat r m' t acc (P.POr r' p ps :<| ps') = do
+      acc@(_, ol) <- tyCheckOrPat r m' t acc (p :<| ps)
       if isJust ol then pure acc else
-        tyCheckOrPat r' m m' t acc ps'
-    tyCheckOrPat r m m' t (om, ol) (p :<| ps) = do
-      (m'', p') <- tyCheckPat m p t
+        tyCheckOrPat r' m' t acc ps'
+    tyCheckOrPat r m' t (om, ol) (p :<| ps) = do
+      (p', m'') <- localState' do
+        (,) <$> tyCheckPat p t <*> gets fst
+
       -- TODO: better error messages
       unless (m' == m'') $
         -- NOTE: this is safe since m' and m'' cannot both be empty.
@@ -490,7 +506,7 @@ withPattern p t k = do
             ]
       case lowerPat p' of
         Nothing -> pure (om, Just p')
-        Just p' -> tyCheckOrPat (range p) m m' t (om :|> p', ol) ps
+        Just p' -> tyCheckOrPat (range p) m' t (om :|> p', ol) ps
 
 data Cont where
   Abstract :: Label -> Cont
@@ -583,7 +599,7 @@ tyInferExpr e@(P.EApp r f xs) k =
           pure $ TApp f k xs
         Abstract _ -> contArityError
         Wrap k     -> do
-          withBound ret \v -> do
+          bindVar ret \v -> do
             kx <- k v
             k <- freshLabel "k" [ret]
             pure $ TLetK k [v] kx (TApp f k xs)
@@ -595,7 +611,7 @@ tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) Empty e1) e2) k = do
   -- 4. create the letk binding by applying k
   t <- freshMeta
   j <- freshLabel "j" [t]
-  k <- withBound t \v -> do
+  k <- bindVar t \v -> do
     local (\ctx -> ctx
       { localTerms = Map.insert x v ctx.localTerms
       }) $ TLetK j [v] <$> tyInferExpr e2 k
@@ -609,7 +625,7 @@ tyInferExpr (P.EMatch _ e alts) k = do
       Abstract _ -> contArityError
       Wrap k     -> do
         t <- freshMeta
-        kx <- withBound t k
+        kx <- bindVar t k
         k <- freshLabel "k" [t]
         TLetK k [x] kx <$>
           mkMatrix x t (Abstract k)
@@ -621,7 +637,7 @@ tyInferExpr (P.EMatch _ e alts) k = do
       pure letKs
 
     mkRow x@(Var _ xt) t k (body, rows) (P.Alt _ p _g e) =
-      withPattern p xt \p vs -> do
+      bindPattern p xt \p vs -> do
         e <- tyCheckExpr e t k
         k <- freshLabel "k" $ (\(Var _ t) -> t) <$> vs
         pure (TLetK k vs e body, Row
@@ -632,13 +648,14 @@ tyInferExpr (P.EMatch _ e alts) k = do
          } :<| rows)
 
 tyInferExprDecl :: HasCallStack => P.ExprDecl Range -> Elab Decl
-tyInferExprDecl (P.ExprDecl _r (P.Name _ f) _ps e) = do
-  -- ps <- mapM tyInferPat ps
-  t <- freshMeta
-  k <- freshLabel "k" [t]
-  f <- freshGlobal f t
-  -- TODO: how do i know if this is a value? probably some check of triviality
-  DTerm f <$> tyCheckExpr e t (Abstract k)
+tyInferExprDecl (P.ExprDecl _r (P.Name _ f) ps e) = do
+  ts <- traverse (const freshMeta) ps
+  bindPatterns ps ts \_ps _vs -> do
+    t <- freshMeta
+    k <- freshLabel "k" [t]
+    f <- freshName (\x i -> Label (Global x i) ts) f
+    -- TODO: how do i know if this is a value? probably some check of triviality
+    DTerm f k <$> tyCheckExpr e t (Abstract k)
 
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
