@@ -32,11 +32,11 @@ import Data.IntMap.Strict         (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
 import Data.IORef                 (IORef)
 import Data.IORef                 qualified as IORef
--- import Data.List                  qualified as List
+import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Sequence              (Seq (..))
--- import Data.Sequence              qualified as Seq
+import Data.Sequence              qualified as Seq
 import Data.Maybe                 (isJust)
 import Data.Set                   (Set)
 import Data.Set                   qualified as Set
@@ -47,6 +47,7 @@ import GHC.Stack
 import Lens.Micro
 import Parser                     qualified as P
 import Prettyprinter              qualified as Pretty
+-- import Prettyprinter.Render.Text  qualified as Pretty
 -- import Unsafe.Coerce
 import Witherable
 
@@ -178,6 +179,26 @@ tyUnify (TyFun xs x) (TyFun ys y) = do
     go r _ _ = pure r
 tyUnify _ _ = pure False
 
+tyForce :: Type -> Elab Type
+tyForce (TyMeta i (Trivial m)) = go i m
+  where
+    go i m = readIORef m >>= \case
+      Just (TyMeta i (Trivial m')) -> do
+        m' <- go i m'
+        writeIORef m (Just m')
+        pure m'
+      Just m -> pure m
+      _ -> pure (TyMeta i (Trivial m))
+tyForce t = pure t
+
+tyZonk :: Type -> Elab Type
+tyZonk t@(TyMeta _ (Trivial m)) =
+  readIORef m >>= \case
+    Just m -> tyZonk m
+    _ -> pure t
+tyZonk (TyFun a b)  = TyFun <$> traverse tyZonk a <*> tyZonk b
+tyZonk x            = pure x
+
 tyErrorExpect
   :: (HasRange r, Pretty.Pretty a2, Pretty.Pretty a3)
   => ErrMsg -> a2 -> a3 -> r -> Elab a1
@@ -264,7 +285,7 @@ tyCheckDataDecl magic t cs = do
         , (range t, This "redefined here")
         ]
     Nothing -> modifyIORef typeInfo . IntMap.insert tid.id $
-      TypeInfo { name = tid, range = range t, span = bool Nothing (Just $ length cs) magic }
+      TypeInfo { name = tid, range = range t, span = bool (Just $ length cs) Nothing magic }
   forM_ cs \(P.DataCon _ name xs) -> do
     DataId did <- makeDataId name
     -- TODO: allow function types in data types
@@ -293,6 +314,12 @@ apply :: Cont -> Var -> Elab Term
 apply (Abstract k@(Label _ [t])) x@(Var _ t') = do
   -- TODO: do we actually need this unification?
   -- TODO: check return value of unification
+  -- b <- tyUnify t t'
+  -- tyUnify t t' >>= flip unless
+  --   (tyErrorExpect "expression" t t1 e1)
+  -- t1 <- tyForce t
+  -- t2 <- tyForce t'
+  -- liftIO $ print (b, t1, t2)
   tyUnify t t' $> TJmp k [x]
 apply (Abstract _) _ = contArityError
 apply (Wrap k) x = fst <$> k x
@@ -332,26 +359,6 @@ freshBound t k = do
       local (\ctx -> ctx
         { termLevel = termLevel + 1
         }) ((_2 .~ v) <$> k v)
-
-tyForce :: Type -> Elab Type
-tyForce (TyMeta i (Trivial m)) = go i m
-  where
-    go i m = readIORef m >>= \case
-      Just (TyMeta i (Trivial m')) -> do
-        m' <- go i m'
-        writeIORef m (Just m')
-        pure m'
-      Just m -> pure m
-      _ -> pure (TyMeta i (Trivial m))
-tyForce t = pure t
-
-tyZonk :: Type -> Elab Type
-tyZonk t@(TyMeta _ (Trivial m)) =
-  readIORef m >>= \case
-    Just m -> tyZonk m
-    _ -> pure t
-tyZonk (TyFun a b)  = TyFun <$> traverse tyZonk a <*> tyZonk b
-tyZonk x            = pure x
 
 data Level
   = Low
@@ -420,14 +427,15 @@ localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
 localState' :: (Applicative m) => StateT s m a -> StateT s m a
 localState' = localState id
 
-withPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Elab r) -> Elab r
+withPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Seq Var -> Elab r) -> Elab r
 withPattern p t k = do
   ElabState{termLevel,localTerms} <- ask
-  ((patternBinds, p), termLevel') <- flip runStateT termLevel $ tyCheckPat mempty p t
+  ((fmap fst -> bound, p), termLevel') <- flip runStateT termLevel $
+    tyCheckPat mempty p t
   local (\ctx -> ctx
     { termLevel = termLevel'
-    , localTerms = fmap fst patternBinds <> localTerms
-    }) (k p)
+    , localTerms = bound <> localTerms
+    }) (k p $ Seq.fromList . List.sort $ Map.elems bound)
   where
     nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
 
@@ -471,6 +479,10 @@ withPattern p t k = do
       unless (arity == arity') $ lift $ throwElab
         [ "constructor", errQuote c, "has arity", errPretty arity ]
         [ (r, This ["used with arity", errPretty arity']) ]
+      -- TODO: when allocating variables, should we allocate for all fields of a
+      -- constructor, even if the field is never named? i think this makes
+      -- consistent naming easier later on
+      -- modify' (+ length cinfo.fields)
       (m, ps) <- foldM2 (\(m, ps) p t -> do
           (m, p) <- tyCheckPat m p t
           pure (m, p :<| ps)
@@ -513,22 +525,17 @@ withPattern p t k = do
         Nothing -> pure (om, Just p')
         Just p' -> tyCheckOrPat (range p) m m' t (om :|> p', ol) ps
 
--- tyCheckExprAll
---   :: (Foldable f)
---   => f (P.Expr Range)
---   -> f Type
---   -> (Seq Var -> Elab (Term, Type))
---   -> Elab (Term, Type)
--- -- NOTE: this is modified version of foldM
--- tyCheckExprAll xs ts k = foldr2 c k xs ts []
---   where
---     {-# INLINE c #-}
---     c x t k zs = (,t)
---       <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
-
 tyCheckExpr :: HasCallStack => P.Expr Range -> Type -> Cont-> Elab Term
 tyCheckExpr e t k = do
   (e', t') <- tyInferExpr e k
+  t1 <- tyZonk t
+  t2 <- tyZonk t'
+  liftIO $ print (t1, t2)
+
+-- b <- tyUnify t t'
+  -- -- tyUnify t t' >>= flip unless
+  -- --   (tyErrorExpect "expression" t t1 e1)
+
   tyUnify t t' >>= flip unless
     (tyErrorExpect "expression" t t' e)
   pure e'
@@ -543,8 +550,12 @@ tyCheckExprAll
 tyCheckExprAll xs ts k = foldr2 c k xs ts []
   where
     {-# INLINE c #-}
-    c x t k zs = (,t)
-      <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
+    -- c x t k zs = (,t)
+    --   <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
+    c x t k zs = do
+      -- t' <- tyForce t
+      -- liftIO $ print (fmap (const ()) x, t')
+      (,t) <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
 
 tyInferExpr :: HasCallStack => P.Expr Range -> Cont -> Elab (Term, Type)
 tyInferExpr (P.EInt _ i) k = do
@@ -561,8 +572,40 @@ tyInferExpr (P.EVar _ v) k = do
   x@(Var _ t) <- lookupVar v
   e <- apply k x
   pure (e, t)
-tyInferExpr (P.EApp _ (P.EPrim _ _) _) _ = error "TODO: prims"
 tyInferExpr (P.EPrim {}) _ = error "type error"
+tyInferExpr (P.EApp _ (P.EPrim _ _) _) _ = error "TODO: prims"
+tyInferExpr (P.EData r c) k = do
+  cid <- findDataId c
+  cinfo <- findDataInfo cid
+  let
+    t = TyData cinfo.typeOf
+    arity = length cinfo.fields
+  unless (arity == 0) $ throwElab
+    [ "constructor", errQuote c, "has arity", errPretty arity ]
+    [ (r, This "used with arity 0") ]
+  x <- freshLocal "d" t
+  e <- apply k x
+  pure (TLetV x (VData cid []) e, t)
+-- tyInferExpr (P.EApp r (P.EData _ c) [x]) k = do
+--   cid <- findDataId c
+--   cinfo <- findDataInfo cid
+--   let
+--     t = TyData cinfo.typeOf
+--     arity = length cinfo.fields
+--   unless (arity == 1) $ throwElab
+--     [ "constructor", errQuote c, "has arity", errPretty arity ]
+--     [ (r, This ["used with arity 1"]) ]
+--   z <- tyCheckExpr x (cinfo.fields `Seq.index` 0) $ Wrap \x1 -> do
+--     x <- freshLocal "d" t
+--     e <- apply k x
+--     -- case k of
+--     --   Abstract (Label _ [t]) -> do
+--     --     t <- tyForce t
+--     --     liftIO $ print t
+--     --   _ -> pure ()
+--     liftIO $ print t
+--     pure (TLetV x (VData cid [x1]) e, t)
+--   pure (z, t)
 tyInferExpr (P.EApp r (P.EData _ c) xs) k = do
   cid <- findDataId c
   cinfo <- findDataInfo cid
@@ -577,7 +620,6 @@ tyInferExpr (P.EApp r (P.EData _ c) xs) k = do
     x <- freshLocal "d" t
     e <- apply k x
     pure (TLetV x (VData cid xs) e, t)
-tyInferExpr (P.EData {}) _ = error "type error"
 tyInferExpr e@(P.EApp r f xs) k =
   tyInferExpr f $ Wrap \f@(Var fn ft) -> do
     (args, ret) <- tyForce ft >>= \case
@@ -616,14 +658,6 @@ tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) Empty e1) e2) k = do
     pure (TLetK j [v] e2' e1', t2)
 tyInferExpr (P.ELet _ (P.ExprDecl _ _f _ps _e1) _e2) _k = do
   error "TODO"
--- EMatch a (Expr a) (Seq (Alt a))
--- Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
--- data MatchRow = Row
---   { cols  :: Map Var (Pattern 'Low)
---   , guard :: Maybe (P.Expr Range, Pattern 'Low)
---   , vars  :: Map Text Var
---   , body  :: Label
---   }
 tyInferExpr (P.EMatch _ e alts) k = do
   tyInferExpr e $ Wrap \x -> do
     case k of
@@ -642,40 +676,52 @@ tyInferExpr (P.EMatch _ e alts) k = do
       body <- matchCompile m
       pure (letKs, t)
 
-    mkRow x@(Var _ xt) t k (body, rows) (P.Alt _ p _g e) = do
-      p <- undefined p xt
-      pTys <- undefined p
-      withBound' pTys \vs -> do
-        -- TODO: bind all vs
-        e <- local (\ctx -> ctx
-          { localTerms = ctx.localTerms
-          }) $ tyCheckExpr e t k
-        k <- freshLabel "k" pTys
+    mkRow x@(Var _ xt) t k (body, rows) (P.Alt _ p _g e) =
+      withPattern p xt \p vs -> do
+        e <- tyCheckExpr e t k
+        k <- freshLabel "k" $ (\(Var _ t) -> t) <$> vs
         pure (TLetK k vs e body, Row
-               { cols = [(x, undefined)]
-               , guard = Nothing
-               , binds = vs
-               , body = TJmp k vs
-               } :<| rows)
+         { cols = maybe [] (\p -> [(x,p)]) (lowerPat p)
+         , guard = Nothing
+         , binds = vs
+         , body = TJmp k vs
+         } :<| rows)
 
-tyCheckExprDecl :: HasCallStack => P.ExprDecl Range -> Elab a
-tyCheckExprDecl (P.ExprDecl _r _f _ps _e) = do
+-- tyCheckExprDecl :: HasCallStack => P.ExprDecl Range -> Elab a
+tyCheckExprDecl (P.ExprDecl _r _f _ps e) = do
   -- ps <- mapM tyInferPat ps
-  -- e <- tyInferExpr e
+  t <- freshMeta
+  k <- freshLabel "k" [t]
+  -- e <- tyInferExpr e (Abstract k)
+  e <- tyCheckExpr e t (Abstract k)
   -- let ty = snd $ info e
   -- pure $ ExprDecl (r, ty) ((,ty) <$> f) ps e
-  error "TODO"
+  pure e
 
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
   forM_ ds \case
-    P.DData _ c m _ -> makeTypeId m c $> ()
+    P.DData _ c m _ -> do
+      makeTypeId m c $> ()
     _ -> pure ()
   exprs <- (`witherM` ds) \case
     P.DData _ c m xs -> tyCheckDataDecl m c xs $> Nothing
     P.DExpr e -> pure (Just e)
-  mapM_ tyCheckExprDecl exprs
 
+  -- ElabState{..} <- ask
+  -- readIORef types >>= liftIO . print
+  -- readIORef typeInfo >>= liftIO . print
+  -- readIORef dataCons >>= liftIO . print
+  -- readIORef dataConInfo >>= liftIO . print
+
+-- mapM_ tyCheckExprDecl exprs
+  forM_ exprs $ \x -> do
+    -- liftIO $ Pretty.putDoc (Pretty.pretty x) >> putChar '\n'
+    liftIO $ print (fmap (const ()) x)
+    x <- tyCheckExprDecl x
+    liftIO $ print x >> putChar '\n'
+  -- where
+  --   f x = fmap f
 data MatchRow = Row
   { cols  :: Map Var (Pattern 'Low)
   , guard :: Maybe (P.Expr Range, Pattern 'Low)

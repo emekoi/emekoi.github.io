@@ -115,18 +115,24 @@ instance HasInfo DataInfo Range where
   info t = t.range
 
 data Var = MkVar Name (TrivialEq Type)
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
 
 pattern Var :: Name -> Type -> Var
 pattern Var n t = MkVar n (TrivialEq t)
 {-# COMPLETE Var :: Var #-}
 
+instance Show Var where
+  show (Var v _) = show v
+
 data Label = MkLabel Name (TrivialEq (Seq Type))
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
 
 pattern Label :: Name -> Seq Type -> Label
 pattern Label n args = MkLabel n (TrivialEq args)
 {-# COMPLETE Label :: Label #-}
+
+instance Show Label where
+  show (Label v _) = show v
 
 data Value where
   -- | int values

@@ -10,7 +10,7 @@ import Lexer
 import Parser
 import Prettyprinter              qualified as P
 import Prettyprinter.Render.Text  qualified as P
-import Sema
+import Elab
 import System.Environment         qualified as System
 import System.Exit                qualified as System
 import System.IO                  qualified as System
@@ -23,7 +23,7 @@ main = do
   let diagFile = addFile mempty file (BS.unpack input)
   handle (handleErr diagFile) do
     let ds = runAlex' file input parse
-    -- ds' <- runSema file (analyze ds)
+    ds' <- runElab file (elaborate ds)
     -- P.putDoc $ P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds')
     P.putDoc $ P.pretty ds
     System.putChar '\n'
