@@ -340,7 +340,8 @@ fromSeq Empty      = error "empty Seq"
 fromSeq (x :<| xs) = NESeq x xs
 
 data Pattern l where
-  PWild :: Var -> Pattern 'High
+  -- PWild :: Type -> Pattern 'High
+  PWild :: Var -> Maybe (Pattern 'Low) -> Pattern 'High
   PInt :: Integer -> Pattern l
   PString :: Text -> Pattern l
   PData :: DataId -> Seq (Pattern 'High) -> Pattern l
@@ -389,6 +390,178 @@ lowerPat _            = Nothing
 --       dinfo <- findDataInfo did
 --       findTypeInfo dinfo.typeOf
 
+data MatchRow = Row
+  { cols  :: Map Var (Pattern 'Low)
+  , guard :: Maybe (P.Expr Range, Pattern 'Low)
+  , binds :: Seq Var
+  , body  :: Term
+  }
+
+-- rColsL :: Lens' MatchRow (Map Var (Pattern 'Low))
+-- rColsL f x = (\x' -> x {cols = x'}) <$> f x.cols
+
+-- rVarsL :: Lens' MatchRow (Map Text Var)
+-- rVarsL f x = (\x' -> x {vars = x'}) <$> f x.vars
+
+-- rowMatchVar :: Var -> Pattern 'Low -> MatchRow -> MatchRow
+-- rowMatchVar x p = rColsL %~ Map.insert x p
+
+-- rowBindVar :: Text -> Var -> MatchRow -> MatchRow
+-- rowBindVar x v = rVarsL %~ Map.insert x v
+
+newtype PatternMatrix
+  = Matrix { rows :: Seq MatchRow }
+
+-- handlePattern
+--   :: Var
+--   -> Pattern l
+--   -> MatchRow
+--   -> (MatchRow -> b)
+--   -> b
+-- handlePattern var pat row f = do
+--   let (pat', bound) = lower pat
+--       row'          = maybe row (\x -> rowBindVar x var row) bound
+--     in f $ case pat' of
+--       Nothing   -> row' & rColsL %~ Map.delete var
+--       Just pat' -> rowMatchVar var pat' row'
+
+rowDefault :: Var -> PatternMatrix -> PatternMatrix
+rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
+  where
+    hasWildCard :: Pattern l -> Bool
+    -- hasWildCard (PWild {})        = True
+    -- hasWildCard (PAs _ p)         = hasWildCard p
+    hasWildCard (POr _ (Just p )) = hasWildCard p
+    hasWildCard _                 = False
+
+    f acc row = case Map.lookup var row.cols of
+      -- add the row as is since its a wildcard
+      Nothing                               -> acc :|> row
+      -- we only need to look at the last pattern to decide
+      -- whether we should add an or pattern row
+      Just (POr _ (Just p)) | hasWildCard p -> acc :|> row
+      -- delete every other row
+      Just _                                -> acc
+
+-- rowSpecialize :: Var -> AltCon -> Seq Var -> PatternMatrix -> PatternMatrix
+-- rowSpecialize var alt conVars mat = mat { rows = foldl' f Empty mat.rows }
+--   where
+--     k :: MatchRow -> Seq (Pattern l) -> MatchRow
+--     k row =
+--       let g row i p = handlePattern (conVars `Seq.index` i) p row id
+--        in Seq.foldlWithIndex g (row & rColsL %~ Map.delete var)
+
+--     g :: Pattern l -> MatchRow -> MatchRow
+--     g (PAs _ p) row = g p row
+--     g (PData _ args) row = k row args
+--     g (POr ps _) row | Just args <- Map.lookup alt ps = k row args
+--     g (POr _ (Just p)) row = g p row
+--     g _ _ = error "unreachable"
+
+--     f acc row = case (alt, Map.lookup var row.cols) of
+--       -- add the row as is since it's wildcard
+--       -- because it places no constraints on `var`
+--       (_, Nothing) -> acc :|> row
+--       (AltInt i, Just (PInt i')) | i == i' ->
+--         -- delete the column since there are no sub patterns
+--         acc :|> (row & rColsL %~ Map.delete var)
+--       (AltString s, Just (PString s')) | s == s' ->
+--         -- delete the column since there are no sub patterns
+--         acc :|> (row & rColsL %~ Map.delete var)
+--       -- otherwise replace the column with its sub patterns
+--       (AltData con, Just (PData con' ps)) | con == con'->
+--         let g row i p = handlePattern (conVars `Seq.index` i) p row id in
+--           (acc :|>) $ Seq.foldlWithIndex
+--             g (row & rColsL %~ Map.delete var) ps
+--       -- since the constrcutors don't match delete the row
+--       (_, Just p) | alt `Set.member` patternAltCons p ->
+--         acc :|> g p row
+--       _ -> acc
+
+-- NOTE: partial Map.!, foldl1
+-- columnPick :: PatternMatrix -> Elab (Var, TypeInfo)
+-- columnPick (Matrix Empty) = error "empty match matrix"
+-- columnPick (Matrix rows@(row :<| _)) =
+--   let (k, _) = List.foldl1 findMax . Map.toList $
+--         foldl' mkMap (row.cols $> (0 :: Int)) rows in
+--   fmap (k,) . patternTypeInfo $ row.cols Map.! k
+--   where
+--     findMax a b
+--       | snd b > snd a = b
+--       | otherwise     = a
+--     mkMap acc (Row m _ _ _) =
+--       Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
+
+matchComplete :: TypeInfo -> Set DataId -> Bool
+matchComplete (TypeInfo{span}) cons = Just (length cons) == span
+
+mapFoldlM :: (acc -> k -> v -> Elab acc) -> acc -> Map k v -> Elab acc
+mapFoldlM f z0 xs = Map.foldrWithKey c return xs z0
+  where c x y k z = f z x y >>= k; {-# INLINE c #-}
+
+matchCompile :: PatternMatrix -> Elab Term
+matchCompile = matchCompile
+-- matchCompile (Matrix Empty) = do
+--   pure $ TError "in-exhaustive match"
+-- matchCompile (Matrix (Row col Nothing binds body :<| _))
+--   | null col = pure $ Leaf (k binds body)
+-- matchCompile k (Matrix (row@(Row col (Just (v, p)) _ _) :<| rs) pick)
+--   | null col =
+--     let row' = rowMatchVar v p row { guard = Nothing } in
+--       matchCompile k (Matrix (row' :<| rs) pick)
+-- matchCompile k mat@(Matrix rows pick) = do
+--   -- pick a variable to scrutinize
+--   let (var, tinfo) = pick mat
+--   -- collect the heads of constructors tested against var
+--   -- then compile the subtrees and combine them into a switch
+--   (def, cons, cases) <- foldM (goRow var) (Nothing, mempty, Empty) rows
+--   case def of
+--     Just {} ->
+--       pure $ Switch var cases def
+--     Nothing | matchComplete tinfo cons ->
+--       pure $ Switch var cases Nothing
+--     Nothing ->
+--       Switch var cases . Just
+--         <$> defaultCase var
+--   where
+--     defaultCase v = matchCompile k (rowDefault v mat)
+
+--     -- filter out repeated test against constructors
+--     specialize v acc@(d, cs, ms) c = do
+--       if Set.notMember c cs then do
+--         xs <- matchConVars c
+--         let body = rowSpecialize v c xs mat
+--         m <- Alt c xs <$> shift (length xs) (matchCompile k body)
+--         pure (d, Set.insert c cs, ms :|> m)
+--       else pure acc
+
+--     -- for each constructor, specialize the pattern matrix
+--     goHead _ acc@(Just {}, _, _) _ = pure acc
+--     goHead v acc (PData c _)     = specialize v acc c
+--     goHead v acc (POr qs p)      = do
+--       acc <- mapFoldlM (\acc c args -> goHead v acc (PData c args)) acc qs
+--       -- check if we hit a wildcard while compiling subpatterns
+--       case maybe Nothing (fst . lower) p of
+--         -- compile a default case
+--         Nothing -> defaultCase v <&> \d ->
+--           acc & _1 ?~ d
+--         -- compile the generalized pattern
+--         Just q -> goHead v acc q
+
+--     goRow _  acc@(Just {}, _, _) _ = pure acc
+--     goRow v acc r =
+--       let p     = Map.lookup v r.cols
+--           pCons = maybe Set.empty patternDataCons p
+--           acc'  = maybe (pure acc) (goHead v acc) p
+--         -- don't emit matches where guard and `Alt` contradict
+--         in case r.guard of
+--           Just (v', p') | v == v'
+--                         , Set.disjoint pCons (patternDataCons p') ->
+--             pure acc
+--           Just _ ->
+--             acc' <&> _2 .~ (acc ^. _2)
+--           Nothing -> acc'
+
 localState :: (Applicative m) => (s -> s) -> StateT s m a -> StateT s m a
 localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
 
@@ -398,6 +571,10 @@ localState' = localState id
 bindPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Seq Var -> Elab r) -> Elab r
 bindPattern p t k = bindPatterns @Identity (coerce p) (coerce t) (k . coerce)
 
+-- NOTE: we need to provide some way to get variables bound to a pattern or
+-- generate a fresh binding
+-- NOTE: can we iterate through the data patterns, use the wildcards as we see
+-- them and generate fresh names otherwise
 bindPatterns
   :: (Traversable t, MonadZip t)
   => t (P.Pattern Range)
@@ -416,8 +593,8 @@ bindPatterns ps ts k = do
     nextVar t = StateT \(m, i) ->
       pure (Var (Bound "x" i) t, (m, i + 1))
 
-    bindVar (P.Name r n) t = StateT \(m, i) ->
-      pure ((), (Map.insert n (Var (Bound "x" i) t, r) m, i + 1))
+    bindVar (P.Name r n) v = StateT \(m, i) ->
+      pure ((), (Map.insert n (v, r) m, i))
 
     tyCheckPat p t = do
       (p', t') <- tyInferPat p
@@ -432,15 +609,18 @@ bindPatterns ps ts k = do
     tyInferPat (P.PWild _)     = do
       t <- lift freshMeta
       v <- nextVar t
-      pure (PWild v, t)
-    tyInferPat (P.PAs _ n p) = do
+      pure (PWild v Nothing, t)
+    tyInferPat (P.PAs _ n p)   = do
       m <- gets fst
       case Map.lookup (P.getName n) m of
         Nothing -> do
-          -- TODO: can we clean this up?
           t <- lift freshMeta
-          bindVar n t
-          (,t) <$> tyCheckPat p t
+          v <- nextVar t
+          bindVar n v
+          tyCheckPat p t >>= \case
+            p'@(PWild v _) -> bindVar n v $> (p', t)
+            p'             -> pure (PWild v (lowerPat p'), t)
+
         Just (_, r') -> lift $ throwElab
           [ "non-linear occurence of variable", errPretty n ]
           [ (r', This "first defined here"), (P.range n, This "redefined here") ]
@@ -674,174 +854,3 @@ elaborate (P.Module ds) = do
     x <- tyInferExprDecl x
     liftIO $ print x >> putChar '\n'
 
-data MatchRow = Row
-  { cols  :: Map Var (Pattern 'Low)
-  , guard :: Maybe (P.Expr Range, Pattern 'Low)
-  , binds :: Seq Var
-  , body  :: Term
-  }
-
--- rColsL :: Lens' MatchRow (Map Var (Pattern 'Low))
--- rColsL f x = (\x' -> x {cols = x'}) <$> f x.cols
-
--- rVarsL :: Lens' MatchRow (Map Text Var)
--- rVarsL f x = (\x' -> x {vars = x'}) <$> f x.vars
-
--- rowMatchVar :: Var -> Pattern 'Low -> MatchRow -> MatchRow
--- rowMatchVar x p = rColsL %~ Map.insert x p
-
--- rowBindVar :: Text -> Var -> MatchRow -> MatchRow
--- rowBindVar x v = rVarsL %~ Map.insert x v
-
-newtype PatternMatrix
-  = Matrix { rows :: Seq MatchRow }
-
--- handlePattern
---   :: Var
---   -> Pattern l
---   -> MatchRow
---   -> (MatchRow -> b)
---   -> b
--- handlePattern var pat row f = do
---   let (pat', bound) = lower pat
---       row'          = maybe row (\x -> rowBindVar x var row) bound
---     in f $ case pat' of
---       Nothing   -> row' & rColsL %~ Map.delete var
---       Just pat' -> rowMatchVar var pat' row'
-
-rowDefault :: Var -> PatternMatrix -> PatternMatrix
-rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
-  where
-    hasWildCard :: Pattern l -> Bool
-    hasWildCard (PWild {})        = True
-    -- hasWildCard (PAs _ p)         = hasWildCard p
-    hasWildCard (POr _ (Just p )) = hasWildCard p
-    hasWildCard _                 = False
-
-    f acc row = case Map.lookup var row.cols of
-      -- add the row as is since its a wildcard
-      Nothing                               -> acc :|> row
-      -- we only need to look at the last pattern to decide
-      -- whether we should add an or pattern row
-      Just (POr _ (Just p)) | hasWildCard p -> acc :|> row
-      -- delete every other row
-      Just _                                -> acc
-
--- rowSpecialize :: Var -> AltCon -> Seq Var -> PatternMatrix -> PatternMatrix
--- rowSpecialize var alt conVars mat = mat { rows = foldl' f Empty mat.rows }
---   where
---     k :: MatchRow -> Seq (Pattern l) -> MatchRow
---     k row =
---       let g row i p = handlePattern (conVars `Seq.index` i) p row id
---        in Seq.foldlWithIndex g (row & rColsL %~ Map.delete var)
-
---     g :: Pattern l -> MatchRow -> MatchRow
---     g (PAs _ p) row = g p row
---     g (PData _ args) row = k row args
---     g (POr ps _) row | Just args <- Map.lookup alt ps = k row args
---     g (POr _ (Just p)) row = g p row
---     g _ _ = error "unreachable"
-
---     f acc row = case (alt, Map.lookup var row.cols) of
---       -- add the row as is since it's wildcard
---       -- because it places no constraints on `var`
---       (_, Nothing) -> acc :|> row
---       (AltInt i, Just (PInt i')) | i == i' ->
---         -- delete the column since there are no sub patterns
---         acc :|> (row & rColsL %~ Map.delete var)
---       (AltString s, Just (PString s')) | s == s' ->
---         -- delete the column since there are no sub patterns
---         acc :|> (row & rColsL %~ Map.delete var)
---       -- otherwise replace the column with its sub patterns
---       (AltData con, Just (PData con' ps)) | con == con'->
---         let g row i p = handlePattern (conVars `Seq.index` i) p row id in
---           (acc :|>) $ Seq.foldlWithIndex
---             g (row & rColsL %~ Map.delete var) ps
---       -- since the constrcutors don't match delete the row
---       (_, Just p) | alt `Set.member` patternAltCons p ->
---         acc :|> g p row
---       _ -> acc
-
--- NOTE: partial Map.!, foldl1
--- columnPick :: PatternMatrix -> Elab (Var, TypeInfo)
--- columnPick (Matrix Empty) = error "empty match matrix"
--- columnPick (Matrix rows@(row :<| _)) =
---   let (k, _) = List.foldl1 findMax . Map.toList $
---         foldl' mkMap (row.cols $> (0 :: Int)) rows in
---   fmap (k,) . patternTypeInfo $ row.cols Map.! k
---   where
---     findMax a b
---       | snd b > snd a = b
---       | otherwise     = a
---     mkMap acc (Row m _ _ _) =
---       Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
-
-matchComplete :: TypeInfo -> Set DataId -> Bool
-matchComplete (TypeInfo{span}) cons = Just (length cons) == span
-
-mapFoldlM :: (acc -> k -> v -> Elab acc) -> acc -> Map k v -> Elab acc
-mapFoldlM f z0 xs = Map.foldrWithKey c return xs z0
-  where c x y k z = f z x y >>= k; {-# INLINE c #-}
-
-matchCompile :: PatternMatrix -> Elab Term
-matchCompile = matchCompile
--- matchCompile (Matrix Empty) = do
---   pure $ TError "in-exhaustive match"
--- matchCompile (Matrix (Row col Nothing binds body :<| _))
---   | null col = pure $ Leaf (k binds body)
--- matchCompile k (Matrix (row@(Row col (Just (v, p)) _ _) :<| rs) pick)
---   | null col =
---     let row' = rowMatchVar v p row { guard = Nothing } in
---       matchCompile k (Matrix (row' :<| rs) pick)
--- matchCompile k mat@(Matrix rows pick) = do
---   -- pick a variable to scrutinize
---   let (var, tinfo) = pick mat
---   -- collect the heads of constructors tested against var
---   -- then compile the subtrees and combine them into a switch
---   (def, cons, cases) <- foldM (goRow var) (Nothing, mempty, Empty) rows
---   case def of
---     Just {} ->
---       pure $ Switch var cases def
---     Nothing | matchComplete tinfo cons ->
---       pure $ Switch var cases Nothing
---     Nothing ->
---       Switch var cases . Just
---         <$> defaultCase var
---   where
---     defaultCase v = matchCompile k (rowDefault v mat)
-
---     -- filter out repeated test against constructors
---     specialize v acc@(d, cs, ms) c = do
---       if Set.notMember c cs then do
---         xs <- matchConVars c
---         let body = rowSpecialize v c xs mat
---         m <- Alt c xs <$> shift (length xs) (matchCompile k body)
---         pure (d, Set.insert c cs, ms :|> m)
---       else pure acc
-
---     -- for each constructor, specialize the pattern matrix
---     goHead _ acc@(Just {}, _, _) _ = pure acc
---     goHead v acc (PData c _)     = specialize v acc c
---     goHead v acc (POr qs p)      = do
---       acc <- mapFoldlM (\acc c args -> goHead v acc (PData c args)) acc qs
---       -- check if we hit a wildcard while compiling subpatterns
---       case maybe Nothing (fst . lower) p of
---         -- compile a default case
---         Nothing -> defaultCase v <&> \d ->
---           acc & _1 ?~ d
---         -- compile the generalized pattern
---         Just q -> goHead v acc q
-
---     goRow _  acc@(Just {}, _, _) _ = pure acc
---     goRow v acc r =
---       let p     = Map.lookup v r.cols
---           pCons = maybe Set.empty patternDataCons p
---           acc'  = maybe (pure acc) (goHead v acc) p
---         -- don't emit matches where guard and `Alt` contradict
---         in case r.guard of
---           Just (v', p') | v == v'
---                         , Set.disjoint pCons (patternDataCons p') ->
---             pure acc
---           Just _ ->
---             acc' <&> _2 .~ (acc ^. _2)
---           Nothing -> acc'

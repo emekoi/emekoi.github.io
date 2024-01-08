@@ -179,8 +179,7 @@ data Term where
   TError :: Text -> Term
   deriving (Eq, Show)
 
-data Decl where
-  -- -- | top-level value declarations
+data Decl where -- -- | top-level value declarations
   -- DValue :: Var -> Value -> Decl
   -- | top-level term declarations
   DTerm :: Label -> Label -> Term -> Decl
