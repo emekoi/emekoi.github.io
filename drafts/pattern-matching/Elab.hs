@@ -494,7 +494,7 @@ withPattern p t k = do
 
 data Cont where
   Abstract :: Label -> Cont
-  Wrap :: (Var -> Elab (Term, Type)) -> Cont
+  Wrap :: (Var -> Elab Term) -> Cont
 
 contArityError :: HasCallStack => a
 contArityError =
@@ -503,56 +503,38 @@ contArityError =
 apply :: Cont -> Var -> Elab Term
 apply (Abstract k@(Label _ [_])) x =  pure $ TJmp k [x]
 apply (Abstract _) _               = contArityError
-apply (Wrap k) x                   = fst <$> k x
+apply (Wrap k) x                   = k x
 
-freshBound :: Type -> Cont -> Elab (Term, Var)
-freshBound t k = do
-  ElabState{termLevel} <- ask
-  let v = Var (Bound "x" termLevel) t
-  case k of
-    Abstract k -> pure (TJmp k [v], v)
-    Wrap k ->
-      local (\ctx -> ctx
-        { termLevel = termLevel + 1
-        }) ((_2 .~ v) <$> k v)
-
-tyCheckExpr :: HasCallStack => P.Expr Range -> Type -> Cont-> Elab Term
+tyCheckExpr :: HasCallStack => P.Expr Range -> Type -> Cont -> Elab Term
 tyCheckExpr e t k = do
-  fmap fst . tyInferExpr e $ Wrap \x@(Var _ t') -> do
+  tyInferExpr e $ Wrap \x@(Var _ t') -> do
     tyUnify t t' >>= flip unless
       (tyErrorExpect "expression" t t' e)
-    (,t') <$> apply k x
+    apply k x
 
 tyCheckExprAll
   :: (Foldable f)
   => f (P.Expr Range)
   -> f Type
-  -> (Seq Var -> Elab (Term, Type))
-  -> Elab (Term, Type)
+  -> (Seq Var -> Elab Term)
+  -> Elab Term
 -- NOTE: this is modified version of foldM
 tyCheckExprAll xs ts k = foldr2 c k xs ts []
   where
     {-# INLINE c #-}
-    c x t k zs = (,t)
-      <$> tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
+    c x t k zs = tyCheckExpr x t (Wrap $ \z -> k (zs :|> z ))
 
--- TODO: this is all wrong. if i have some int `i` that gets converted to
--- so some `k i` where `k` never returns. it does not have type `i`.
-tyInferExpr :: HasCallStack => P.Expr Range -> Cont -> Elab (Term, Type)
+tyInferExpr :: HasCallStack => P.Expr Range -> Cont -> Elab Term
 tyInferExpr (P.EInt _ i) k = do
   t <- tyInt
-  x <- freshLocal "l" t
-  e <- apply k x
-  pure (TLetV x (VInt i) e, t)
+  x <- freshLocal "i" t
+  TLetV x (VInt i) <$> apply k x
 tyInferExpr (P.EString _ s) k = do
   t <- tyString
   x <- freshLocal "s" t
-  e <- apply k x
-  pure (TLetV x (VString s) e, t)
+  TLetV x (VString s) <$> apply k x
 tyInferExpr (P.EVar _ v) k = do
-  x@(Var _ t) <- lookupVar v
-  e <- apply k x
-  pure (e, t)
+  lookupVar v >>= apply k
 tyInferExpr (P.EPrim {}) _ = error "type error"
 tyInferExpr (P.EApp _ (P.EPrim _ _) _) _ = error "TODO: prims"
 tyInferExpr (P.EData r c) k = do
@@ -565,8 +547,7 @@ tyInferExpr (P.EData r c) k = do
     [ "constructor", errQuote c, "has arity", errPretty arity ]
     [ (r, This "used with arity 0") ]
   x <- freshLocal "d" t
-  e <- apply k x
-  pure (TLetV x (VData cid []) e, t)
+  TLetV x (VData cid []) <$> apply k x
 tyInferExpr (P.EApp r (P.EData _ c) xs) k = do
   cid <- findDataId c
   cinfo <- findDataInfo cid
@@ -579,8 +560,7 @@ tyInferExpr (P.EApp r (P.EData _ c) xs) k = do
     [ (r, This ["used with arity", errPretty arity']) ]
   tyCheckExprAll xs cinfo.fields \xs -> do
     x <- freshLocal "d" t
-    e <- apply k x
-    pure (TLetV x (VData cid xs) e, t)
+    TLetV x (VData cid xs) <$> apply k x
 tyInferExpr e@(P.EApp r f xs) k =
   tyInferExpr f $ Wrap \f@(Var fn ft) -> do
     (args, ret) <- tyForce ft >>= \case
@@ -600,23 +580,26 @@ tyInferExpr e@(P.EApp r f xs) k =
           -- TODO: are error messages talking about the right thing?
           tyUnify t ret >>= flip unless
             (tyErrorExpect "expression" t ret e)
-          pure (TApp f k xs, ret)
+          pure $ TApp f k xs
         Abstract _ -> contArityError
-        Wrap _     -> do
-          (kx, v) <- freshBound ret k
-          k <- freshLabel "k" [ret]
-          pure (TLetK k [v] kx (TApp f k xs), ret)
+        Wrap k     -> do
+          withBound ret \v -> do
+            kx <- k v
+            k <- freshLabel "k" [ret]
+            pure $ TLetK k [v] kx (TApp f k xs)
 tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) Empty e1) e2) k = do
+  -- 1. create the join point j
+  -- 2. lower e2 to the body of j and create a meta-continuation that
+  -- creates a letk binding and for j and
+  -- 3. lower e1 and check that it has the type that e2 expects
+  -- 4. create the letk binding by applying k
   t <- freshMeta
   j <- freshLabel "j" [t]
-  (e1', t1) <- tyInferExpr e1 (Abstract j)
-  tyUnify t t1 >>= flip unless
-    (tyErrorExpect "expression" t t1 e1)
-  withBound t \v -> do
-    (e2', t2) <- local (\ctx -> ctx
+  k <- withBound t \v -> do
+    local (\ctx -> ctx
       { localTerms = Map.insert x v ctx.localTerms
-      }) $ tyInferExpr e2 k
-    pure (TLetK j [v] e2' e1', t2)
+      }) $ TLetK j [v] <$> tyInferExpr e2 k
+  k <$> tyCheckExpr e1 t (Abstract j)
 tyInferExpr (P.ELet _ (P.ExprDecl _ _f _ps _e1) _e2) _k = do
   error "TODO"
 tyInferExpr (P.EMatch _ e alts) k = do
@@ -624,18 +607,18 @@ tyInferExpr (P.EMatch _ e alts) k = do
     case k of
       Abstract (Label _ [t]) -> mkMatrix x t k
       Abstract _ -> contArityError
-      Wrap _     -> do
+      Wrap k     -> do
         t <- freshMeta
-        (kx, x) <- freshBound t k
+        kx <- withBound t k
         k <- freshLabel "k" [t]
-        mkMatrix x t (Abstract k)
-          <&> _1 %~ TLetK k [x] kx
+        TLetK k [x] kx <$>
+          mkMatrix x t (Abstract k)
   where
     mkMatrix x t k = mdo
       -- NOTE: mkRow never evalutates `body`
       (letKs, Matrix -> m) <- foldM (mkRow x t k) (body, Empty) alts
       body <- matchCompile m
-      pure (letKs, t)
+      pure letKs
 
     mkRow x@(Var _ xt) t k (body, rows) (P.Alt _ p _g e) =
       withPattern p xt \p vs -> do
@@ -648,14 +631,14 @@ tyInferExpr (P.EMatch _ e alts) k = do
          , body = TJmp k vs
          } :<| rows)
 
--- tyCheckExprDecl :: HasCallStack => P.ExprDecl Range -> Elab a
-tyInferExprDecl (P.ExprDecl _r _f _ps e) = do
+tyInferExprDecl :: HasCallStack => P.ExprDecl Range -> Elab Decl
+tyInferExprDecl (P.ExprDecl _r (P.Name _ f) _ps e) = do
   -- ps <- mapM tyInferPat ps
   t <- freshMeta
   k <- freshLabel "k" [t]
-  tyCheckExpr e t (Abstract k)
-  -- let ty = snd $ info e
-  -- pure $ ExprDecl (r, ty) ((,ty) <$> f) ps e
+  f <- freshGlobal f t
+  -- TODO: how do i know if this is a value? probably some check of triviality
+  DTerm f <$> tyCheckExpr e t (Abstract k)
 
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
