@@ -31,13 +31,14 @@ import Data.IntMap.Strict         (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
 import Data.IORef                 (IORef)
 import Data.IORef                 qualified as IORef
-import Data.List                  qualified as List
+-- import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Sequence              (Seq (..))
-import Data.Sequence              qualified as Seq
+-- import Data.Sequence              qualified as Seq
 import Data.Set                   (Set)
-import Data.Set                   qualified as Set
+-- import Data.Maybe                   (fromJust)
+-- import Data.Set                   qualified as Set
 import Data.Text                  (Text)
 import Error
 import GHC.Exts                   (coerce, oneShot)
@@ -45,7 +46,7 @@ import GHC.Stack
 import Lens.Micro
 import Parser                     qualified as P
 import Prettyprinter              qualified as Pretty
-import Unsafe.Coerce
+-- import Unsafe.Coerce
 import Witherable
 
 newtype RecFold a b
@@ -62,6 +63,13 @@ foldr2 c i xs =
     g e2 r2 e1 r1 = c e1 e2 (r1 (RecFold r2))
     f e r (RecFold f) = f e r
 {-# INLINEABLE foldr2 #-}
+
+foldM2
+  :: (Monad m, Foldable f, Foldable g)
+  => (c -> a -> b -> m c) -> c -> f a -> g b -> m c
+foldM2 f z0 xs ys = foldr2 c return xs ys z0
+  where c x y k z = f z x y >>= k; {-# INLINE c #-}
+{-# INLINEABLE foldM2 #-}
 
 newIORef :: (MonadIO m) => x -> m (IORef x)
 newIORef = liftIO . IORef.newIORef
@@ -349,26 +357,33 @@ data Level
   | High
 
 data NESeq x = NESeq x (Seq x)
-  deriving (Foldable)
+  deriving (Foldable, Eq, Ord)
+
+fromSeq :: HasCallStack => Seq a -> NESeq a
+fromSeq Empty = error "empty Seq"
+fromSeq (x :<| xs) = NESeq x xs
 
 data Pattern l where
+  -- PAs :: P.Name Range -> Pattern 'Low -> Pattern 'High
+  PWild :: Maybe (P.Name Range) -> Type -> Pattern 'High
   PInt :: Integer -> Pattern l
   PString :: Text -> Pattern l
   PData :: DataId -> Seq (Pattern 'High) -> Pattern l
-  POr :: Map AltCon (Seq (Pattern 'High)) -> Maybe (Pattern 'High) -> Pattern l
-  PWild :: Maybe (P.Name Range) -> Type -> Pattern 'High
-  PAs :: P.Name Range -> Pattern 'Low -> Pattern 'High
+  POr :: NESeq (Seq (Pattern 'Low)) -> Maybe (Pattern 'High) -> Pattern l
 
-lower :: Pattern l -> (Maybe (Pattern 'Low), Maybe Text)
-lower (PInt i)     = (Just $ (PInt i), Nothing)
-lower (PString i)  = (Just $ (PString i), Nothing)
-lower (PData c ps) = (Just $ (PData c ps), Nothing)
-lower (POr qs p)   = (Just $ (POr qs p), Nothing)
-lower (PWild x _)  = (Nothing, P.getName <$> x)
-lower (PAs x p)    = (Just $ p, Just $ P.getName x)
+deriving instance Eq (Pattern l)
+deriving instance Ord (Pattern l)
 
-raise :: Pattern l -> Pattern 'High
-raise p = unsafeCoerce p
+-- lower :: Pattern l -> (Maybe (Pattern 'Low), Maybe Text)
+-- lower (PInt i)     = (Just $ (PInt i), Nothing)
+-- lower (PString i)  = (Just $ (PString i), Nothing)
+-- lower (PData c ps) = (Just $ (PData c ps), Nothing)
+-- lower (POr qs p)   = (Just $ (POr qs p), Nothing)
+-- lower (PWild x _)  = (Nothing, P.getName <$> x)
+-- lower (PAs x p)    = (Just $ p, Just $ P.getName x)
+
+-- raise :: Pattern l -> Pattern 'High
+-- raise p = unsafeCoerce p
 
 -- patternAltCons :: Pattern l -> Set AltCon
 -- patternAltCons = go mempty
@@ -379,26 +394,26 @@ raise p = unsafeCoerce p
 --     go acc (PAs _ p) = go acc p
 --     go acc _ = acc
 
-patternTypeInfo :: Pattern 'Low -> Elab TypeInfo
-patternTypeInfo (PInt _) = makeTypeId True (P.Name () "Int")
-  >>= findTypeInfo
-patternTypeInfo (PString _) = makeTypeId True (P.Name () "String")
-  >>= findTypeInfo
-patternTypeInfo (PData did _) = do
-  dinfo <- findDataInfo did
-  findTypeInfo dinfo.typeOf
-patternTypeInfo (POr ps _ )               =
-  let (c, _) = Map.findMin ps in
-  case c of
-    AltInt _ -> do
-      makeTypeId True (P.Name () "Int")
-        >>= findTypeInfo
-    AltString _ -> do
-      makeTypeId True (P.Name () "String")
-        >>= findTypeInfo
-    AltData did _ -> do
-      dinfo <- findDataInfo did
-      findTypeInfo dinfo.typeOf
+-- patternTypeInfo :: Pattern 'Low -> Elab TypeInfo
+-- patternTypeInfo (PInt _) = makeTypeId True (P.Name () "Int")
+--   >>= findTypeInfo
+-- patternTypeInfo (PString _) = makeTypeId True (P.Name () "String")
+--   >>= findTypeInfo
+-- patternTypeInfo (PData did _) = do
+--   dinfo <- findDataInfo did
+--   findTypeInfo dinfo.typeOf
+-- patternTypeInfo (POr ps _ )               =
+--   let (c, _) = Map.findMin ps in
+--   case c of
+--     AltInt _ -> do
+--       makeTypeId True (P.Name () "Int")
+--         >>= findTypeInfo
+--     AltString _ -> do
+--       makeTypeId True (P.Name () "String")
+--         >>= findTypeInfo
+--     AltData did _ -> do
+--       dinfo <- findDataInfo did
+--       findTypeInfo dinfo.typeOf
 
 -- bindPattern' :: P.Pattern Range -> Elab r -> Elab r
 -- bindPattern' p k = do
@@ -428,10 +443,16 @@ patternTypeInfo (POr ps _ )               =
 --       -- of the ps with the same type
 --       go m p >>= (foldM go `flip` ps)
 
-bindPattern' :: P.Pattern Range -> Elab r -> Elab r
-bindPattern' p k = do
+localState :: (Applicative m) => (s -> s) -> StateT s m a -> StateT s m a
+localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
+
+localState' :: (Applicative m) => StateT s m a -> StateT s m a
+localState' = localState id
+
+bindPattern' :: P.Pattern Range -> Type -> Elab r -> Elab r
+bindPattern' p t k = do
   ElabState{termLevel,localTerms} <- ask
-  (patternBinds, termLevel') <- flip runStateT termLevel $ go mempty p
+  ((patternBinds, p), termLevel') <- flip runStateT termLevel $ tyCheckPat mempty p t
   local (\ctx -> ctx
     { termLevel = termLevel'
     , localTerms = fmap fst patternBinds <> localTerms
@@ -439,70 +460,93 @@ bindPattern' p k = do
   where
     nextVar t = StateT \i -> pure (Var (Bound "x" i) t, i + 1)
 
-    -- tyCheckPat :: HasCallStack => P.Pattern Range -> Type -> Elab (Pattern (Range, Type))
-    -- tyCheckPat p t = do
-    --   p' <- tyInferPat p
-    --   -- let ty' = snd $ info p'
-    --   -- tyUnify t t' >>= flip unless
-    --   --   (tyErrorExpect "pattern" ty ty' e)
-    --   pure p'
+    tyCheckPat m p t = do
+      (m, t', p') <- tyInferPat m p
+      lift $ tyUnify t t' >>= flip unless
+        (tyErrorExpect "pattern" t t' (range p))
+      pure (m, p')
 
-    -- tyInferPat :: HasCallStack => Pattern Range -> Sema (Pattern (Range, Type))
-    -- tyInferPat (P.PType _ p t) = do
-    --   t <- TyData <$> findTypeId t
-    --   tyCheckPat p t
-    -- tyInferPat (P.PAs _ n p) = do
-    --   PAs n <$> tyInferPat p
-    -- tyInferPat (P.PData r c ps) = do
-    --   cid <- findDataId c
-    --   cinfo <- findDataInfo cid
-    --   let
-    --     arity = length cinfo.fields
-    --     arity' = length ps
-    --   unless (arity == arity') $ throwElab
-    --     [ "constructor", errQuote c, "has arity", errPretty arity ]
-    --     [ (r, This ["used with arity", errPretty arity']) ]
-    --   PData cid <$> sequence (Seq.zipWith tyCheckPat ps cinfo.fields)
-    -- -- tyInferPat (POr r p ps)  = do
-    -- --   p <- tyInferPat p
-    -- --   let ty = snd $ info p
-    -- --   POr (r, snd $ info p) p
-    -- --     <$> mapM (tyCheckPat ty) ps
     tyInferPat m (P.PInt _ i)    = do
-      t <- tyInt
+      t <- lift tyInt
       pure (m, t, PInt i)
     tyInferPat m (P.PString _ s) = do
-      t <- tyString
+      t <- lift tyString
       pure (m, t, PString s)
     tyInferPat m (P.PWild _)     = do
-      t <- freshMeta
+      t <- lift freshMeta
       pure (m, t, PWild Nothing t)
-
-    go m (P.PWild {})             = pure m
-    go m (P.PInt {})              = pure m
-    go m (P.PString {})           = pure m
-    go m (P.PAs _ (P.Name r n) p) =
+    tyInferPat m (P.PAs _ (P.Name r n) p) =
       case Map.lookup n m of
         Nothing -> do
-          v <- nextVar undefined
-          go (Map.insert n (v, r) m) p
+          -- TODO: can we clean this up?
+          t <- lift freshMeta
+          v <- nextVar t
+          (m, p) <- tyCheckPat (Map.insert n (v, r) m) p t
+          pure (m, t, p)
         Just (_, r') -> lift $ throwElab
           [ "non-linear occurence of variable", errPretty n ]
           [ (r', This "first defined here"), (r, This "redefined here") ]
-    go m (P.PType _ p _)          = go m p
-    go m (P.PData _ _ ps)         = foldM go m ps
-    go m (P.POr _ p ps)           =
-      -- TODO: we need to make sure all variables bound in p are bound in each
-      -- of the ps with the same type
-      go m p >>= (foldM go `flip` ps)
+    tyInferPat m (P.PType _ p t) = do
+      t <- TyData <$> lift (findTypeId t)
+      (m, p) <- tyCheckPat m p t
+      pure (m, t, p)
+    tyInferPat m (P.PData r c ps) = do
+      cid <- lift $ findDataId c
+      cinfo <- lift $ findDataInfo cid
+      let
+        arity = length cinfo.fields
+        arity' = length ps
+      unless (arity == arity') $ lift $ throwElab
+        [ "constructor", errQuote c, "has arity", errPretty arity ]
+        [ (r, This ["used with arity", errPretty arity']) ]
+      (m, ps) <- foldM2 (\(m, ps) p t -> do
+          (m, p) <- tyCheckPat m p t
+          pure (m, p :<| ps)
+        ) (m, Empty) ps cinfo.fields
+      pure (m, TyData cinfo.typeOf, PData cid ps)
+    tyInferPat m (P.POr _ p ps)  = do
+      (m', t, p) <- localState' $ tyInferPat m p
+      -- p <- (uncurry POr) <$> tyCheckOrPat m m' t (NESeq p [], Nothing) ps
+      pure (m', t, p)
+      -- case Map.keysSet m `Set.intersection` Map.keysSet m' of
+      --   i | null i -> pure (m <> m', t, POr om ol)
+      --   i ->
+      --     let
+      --       n  = Set.findMin i
+      --       r  = snd . fromJust $ Map.lookup n m
+      --       r' = snd . fromJust $ Map.lookup n m'
+      --     in lift $ throwElab
+      --       [ "non-linear occurence of variable", errPretty n ]
+      --       [ (r, This "first defined here"), (r', This "redefined here") ]
 
--- tyCheckPat :: HasCallStack => P.Pattern Range -> Type -> Elab (Pattern (Range, Type))
--- tyCheckPat p t = do
---   p' <- tyInferPat p
---   -- let ty' = snd $ info p'
---   -- tyUnify t t' >>= flip unless
---   --   (tyErrorExpect "pattern" ty ty' e)
---   pure p'
+    tyCheckOrPat _ _ _ acc Empty = pure acc
+    -- tyCheckOrPat m m' t acc (P.POr _ p ps :<| ps') =
+    --   tyCheckOrPat m m' t acc (p :<| (ps <> ps'))
+    tyCheckOrPat m m' t acc@(om, ol) (p :<| ps) = do
+      {-
+        1. check that the pattern has type t
+        2. if the pattern is a wildcard stop
+        3. make sure that the captures are the same as om
+      -}
+      case p of
+        P.PWild _ -> do
+          (_, p) <- tyCheckPat m p t
+          pure (om, Just p)
+        P.POr _ p ps' -> tyCheckOrPat m m' t acc (p :<| (ps <> ps'))
+        _ -> do
+          (m'', p') <- tyCheckPat m p t
+          unless (m' == m'') $ error "TODO: missing variables"
+          undefined
+
+      -- \p -> do
+      --   (m', p) <- tyCheckPat mempty p t
+      --   undefined
+      -- case Map.keysSet m `Set.intersection` Map.keysSet m' of
+      --   i | null i -> pure (m <> m', t, p)
+      --   i -> undefined
+      -- let ty = snd $ info p
+      -- POr (r, snd $ info p) p
+      --   <$> mapM (tyCheckPat ty) ps
 
 -- tyCheckExprAll
 --   :: (Foldable f)
@@ -708,7 +752,7 @@ rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
   where
     hasWildCard :: Pattern l -> Bool
     hasWildCard (PWild {})        = True
-    hasWildCard (PAs _ p)         = hasWildCard p
+    -- hasWildCard (PAs _ p)         = hasWildCard p
     hasWildCard (POr _ (Just p )) = hasWildCard p
     hasWildCard _                 = False
 
@@ -757,18 +801,18 @@ rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
 --       _ -> acc
 
 -- NOTE: partial Map.!, foldl1
-columnPick :: PatternMatrix -> Elab (Var, TypeInfo)
-columnPick (Matrix Empty) = error "empty match matrix"
-columnPick (Matrix rows@(row :<| _)) =
-  let (k, _) = List.foldl1 findMax . Map.toList $
-        foldl' mkMap (row.cols $> (0 :: Int)) rows in
-  fmap (k,) . patternTypeInfo $ row.cols Map.! k
-  where
-    findMax a b
-      | snd b > snd a = b
-      | otherwise     = a
-    mkMap acc (Row m _ _ _) =
-      Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
+-- columnPick :: PatternMatrix -> Elab (Var, TypeInfo)
+-- columnPick (Matrix Empty) = error "empty match matrix"
+-- columnPick (Matrix rows@(row :<| _)) =
+--   let (k, _) = List.foldl1 findMax . Map.toList $
+--         foldl' mkMap (row.cols $> (0 :: Int)) rows in
+--   fmap (k,) . patternTypeInfo $ row.cols Map.! k
+--   where
+--     findMax a b
+--       | snd b > snd a = b
+--       | otherwise     = a
+--     mkMap acc (Row m _ _ _) =
+--       Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
 
 matchComplete :: TypeInfo -> Set DataId -> Bool
 matchComplete (TypeInfo{span}) cons = maybe False (length cons ==) span
