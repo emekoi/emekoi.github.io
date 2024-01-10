@@ -9,10 +9,10 @@ module Util
     , writeIORef
     ) where
 
-import Control.Monad.Reader
-import Data.IORef           (IORef)
-import Data.IORef           qualified as IORef
-import GHC.Exts             (oneShot)
+import Control.Monad.IO.Class
+import Data.IORef             (IORef)
+import Data.IORef             qualified as IORef
+import GHC.Exts               (oneShot)
 
 newtype RecFold a b
   = MkRecFold (a -> (RecFold a b -> b) -> b)

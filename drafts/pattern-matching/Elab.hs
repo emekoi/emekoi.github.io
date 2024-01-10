@@ -17,6 +17,7 @@ module Elab
 
 -- TODO: the continuations we generate for pattern matching have messed up
 -- binding levels. we need to refactor how we generate contiuations
+-- TODO: switch to using de bruijn indices
 
 import Control.Applicative
 import Control.Category           qualified ((>>>))
@@ -29,11 +30,15 @@ import Control.Monad.Zip
 import Core                       as C
 import Data.Bifunctor
 import Data.Bool                  (bool)
+import Data.Default.Class
 import Data.Foldable
 import Data.Functor
 import Data.Functor.Identity
+import Data.Graph                 qualified as Graph
 import Data.IntMap.Strict         (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
+import Data.IntSet                (IntSet)
+import Data.IntSet                qualified as IntSet
 import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
@@ -54,6 +59,40 @@ import Prettyprinter              qualified as Pretty
 import Prettyprinter.Render.Text  qualified as Pretty
 import Util
 import Witherable
+
+data UsageInfo r = Usage
+  { usageInfo :: IntMap (r, IntSet)
+  , termIds   :: Map Text Int
+  , fresh     :: Int
+  }
+  deriving (Show)
+
+instance Default (UsageInfo r) where
+  def = Usage mempty mempty 0
+
+usageId :: (MonadState (UsageInfo r) m) => Text -> m Int
+usageId x = state \u@(Usage {..}) ->
+  case Map.lookup x termIds of
+    Just i -> (i, u)
+    Nothing ->
+      ( fresh
+      , u
+        { fresh = fresh + 1
+        , termIds = Map.insert x fresh termIds}
+      )
+
+usageDepend :: (MonadState (UsageInfo r) m) => Int -> r -> IntSet -> m ()
+usageDepend x r d = modify' \Usage{..} ->
+  Usage { usageInfo = IntMap.insert x (r, d) usageInfo, .. }
+
+usageDepend' :: (Semigroup r, MonadState (UsageInfo r) m) => Int -> r -> IntSet -> m ()
+usageDepend' x r d = modify' \Usage{..} ->
+  Usage { usageInfo = IntMap.insertWith (<>) x (r, d) usageInfo, .. }
+
+usageSCCs :: (MonadState (UsageInfo r) m) => m [Graph.SCC r]
+usageSCCs = gets \(Usage {..}) ->
+  Graph.stronglyConnComp $ IntMap.foldrWithKey go [] usageInfo
+  where go x (k, xs) r = (k, x, IntSet.toList xs) : r
 
 data ElabState = ElabState
   { fileName     :: FilePath
@@ -540,14 +579,6 @@ bindPatterns ps ts k = do
       unless (arity == arity') $ lift $ throwElab
         [ "constructor", errQuote c, "has arity", errPretty arity ]
         [ (r, This ["used with arity", errPretty arity']) ]
-      -- TODO: when allocating variables, should we allocate for all fields of a
-      -- constructor, even if the field is never named? i think this makes
-      -- consistent naming easier later on
-      -- modify' (+ length cinfo.fields)
-      -- ps <- foldM2 (\ps p t -> do
-      --     p <- tyCheckPat p t
-      --     pure (p :<| ps)
-      --   ) Empty ps cinfo.fields
       ps <- sequence $ Seq.zipWith tyCheckPat ps cinfo.fields
       pure (PData cid ps, TyData cinfo.typeOf)
     tyInferPat (P.POr _ p ps)  = do
@@ -732,13 +763,39 @@ tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) t Empty e1) e2) k = do
   -- 4. create the letk binding by applying k
   t <- maybe freshMeta tyCheckType t
   j <- freshLabel "j" [t]
-  k <- bindVar t \v -> do
+  e2K <- bindVar t \v -> do
     local (\ctx -> ctx
       { localTerms = Map.insert x v ctx.localTerms
       }) $ TLetK j [v] <$> tyInferExpr e2 k
-  k <$> tyCheckExpr e1 t (Abstract j)
-tyInferExpr (P.ELet _ (P.ExprDecl _ _f _t _ps _e1) _e2) _k = do
-  error "TODO"
+  e2K <$> tyCheckExpr e1 t (Abstract j)
+tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ f) t ps e1) e2) k = do
+  -- ts <- traverse (const freshMeta) ps
+  -- e1K <- bindPatterns ps ts \_ps vs -> do
+  --   t <- maybe freshMeta tyCheckType t
+  --   k <- freshLabel "k" [t]
+  --   fun <- freshLocal f (TyFun ts t)
+  --   ElabState{localTerms} <- ask
+  --   liftIO . print $ localTerms
+  --   e1 <- tyCheckExpr e1 t (Abstract k)
+  --   pure $ local (\ctx -> ctx { localTerms = Map.insert f fun ctx.localTerms}) . fmap (TLetF fun k vs e1)
+  -- e1K $ tyInferExpr e2 k
+  -- ElabState{localTerms} <- ask
+  -- bindPatterns ps ts \_ps vs -> do
+  --   t <- maybe freshMeta tyCheckType t
+  --   k' <- freshLabel "k" [t]
+  --   fun <- freshLocal f (TyFun ts t)
+  --   e1 <- tyCheckExpr e1 t (Abstract k')
+  --   local (\ctx -> ctx { localTerms = Map.insert f fun localTerms}) $
+  --     TLetF fun k' vs e1 <$> tyInferExpr e2 k
+  t <- maybe freshMeta tyCheckType t
+  ts <- traverse (const freshMeta) ps
+  f' <- freshLocal f (TyFun ts t)
+  e1K <- bindPatterns ps ts \_ps vs -> do
+    k <- freshLabel "k" [t]
+    TLetF f' k vs <$> tyCheckExpr e1 t (Abstract k)
+  local (\ctx -> ctx
+    { localTerms = Map.insert f f' ctx.localTerms
+    }) $ e1K <$> tyInferExpr e2 k
 tyInferExpr (P.EMatch _ e alts) k = do
   tyInferExpr e $ Wrap \x -> do
     case k of
@@ -801,7 +858,6 @@ elaborate (P.Module ds) = do
       pure Nothing
     P.DExpr e -> pure (Just e)
 
--- mapM_ tyCheckExprDecl exprs
   forM_ exprs $ \x -> do
     liftIO $ Pretty.putDoc (Pretty.pretty x) >> putChar '\n'
     -- liftIO $ print (void x)

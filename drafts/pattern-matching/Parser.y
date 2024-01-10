@@ -338,7 +338,7 @@ instance P.Pretty (Expr a) where
     where
       go _ (EInt _ i)        = P.pretty i
       go _ (EVar _ v)        = P.pretty v
-      go _ (EPrim _ p)       = P.pretty p <> "#"
+      go _ (EPrim _ p)       = "#" <> P.pretty p
       go _ (EData _ c)       = P.pretty c
       go _ (EString _ s)     = P.pretty s
       go _ (EMatch _ e xs)   = "match" <+> P.pretty e <+>
