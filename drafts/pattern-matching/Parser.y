@@ -340,7 +340,7 @@ instance P.Pretty (Expr a) where
       go _ (EVar _ v)        = P.pretty v
       go _ (EPrim _ p)       = "#" <> P.pretty p
       go _ (EData _ c)       = P.pretty c
-      go _ (EString _ s)     = P.pretty s
+      go _ (EString _ s)     = P.dquotes $ P.pretty s
       go _ (EMatch _ e xs)   = "match" <+> P.pretty e <+>
         P.braces (P.concatWith (\x y -> x <+> "|" <+> y) (P.pretty <$> xs))
       go False (EApp _ f xs) = P.pretty f <+>

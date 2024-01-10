@@ -58,7 +58,6 @@ import Lens.Micro
 import Lens.Micro.GHC             ()
 import Parser                     qualified as P
 import Prettyprinter              qualified as Pretty
-import Prettyprinter.Render.Text  qualified as Pretty
 import Util
 import Witherable
 
@@ -352,14 +351,8 @@ data MatchRow = Row
 rColsL :: Lens' MatchRow (Map Var (Pattern 'Low))
 rColsL f x = (\x' -> x {cols = x'}) <$> f x.cols
 
--- rVarsL :: Lens' MatchRow (Map Text Var)
--- rVarsL f x = (\x' -> x {vars = x'}) <$> f x.vars
-
 rowMatchVar :: Var -> Pattern 'Low -> MatchRow -> MatchRow
 rowMatchVar x p = rColsL %~ Map.insert x p
-
--- rowBindVar :: Text -> Var -> MatchRow -> MatchRow
--- rowBindVar x v = rVarsL %~ Map.insert x v
 
 newtype PatternMatrix
   = Matrix { rows :: Seq MatchRow }
@@ -445,7 +438,9 @@ mapFoldlM f z0 xs = Map.foldrWithKey c return xs z0
 matchCompile :: PatternMatrix -> Elab Term
 -- matchCompile = matchCompile
 matchCompile (Matrix Empty) = do
-  pure $ TError "in-exhaustive match"
+  t <- tyString
+  x <- freshLocal "s" t
+  pure $ TLetV x (VString "in-exhaustive match") (TError x)
 matchCompile (Matrix (Row col Nothing body :<| _))
   | null col = pure body
 -- matchCompile k (Matrix (row@(Row col (Just (v, p)) _ _) :<| rs) pick)
@@ -460,11 +455,11 @@ matchCompile mat@(Matrix rows) = do
   (def, cons, cases) <- foldM (goRow var) (Nothing, mempty, Empty) rows
   case def of
     Just {} ->
-      pure $ TCase var cases def
+      pure $ TMatch var cases def
     Nothing | matchComplete tinfo cons ->
-      pure $ TCase var cases Nothing
+      pure $ TMatch var cases Nothing
     Nothing ->
-      TCase var cases . Just
+      TMatch var cases . Just
         <$> defaultCase var
   where
     defaultCase v = matchCompile (rowDefault v mat)
@@ -831,13 +826,13 @@ tyInferExprDecl (P.ExprDecl _r (P.Name _ f) t ps e) = do
   t <- maybe freshMeta tyCheckType t
   k <- freshLabel "k" [t]
   f <- freshGlobal f (TyFun ts t)
-  bindPatterns ps ts \ps vs -> do
-    liftIO $ putStr "\t" >> print ps
-    liftIO $ putStr "\t" >> print vs
+  bindPatterns ps ts \_ps vs -> do
+    -- liftIO $ putStr "\t" >> print ps
+    -- liftIO $ putStr "\t" >> print vs
     e <- tyCheckExpr e t (Abstract k)
     pure $ DTerm f k vs e
 
-elaborate :: HasCallStack => P.Module -> Elab ()
+elaborate :: HasCallStack => P.Module -> Elab (Seq Decl)
 elaborate (P.Module ds) = do
   -- get the names of all data types
   forM_ ds \case
@@ -859,9 +854,4 @@ elaborate (P.Module ds) = do
       pure Nothing
     P.DExpr e -> pure (Just e)
 
-  forM_ exprs $ \x -> do
-    liftIO $ Pretty.putDoc (Pretty.pretty x) >> putChar '\n'
-    -- liftIO $ print (void x)
-    x <- tyInferExprDecl x
-    liftIO $ print x >> putChar '\n'
-    pure ()
+  mapM tyInferExprDecl exprs

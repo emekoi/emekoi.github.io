@@ -13,7 +13,6 @@ import Prettyprinter              qualified as P
 import Prettyprinter.Render.Text  qualified as P
 import System.Environment         qualified as System
 import System.Exit                qualified as System
-import System.IO                  qualified as System
 
 main :: IO ()
 main = do
@@ -23,10 +22,9 @@ main = do
   let diagFile = addFile mempty file (BS.unpack input)
   handle (handleErr diagFile) do
     let ds = runAlex' file input parse
-    _ds' <- runElab file (elaborate ds)
-    -- P.putDoc $ P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds')
-    P.putDoc $ P.pretty ds
-    System.putChar '\n'
+    ds <- runElab file (elaborate ds)
+    P.putDoc $ P.concatWith (\x y -> x <> P.line <> P.line <> y) (P.pretty <$> ds)
+      <> P.line
   where
     handleErr file (Error err) = do
       printDiagnostic stderr WithUnicode (TabSize 2) defaultStyle (foldl addReport file err)
