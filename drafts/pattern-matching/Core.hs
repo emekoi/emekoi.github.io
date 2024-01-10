@@ -240,6 +240,6 @@ data Term where
 data Decl where -- | top-level value declarations
   -- DValue :: Var -> Value -> Decl
   -- | top-level term declarations
-  DTerm :: Label -> Label -> Term -> Decl
+  DTerm :: Var -> Label -> Seq Var -> Term -> Decl
   deriving (Eq, Show)
 

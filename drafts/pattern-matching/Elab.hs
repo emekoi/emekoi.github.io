@@ -18,6 +18,8 @@ module Elab
 -- TODO: the continuations we generate for pattern matching have messed up
 -- binding levels. we need to refactor how we generate contiuations
 -- TODO: switch to using de bruijn indices
+-- TODO: we need to fix the generation of bindings and continuations for pattern
+-- matching.
 
 import Control.Applicative
 import Control.Category           qualified ((>>>))
@@ -769,33 +771,17 @@ tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) t Empty e1) e2) k = do
       }) $ TLetK j [v] <$> tyInferExpr e2 k
   e2K <$> tyCheckExpr e1 t (Abstract j)
 tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ f) t ps e1) e2) k = do
-  -- ts <- traverse (const freshMeta) ps
-  -- e1K <- bindPatterns ps ts \_ps vs -> do
-  --   t <- maybe freshMeta tyCheckType t
-  --   k <- freshLabel "k" [t]
-  --   fun <- freshLocal f (TyFun ts t)
-  --   ElabState{localTerms} <- ask
-  --   liftIO . print $ localTerms
-  --   e1 <- tyCheckExpr e1 t (Abstract k)
-  --   pure $ local (\ctx -> ctx { localTerms = Map.insert f fun ctx.localTerms}) . fmap (TLetF fun k vs e1)
-  -- e1K $ tyInferExpr e2 k
-  -- ElabState{localTerms} <- ask
-  -- bindPatterns ps ts \_ps vs -> do
-  --   t <- maybe freshMeta tyCheckType t
-  --   k' <- freshLabel "k" [t]
-  --   fun <- freshLocal f (TyFun ts t)
-  --   e1 <- tyCheckExpr e1 t (Abstract k')
-  --   local (\ctx -> ctx { localTerms = Map.insert f fun localTerms}) $
-  --     TLetF fun k' vs e1 <$> tyInferExpr e2 k
   t <- maybe freshMeta tyCheckType t
   ts <- traverse (const freshMeta) ps
   f' <- freshLocal f (TyFun ts t)
+  -- TODO: audit this use of bind patterns
   e1K <- bindPatterns ps ts \_ps vs -> do
+    -- HACK: i don't think we are binding the right parameters for k
     k <- freshLabel "k" [t]
     TLetF f' k vs <$> tyCheckExpr e1 t (Abstract k)
   local (\ctx -> ctx
-    { localTerms = Map.insert f f' ctx.localTerms
-    }) $ e1K <$> tyInferExpr e2 k
+      { localTerms = Map.insert f f' ctx.localTerms
+      }) $ e1K <$> tyInferExpr e2 k
 tyInferExpr (P.EMatch _ e alts) k = do
   tyInferExpr e $ Wrap \x -> do
     case k of
@@ -824,17 +810,32 @@ tyInferExpr (P.EMatch _ e alts) k = do
          , body = TJmp k vs
          } :<| rows)
 
+-- TODO: how do i know if this is a value? probably some check of triviality
 tyInferExprDecl :: HasCallStack => P.ExprDecl Range -> Elab Decl
+-- tyInferExprDecl (P.ExprDecl _r (P.Name _ f) t ps e) = do
+--   ts <- traverse (const freshMeta) ps
+--   t <- maybe freshMeta tyCheckType t
+--   k <- freshLabel "k" [t]
+--   f <- freshGlobal f (TyFun ts t)
+--   (ps, vs, ek) <- bindPatterns ps ts \ps vs -> do
+--     liftIO $ putStr "\t" >> print ps
+--     liftIO $ putStr "\t" >> print vs
+--     e <- tyCheckExpr e t (Abstract k)
+--     k <- freshLabel "k" $ (\(Var _ t) -> t) <$> vs
+--     pure $ (ps, vs, TLetK k vs e)
+
+--   -- pure $ DTerm f k vs e
+--   error "TODO"
 tyInferExprDecl (P.ExprDecl _r (P.Name _ f) t ps e) = do
   ts <- traverse (const freshMeta) ps
-  bindPatterns ps ts \_ps _vs -> do
-    liftIO $ putStr "\t" >> print _ps
-    liftIO $ putStr "\t" >> print _vs
-    t <- maybe freshMeta tyCheckType t
-    k <- freshLabel "k" [t]
-    f <- freshName (\x i -> Label (Global x i) ts) f
-    -- TODO: how do i know if this is a value? probably some check of triviality
-    DTerm f k <$> tyCheckExpr e t (Abstract k)
+  t <- maybe freshMeta tyCheckType t
+  k <- freshLabel "k" [t]
+  f <- freshGlobal f (TyFun ts t)
+  bindPatterns ps ts \ps vs -> do
+    liftIO $ putStr "\t" >> print ps
+    liftIO $ putStr "\t" >> print vs
+    e <- tyCheckExpr e t (Abstract k)
+    pure $ DTerm f k vs e
 
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
