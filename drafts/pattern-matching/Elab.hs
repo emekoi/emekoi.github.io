@@ -854,4 +854,4 @@ elaborate (P.Module ds) = do
       pure Nothing
     P.DExpr e -> pure (Just e)
 
-  mapM tyInferExprDecl exprs
+  mapM tyInferExprDecl exprs >>= zonk

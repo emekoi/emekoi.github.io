@@ -21,7 +21,7 @@ newtype TrivialEq r
   = TrivialEq r
   deriving (Show)
     via r
-  deriving (Functor)
+  deriving (Foldable, Functor, Traversable)
 
 instance Eq (TrivialEq r) where
   (==) _ _ = True
@@ -33,14 +33,14 @@ newtype TrivialOrd r
   = TrivialOrd r
   deriving (Show)
     via r
-  deriving (Eq, Functor)
+  deriving (Eq, Foldable, Functor, Traversable)
 
 instance (Eq r) => Ord (TrivialOrd r) where
   compare _ _ = EQ
 
 newtype Trivial r
   = Trivial r
-  deriving (Functor)
+  deriving (Foldable, Functor, Traversable)
 
 instance Eq (Trivial r) where
   (==) _ _ = True
@@ -131,13 +131,22 @@ tyForce (TyMeta i (Trivial m)) = go i m
       _ -> pure (TyMeta i (Trivial m))
 tyForce t = pure t
 
+class Zonk t where
+  zonk :: (MonadIO m) => t -> m t
+
+instance (Traversable t, Zonk t') => Zonk (t t') where
+  zonk = traverse zonk
+
+instance Zonk Type where
+  zonk t@(TyMeta _ (Trivial m)) =
+    readIORef m >>= \case
+      Just m -> zonk m
+      _ -> pure t
+  zonk (TyFun a b)  = TyFun <$> zonk a <*> zonk b
+  zonk x            = pure x
+
 tyZonk :: (MonadIO m) => Type -> m Type
-tyZonk t@(TyMeta _ (Trivial m)) =
-  readIORef m >>= \case
-    Just m -> tyZonk m
-    _ -> pure t
-tyZonk (TyFun a b)  = TyFun <$> traverse tyZonk a <*> tyZonk b
-tyZonk x            = pure x
+tyZonk = zonk
 
 newtype TypeId
   = TypeId Name
@@ -186,6 +195,9 @@ instance Show Var where
 instance Pretty Var where
   pretty (Var v t) = P.parens $ pretty v <+> ":" <+> pretty t
 
+instance Zonk Var where
+  zonk (Var v t) = Var v <$> zonk t
+
 data Label = MkLabel Name (TrivialEq (Seq Type))
   deriving (Eq, Ord)
 
@@ -199,6 +211,9 @@ instance Show Label where
 instance Pretty Label where
   pretty (Label v t) = P.parens $
     pretty v <+> ":" <+> P.concatWith (\x y -> x <+> "->" <+> y) (P.pretty <$> t)
+
+instance Zonk Label where
+  zonk (Label v ts) = Label v <$> zonk ts
 
 data Value where
   -- | int values
@@ -215,6 +230,10 @@ instance Pretty Value where
   pretty (VData (DataId c) vs) =
     P.concatWith (<+>) (pretty c :<| (P.pretty <$> vs))
 
+instance Zonk Value where
+  zonk (VData d vs) = VData d <$> zonk vs
+  zonk v            = pure v
+
 -- TODO: merge this with `Value`?
 data AltCon
   = AltInt Integer
@@ -228,6 +247,10 @@ instance Pretty AltCon where
   pretty (AltData (DataId c) (TrivialEq vs)) =
     P.concatWith (<+>) (pretty c :<| (P.pretty <$> vs))
 
+instance Zonk AltCon where
+  zonk (AltData d vs) = AltData d <$> zonk vs
+  zonk v              = pure v
+
 -- TODO: use Level?
 data Alt = Alt
   { alt  :: AltCon
@@ -237,6 +260,9 @@ data Alt = Alt
 
 instance Pretty Alt where
   pretty alt = pretty alt.alt <+> "->" <> P.nest 2 (P.hardline <> pretty alt.body)
+
+instance Zonk Alt where
+  zonk (Alt a b) = Alt <$> zonk a <*> zonk b
 
 newtype PrimOp
   = PrimOp Text
@@ -296,6 +322,16 @@ instance Pretty Term where
         Just a  -> (P.pretty <$> alts) :|> "__default__ -> " <> pretty a
   pretty (TError v) = "error" <+> pretty v
 
+instance Zonk Term where
+  zonk (TLetV v x e) = TLetV <$> zonk v <*> zonk x <*> zonk e
+  zonk (TLetP v p xs e) = TLetP <$> zonk v <*> pure p <*> zonk xs <*> zonk e
+  zonk (TLetK k xs e1 e2) = TLetK <$> zonk k <*> zonk xs <*> zonk e1 <*> zonk e2
+  zonk (TLetF f k xs e1 e2) = TLetF <$> zonk f <*> zonk k <*> zonk xs <*> zonk e1 <*> zonk e2
+  zonk (TJmp k xs) = TJmp <$> zonk k <*> zonk xs
+  zonk (TApp f k xs) = TApp <$> zonk f <*> zonk k <*> zonk xs
+  zonk (TMatch v alts fb) = TMatch <$> zonk v <*> zonk alts <*> zonk fb
+  zonk v = pure v
+
 data Decl where -- | top-level value declarations
   -- DValue :: Var -> Value -> Decl
   -- | top-level term declarations
@@ -306,3 +342,6 @@ instance Pretty Decl where
   pretty (DTerm (Var f _) (Label k _) xs e) = "letf" <> P.braces (pretty k)
     <+> P.concatWith (<++>) (pretty f :<| (P.pretty <$> xs)) <+> "="
     <> P.nest 2 (P.hardline <> pretty e)
+
+instance Zonk Decl where
+  zonk (DTerm v k xs e) = DTerm <$> zonk v <*> zonk k <*> zonk xs <*> zonk e
