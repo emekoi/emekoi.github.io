@@ -10,8 +10,8 @@ module Error
     ) where
 
 import Control.Exception
-import Data.Text              (Text)
 import Control.Monad.IO.Class
+import Data.Text              (Text)
 import Error.Diagnose
 import GHC.Exts               (IsList (..), IsString (..))
 import Prettyprinter          qualified as P

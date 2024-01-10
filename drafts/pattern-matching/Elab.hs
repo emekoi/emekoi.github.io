@@ -201,6 +201,12 @@ makeDataId (P.Name r c) = do
         [ "redefinition of constructor", errQuote c ]
         [ (info.range, This "first defined here"), (r, This "redefined here") ]
 
+tyCheckType :: HasCallStack => P.Type Range -> Elab Type
+tyCheckType (P.TyData _ c)       = TyData <$> findTypeId c
+tyCheckType (P.TyFun _ args ret) = TyFun
+    <$> traverse tyCheckType args
+    <*> tyCheckType ret
+
 tyCheckDataDecl :: HasCallStack => Bool -> P.Name Range -> Seq (P.DataCon Range) -> Elab ()
 tyCheckDataDecl magic t cs = do
   TypeId tid <- findTypeId t
@@ -216,8 +222,7 @@ tyCheckDataDecl magic t cs = do
       TypeInfo { name = tid, range = range t, span = bool (Just $ length cs) Nothing magic }
   forM_ cs \(P.DataCon _ name xs) -> do
     DataId did <- makeDataId name
-    -- TODO: allow function types in data types
-    fields <- fmap TyData <$> mapM findTypeId xs
+    fields <- mapM tyCheckType xs
     modifyIORef dataConInfo . IntMap.insert did.id $
       DataInfo { name = did, range = range t, typeOf = TypeId tid, .. }
 
@@ -522,7 +527,7 @@ bindPatterns ps ts k = do
           [ "non-linear occurence of variable", errPretty n ]
           [ (r', This "first defined here"), (P.range n, This "redefined here") ]
     tyInferPat (P.PType _ p t) = do
-      t <- TyData <$> lift (findTypeId t)
+      t <- lift (tyCheckType t)
       (,t) <$> tyCheckPat p t
     tyInferPat (P.PData r c ps) = do
       cid <- lift $ findDataId c
@@ -738,11 +743,11 @@ tyInferExprDecl (P.ExprDecl _r (P.Name _ f) ps e) = do
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
   forM_ ds \case
-    P.DData _ c m _ -> do
+    P.DData _ m c _ -> do
       makeTypeId m c $> ()
     _ -> pure ()
   exprs <- (`witherM` ds) \case
-    P.DData _ c m xs -> tyCheckDataDecl m c xs $> Nothing
+    P.DData _ m c xs -> tyCheckDataDecl m c xs $> Nothing
     P.DExpr e -> pure (Just e)
 
 -- mapM_ tyCheckExprDecl exprs

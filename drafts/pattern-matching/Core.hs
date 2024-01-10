@@ -73,9 +73,9 @@ pattern Global x i = Name (TrivialOrd GlobalName) (TrivialEq x) i
 {-# COMPLETE Local, Global, Bound #-}
 
 instance P.Pretty Name where
-  pretty (Bound x  i)  = "%" <> P.pretty x <> P.pretty i
-  pretty (Local x  i)  = "$" <> P.pretty x <> P.pretty i
-  pretty (Global x  i) = "@" <> P.pretty x <> P.pretty i
+  pretty (Bound x i)  = "%" <> P.pretty x <> P.pretty i
+  pretty (Local x i)  = "$" <> P.pretty x <> P.pretty i
+  pretty (Global x i) = "@" <> P.pretty x <> P.pretty i
 
 instance Show Name where
   show = show . P.pretty
@@ -84,7 +84,10 @@ data Type
   = TyFun (Seq Type) Type
   | TyMeta Int (Trivial (IORef (Maybe Type)))
   | TyData TypeId
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance Show Type where
+  show = show . P.pretty
 
 instance P.Pretty Type where
   pretty = go False

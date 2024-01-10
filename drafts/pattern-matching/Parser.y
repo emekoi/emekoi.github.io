@@ -5,20 +5,20 @@
 {-# LANGUAGE OverloadedLists #-}
 
 module Parser
-  ( HasRange
-  , HasInfo(..)
-  , L.Range(..)
+  ( Constructor
+  , HasRange
+  , Variable
   , Alt(..)
   , DataCon(..)
   , Decl(..)
   , Expr(..)
   , ExprDecl(..)
+  , HasInfo(..)
+  , L.Range(..)
   , Module(..)
   , Name(Name, getName)
   , Pattern(..)
-  , Constructor
-  , Variable
-  , Type
+  , Type (..)
   , (<->)
   , parse
   , r2p
@@ -103,15 +103,23 @@ variable :: { Name L.Range }
 constructor :: { Name L.Range }
   : constructorT { unToken $1 \r (L.Constructor name) -> Name r (decodeUtf8 name) }
 
+tyAtom :: { Type L.Range }
+  : '(' type ')' { $2 }
+  | constructor { TyData (range $1) $1 }
+
+type :: { Type L.Range }
+  : tyAtom                      { $1 }
+  | sepBy1(tyAtom, '->') tyAtom { TyFun (rangeSeq' $1 $2) $1 $2 }
+
 pattern_1 :: { Pattern L.Range }
-  : '(' pattern_3 ')'                 { $2 }
-  | '(' pattern_3 ':' constructor ')' { PType ($1 <-> $5) $2 $4 }
-  | '_'                               { unToken $1 \r _ -> PWild r }
-  | intT                              { unToken $1 \r (L.Int i) -> PInt r i }
-  | stringT                           { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
-  | variable                          { let (Name r _) = $1 in PAs r $1 (PWild r) }
-  | constructor                       { PData (range $1) $1 Empty }
-  | variable '@' pattern_1            { PAs ($1 <-> $3) $1 $3  }
+  : '(' pattern_3 ')'          { $2 }
+  | '(' pattern_3 ':' type ')' { PType ($1 <-> $5) $2 $4 }
+  | '_'                        { unToken $1 \r _ -> PWild r }
+  | intT                       { unToken $1 \r (L.Int i) -> PInt r i }
+  | stringT                    { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
+  | variable                   { let (Name r _) = $1 in PAs r $1 (PWild r) }
+  | constructor                { PData (range $1) $1 Empty }
+  | variable '@' pattern_1     { PAs ($1 <-> $3) $1 $3  }
 
 pattern_2 :: { Pattern L.Range }
   : pattern_1                   { $1 }
@@ -146,20 +154,20 @@ expr :: { Expr L.Range }
     '}'                    { EMatch ($1 <-> $6) $2 $5 }
 
 dataCon :: { DataCon L.Range }
-  : constructor many(constructor) { DataCon (rangeSeq $1 $2) $1 $2 }
+  : constructor many(tyAtom) { DataCon (rangeSeq $1 $2) $1 $2 }
 
 edecl :: { ExprDecl L.Range }
   : variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $4) $1 $2 $4 }
 
 decl :: { Decl L.Range }
   : letT edecl                                               { DExpr $2 }
-  | dataT optionalB('#') constructor                         { DData ($1 <-> $3) $3 $2 Empty }
-  | dataT optionalB('#') constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $5) $3 $2 $5 }
+  | dataT optionalB('#') constructor                         { DData ($1 <-> $3) $2 $3 Empty }
+  | dataT optionalB('#') constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $5) $2 $3 $5 }
 
 decls :: { Module }
   : many(decl) { Module $1 }
 
-{ {-# LINE 163 "Parser.y" #-}
+{ {-# LINE 171 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
@@ -200,6 +208,10 @@ rangeSeq :: (HasRange x, HasRange y) => x -> Seq y -> L.Range
 rangeSeq x Empty     = range x
 rangeSeq x (_ :|> y) = range x <> range y
 
+rangeSeq' :: (HasRange x, HasRange y) => Seq x -> y -> L.Range
+rangeSeq' Empty x     = range x
+rangeSeq' (x :<| _) y = range x <> range y
+
 data Name a
   = Name { nameInfo :: a, getName :: Text }
   deriving (Foldable, Functor, Traversable)
@@ -220,7 +232,22 @@ instance P.Pretty (Name a) where
 
 type Variable = Name
 type Constructor = Name
-type Type = Name
+
+data Type a
+  = TyData a (Constructor a)
+  | TyFun a (Seq (Type a)) (Type a)
+  deriving (Show, Foldable, Functor)
+
+instance HasInfo (Type i) i
+
+instance P.Pretty (Type a) where
+  pretty = go False
+    where
+      go _ (TyData _ c)           = P.pretty c
+      go False (TyFun _ args ret) =
+        P.concatWith (\x y -> x P.<+> "->" P.<+> y) (go True <$> args)
+         P.<+> "->" P.<+> go False ret
+      go True x                   = P.parens $ go False x
 
 data Pattern a
   = PWild a
@@ -250,45 +277,6 @@ instance P.Pretty (Pattern a) where
         P.concatWith (\x y -> x <+> "|" <+> y) (go False <$> (p :<| ps))
       go True x                = P.parens (go False x)
 
-data DataCon a
- = DataCon a (Constructor a) (Seq (Type a))
-  deriving (Foldable, Show, Functor)
-
-instance HasInfo (DataCon i) i
-
-instance P.Pretty (DataCon a) where
-  pretty (DataCon _ c xs) = P.concatWith (<+>) (P.pretty <$> (c :<| xs))
-
-data ExprDecl a
-  = ExprDecl a (Name a) (Seq (Pattern a)) (Expr a)
-  deriving (Foldable, Show, Functor)
-
-instance HasInfo (ExprDecl i) i
-
-instance P.Pretty (ExprDecl a) where
-  pretty (ExprDecl _ n xs e) =
-    "let" <+> P.concatWith (<+>) (P.pretty n :<| (wrap <$> xs)) <+> "=" <+> P.pretty e
-    where
-      wrap p@(PData _ _ ps) | not (null ps) = P.parens $ P.pretty p
-      wrap p@(POr {}) = P.parens $ P.pretty p
-      wrap p = P.pretty p
-
-data Decl a
-  = DExpr (ExprDecl a)
-  | DData a (Name a) Bool (Seq (DataCon a))
-  deriving (Foldable, Show, Functor)
-
-instance HasInfo (Decl i) i
-
-instance P.Pretty (Decl a) where
-  pretty (DExpr e) = P.pretty e
-  pretty (DData _ c m (fmap P.pretty -> xs)) =
-    if null xs then d <+> P.pretty c else
-      d <+> P.pretty c <+> "="
-        <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
-    where
-      d = if m then "data#" else "data"
-
 data Alt a
   = Alt a (Pattern a) (Maybe (Pattern a, Expr a)) (Expr a)
   deriving (Foldable, Show, Functor)
@@ -303,6 +291,20 @@ instance P.Pretty (Alt a) where
       <+> P.braces (P.pretty p' <+> "<-" <+> P.pretty e')
       <+> "->"
       <+> P.pretty e
+
+data ExprDecl a
+  = ExprDecl a (Name a) (Seq (Pattern a)) (Expr a)
+  deriving (Foldable, Show, Functor)
+
+instance HasInfo (ExprDecl i) i
+
+instance P.Pretty (ExprDecl a) where
+  pretty (ExprDecl _ n xs e) =
+    "let" <+> P.concatWith (<+>) (P.pretty n :<| (wrap <$> xs)) <+> "=" <+> P.pretty e
+    where
+      wrap p@(PData _ _ ps) | not (null ps) = P.parens $ P.pretty p
+      wrap p@(POr {}) = P.parens $ P.pretty p
+      wrap p = P.pretty p
 
 data Expr a
   = EInt a Integer
@@ -331,6 +333,34 @@ instance P.Pretty (Expr a) where
         P.concatWith (<+>) (go True <$> xs)
       go False (ELet _ d e)  = P.pretty d <+> "in" <+> (go True e)
       go True x              = P.parens (go False x)
+
+data DataCon a
+ = DataCon a (Constructor a) (Seq (Type a))
+  deriving (Foldable, Show, Functor)
+
+instance HasInfo (DataCon i) i
+
+instance P.Pretty (DataCon a) where
+  pretty (DataCon _ c xs) = P.concatWith (<+>) (P.pretty c :<| (wrap <$> xs))
+    where
+      wrap x@(TyFun {}) = P.parens $ P.pretty x
+      wrap x = P.pretty x
+
+data Decl a
+  = DExpr (ExprDecl a)
+  | DData a Bool (Name a) (Seq (DataCon a))
+  deriving (Foldable, Show, Functor)
+
+instance HasInfo (Decl i) i
+
+instance P.Pretty (Decl a) where
+  pretty (DExpr e) = P.pretty e
+  pretty (DData _ m c (fmap P.pretty -> xs)) =
+    if null xs then d <+> P.pretty c else
+      d <+> P.pretty c <+> "="
+        <+> P.concatWith (\x y -> x <+> "|" <+> y) xs
+    where
+      d = if m then "data#" else "data"
 
 data Module = Module (Seq (Decl L.Range))
   deriving (Show)
