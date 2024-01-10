@@ -23,7 +23,7 @@ main = do
   let diagFile = addFile mempty file (BS.unpack input)
   handle (handleErr diagFile) do
     let ds = runAlex' file input parse
-    ds' <- runElab file (elaborate ds)
+    _ds' <- runElab file (elaborate ds)
     -- P.putDoc $ P.concatWith (\x y -> x <> P.line <> y) (P.pretty <$> ds')
     P.putDoc $ P.pretty ds
     System.putChar '\n'

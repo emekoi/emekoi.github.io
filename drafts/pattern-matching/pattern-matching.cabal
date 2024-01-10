@@ -39,6 +39,7 @@ common base
     , diagnose
     , data-default-class ^>= 0.1
     , microlens ^>= 0.4
+    , microlens-ghc ^>= 0.4
     , mtl ^>= 2.3
     , prettyprinter ^>= 1.7
     , text ^>= 2.1
@@ -56,6 +57,5 @@ executable pattern-matching
     Error
     Lexer
     Parser
-    Sema
     Elab
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -pgmL markdown-unlit
