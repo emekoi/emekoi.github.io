@@ -93,7 +93,7 @@ instance P.Pretty Type where
   pretty = go False
     where
       go _ (TyMeta i _)         = "?" <> P.pretty i
-      go _ (TyData (TypeId c))  = P.pretty c
+      go _ (TyData (TypeId c))  = case c.display of TrivialEq c -> P.pretty c
       go False (TyFun args ret) =
         P.concatWith (\x y -> x P.<+> "->" P.<+> y) (go True <$> args)
          P.<+> "->" P.<+> go False ret

@@ -53,12 +53,14 @@ import Prettyprinter              qualified as P
 %token
   variableT    { L.Token _ (L.Variable _) }
   constructorT { L.Token _ (L.Constructor _) }
+  magicT       { L.Token _ (L.Magic _) }
   intT         { L.Token _ (L.Int _) }
   stringT      { L.Token _ (L.String _) }
   dataT        { L.Token _ L.Data }
   inT          { L.Token _ L.In }
   letT         { L.Token _ L.Let }
   matchT       { L.Token _ L.Match }
+  primitiveT   { L.Token _ L.Primitive }
   '{'          { L.Token _ L.LBracket }
   '}'          { L.Token _ L.RBracket }
   '('          { L.Token _ L.LParen }
@@ -103,23 +105,33 @@ variable :: { Name L.Range }
 constructor :: { Name L.Range }
   : constructorT { unToken $1 \r (L.Constructor name) -> Name r (decodeUtf8 name) }
 
+magic :: { Name L.Range }
+  : magicT { unToken $1 \r (L.Magic name) -> Name r (decodeUtf8 name) }
+
 tyAtom :: { Type L.Range }
   : '(' type ')' { $2 }
   | constructor { TyData (range $1) $1 }
 
 type :: { Type L.Range }
-  : tyAtom                      { $1 }
-  | sepBy1(tyAtom, '->') tyAtom { TyFun (rangeSeq' $1 $2) $1 $2 }
+  : tyAtom                  { $1 }
+  | type '->' tyAtom        {
+      case $1 of
+        TyFun r args ret -> TyFun (r <-> $3) (args :|> ret) $3
+        _ -> TyFun ($1 <-> $3) (Seq.singleton $1) $3
+    }
+
+annot :: { Type L.Range }
+  : ':' type { $2 }
 
 pattern_1 :: { Pattern L.Range }
-  : '(' pattern_3 ')'          { $2 }
-  | '(' pattern_3 ':' type ')' { PType ($1 <-> $5) $2 $4 }
-  | '_'                        { unToken $1 \r _ -> PWild r }
-  | intT                       { unToken $1 \r (L.Int i) -> PInt r i }
-  | stringT                    { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
-  | variable                   { let (Name r _) = $1 in PAs r $1 (PWild r) }
-  | constructor                { PData (range $1) $1 Empty }
-  | variable '@' pattern_1     { PAs ($1 <-> $3) $1 $3  }
+  : '(' pattern_3 ')'       { $2 }
+  | '(' pattern_3 annot ')' { PType ($1 <-> $4) $2 $3 }
+  | '_'                     { unToken $1 \r _ -> PWild r }
+  | intT                    { unToken $1 \r (L.Int i) -> PInt r i }
+  | stringT                 { unToken $1 \r (L.String s) -> PString r (decodeUtf8 s) }
+  | variable                { let (Name r _) = $1 in PAs r $1 (PWild r) }
+  | constructor             { PData (range $1) $1 Empty }
+  | variable '@' pattern_1  { PAs ($1 <-> $3) $1 $3  }
 
 pattern_2 :: { Pattern L.Range }
   : pattern_1                   { $1 }
@@ -139,7 +151,7 @@ alt :: { Alt L.Range }
 
 atom :: { Expr L.Range }
   : variable     { EVar (range $1) $1 }
-  | variable '#' { EPrim ($1 <-> $2) $1 }
+  | magic        { EPrim (range $1) $1 }
   | intT         { unToken $1 \r (L.Int i) -> EInt r i }
   | stringT      { unToken $1 \r (L.String s) -> EString r (decodeUtf8 s) }
   | constructor  { EData (range $1) $1 }
@@ -157,17 +169,18 @@ dataCon :: { DataCon L.Range }
   : constructor many(tyAtom) { DataCon (rangeSeq $1 $2) $1 $2 }
 
 edecl :: { ExprDecl L.Range }
-  : variable many(pattern_1) '=' expr { ExprDecl ($1 <-> $4) $1 $2 $4 }
+  : variable many(pattern_1) optional(annot) '=' expr { ExprDecl ($1 <-> $5) $1 $3 $2 $5 }
 
 decl :: { Decl L.Range }
   : letT edecl                                               { DExpr $2 }
+  | primitiveT magic ':' type                                { DPrim ($1 <-> $4) $2 $4 }
   | dataT optionalB('#') constructor                         { DData ($1 <-> $3) $2 $3 Empty }
   | dataT optionalB('#') constructor '=' sepBy(dataCon, '|') { DData (rangeSeq $1 $5) $2 $3 $5 }
 
 decls :: { Module }
   : many(decl) { Module $1 }
 
-{ {-# LINE 171 "Parser.y" #-}
+{ {-# LINE 184 "Parser.y" #-}
 decodeUtf8 :: ByteString -> Text
 decodeUtf8 = LT.toStrict . LE.decodeUtf8
 
@@ -293,15 +306,16 @@ instance P.Pretty (Alt a) where
       <+> P.pretty e
 
 data ExprDecl a
-  = ExprDecl a (Name a) (Seq (Pattern a)) (Expr a)
+  = ExprDecl a (Name a) (Maybe (Type a)) (Seq (Pattern a)) (Expr a)
   deriving (Foldable, Show, Functor)
 
 instance HasInfo (ExprDecl i) i
 
 instance P.Pretty (ExprDecl a) where
-  pretty (ExprDecl _ n xs e) =
-    "let" <+> P.concatWith (<+>) (P.pretty n :<| (wrap <$> xs)) <+> "=" <+> P.pretty e
+  pretty (ExprDecl _ n t xs e) =
+    "let" <+> P.concatWith (<+>) (P.pretty n :<| (wrap <$> xs)) <+> eqT <+> P.pretty e
     where
+      eqT = case t of Nothing -> "="; Just t -> ":" <+> P.pretty t <+> "="
       wrap p@(PData _ _ ps) | not (null ps) = P.parens $ P.pretty p
       wrap p@(POr {}) = P.parens $ P.pretty p
       wrap p = P.pretty p
@@ -348,6 +362,7 @@ instance P.Pretty (DataCon a) where
 
 data Decl a
   = DExpr (ExprDecl a)
+  | DPrim a (Name a) (Type a)
   | DData a Bool (Name a) (Seq (DataCon a))
   deriving (Foldable, Show, Functor)
 
@@ -355,6 +370,7 @@ instance HasInfo (Decl i) i
 
 instance P.Pretty (Decl a) where
   pretty (DExpr e) = P.pretty e
+  pretty (DPrim _ p t) = "primitive" <+> "#" <> P.pretty p <+> ":" <+> P.pretty t
   pretty (DData _ m c (fmap P.pretty -> xs)) =
     if null xs then d <+> P.pretty c else
       d <+> P.pretty c <+> "="

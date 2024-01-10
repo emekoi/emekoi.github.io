@@ -41,13 +41,16 @@ tokens :-
 
 -- literals
 <0> "-"? $digit+ { tokInteger }
-<0> \"[^\"]*\"   { tokByteString String }
+<0>      \"       { begin string }
+<string> \"       { begin 0 }
+<string> [^\"]*   { tokByteString String }
 
 -- keywords
-<0> data  { tok Data }
-<0> in    { tok In }
-<0> let   { tok Let }
-<0> match { tok Match }
+<0> data      { tok Data }
+<0> in        { tok In }
+<0> let       { tok Let }
+<0> match     { tok Match }
+<0> primitive { tok Primitive }
 
 -- operators and symbols
 <0> "{"  { tok LBracket }
@@ -65,13 +68,16 @@ tokens :-
 <0> "_"  { tok Underscore }
 <0> "="  { tok Eq }
 <0> ":"  { tok Colon }
-<0> "#"  { tok Hash }
 
 -- variables and constructors
 <0> @variable     { tokByteString Variable }
 <0> @constructor  { tokByteString Constructor }
 
-{ {-# LINE 73 "Lexer.x" #-}
+-- hash and magic
+<0>     "#"        { begin magic }
+<magic> [^$white]* { tokByteString (\x -> if BS.null x then Hash else Magic x) `andBegin` 0 }
+
+{ {-# LINE 81 "Lexer.x" #-}
 -- -----------------------------------------------------------------------------
 -- The input type
 type AlexInput = (AlexPosn, -- current position,
@@ -287,6 +293,7 @@ data TokenClass
   = EOF
   | Constructor ByteString
   | Variable ByteString
+  | Magic ByteString
   -- literals
   | String ByteString
   | Int Integer
@@ -295,6 +302,7 @@ data TokenClass
   | In
   | Let
   | Match
+  | Primitive
   -- operators and symbols
   | LBracket
   | RBracket

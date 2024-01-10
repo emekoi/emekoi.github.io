@@ -5,7 +5,7 @@ module Error
     ( module Error
     , IsString (..)
     , Marker (..)
-    , Position (..)
+    , Position (Position)
     , Report (..)
     ) where
 
@@ -36,10 +36,9 @@ instance IsList ErrMsg where
   toList e           = [e]
 
 instance P.Pretty ErrMsg where
-  pretty (ErrText txt) = P.pretty txt
-  pretty (ErrList xs) = P.hsep $
-    P.pretty <$> xs
-  pretty (ErrShow s) = P.viaShow s
+  pretty (ErrText txt)   = P.pretty txt
+  pretty (ErrList xs)    = P.hsep $ P.pretty <$> xs
+  pretty (ErrShow s)     = P.viaShow s
   pretty (ErrPretty f p) = f $ P.pretty p
 
 newtype Error
@@ -54,7 +53,7 @@ pattern Err' :: msg -> [(Position, Marker msg)] -> Report msg
 pattern Err' msg xs = Err Nothing msg xs []
 
 throwError :: ErrMsg -> [(Position, Marker ErrMsg)] -> error
-throwError msg = throw . Error . (:[]) . Err' msg
+throwError msg = throw . Error . (: []) . Err' msg
 
 throwError' :: (MonadIO m) => ErrMsg -> [(Position, Marker ErrMsg)] -> m error
-throwError' msg = liftIO . throwIO . Error . (:[]) . Err' msg
+throwError' msg = liftIO . throwIO . Error . (: []) . Err' msg

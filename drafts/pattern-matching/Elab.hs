@@ -62,6 +62,7 @@ data ElabState = ElabState
   , typeInfo     :: IORef (IntMap TypeInfo)
   , dataCons     :: IORef (Map Text DataId)
   , dataConInfo  :: IORef (IntMap DataInfo)
+  , primitives   :: IORef (Map Text Type)
   , globalTerms  :: IORef (Map Text Var)
   , localTerms   :: Map Text Var
   , termLevel    :: Int
@@ -93,6 +94,7 @@ runElab :: FilePath -> Elab s -> IO s
 runElab fp (Elab s) = do
   ctx <- ElabState fp
     <$> newIORef 0
+    <*> newIORef mempty
     <*> newIORef mempty
     <*> newIORef mempty
     <*> newIORef mempty
@@ -633,8 +635,45 @@ tyInferExpr (P.EString _ s) k = do
   TLetV x (VString s) <$> apply k x
 tyInferExpr (P.EVar _ v) k = do
   lookupVar v >>= apply k
-tyInferExpr (P.EPrim {}) _ = error "type error"
-tyInferExpr (P.EApp _ (P.EPrim _ _) _) _ = error "TODO: prims"
+-- NOTE: i think disallowing bare primitives is fine, since they are not
+-- true functions.
+tyInferExpr (P.EPrim r p) k = do
+  ElabState{primitives} <- ask
+  t <- readIORef primitives >>= Map.lookup (P.getName p) >>> \case
+    Nothing -> do
+      throwElab
+        [ "unknown primitive", errQuote ("#" <> P.getName p) ]
+        [ (range p, This "used here") ]
+    Just t -> do
+      tyZonk t >>= \case
+        t@(TyFun {}) -> throwElab
+          ["cannot use primitive of type", errPretty t, "as a value"]
+          [(r, This "use primitive as value")]
+        t -> pure t
+  x <- freshLocal "p" t
+  TLetP x (PrimOp (P.getName p)) [] <$> apply k x
+tyInferExpr (P.EApp r (P.EPrim _ p) xs) k = do
+  ElabState{primitives} <- ask
+  (args, ret) <- readIORef primitives >>= Map.lookup (P.getName p) >>> \case
+    Nothing -> do
+      throwElab
+        [ "unknown primitive", errQuote ("#" <> P.getName p) ]
+        [ (range p, This "used here") ]
+    Just t -> do
+      tyZonk t >>= \case
+        TyFun args ret -> pure (args, ret)
+        t -> throwElab
+          ["cannot apply primitive of type", errPretty t]
+          [(r, This "attempted application")]
+  let
+    arity = length args
+    arity' = length xs
+  unless (arity == arity') $ throwElab
+    [ "primitive", errQuote ("#" <> P.getName p), "has arity", errPretty arity ]
+    [ (range  p, This ["applied to", errPretty arity', "arguments"]) ]
+  tyCheckExprAll xs args \xs -> do
+    x <- freshLocal "p" ret
+    TLetP x (PrimOp (P.getName p)) xs <$> apply k x
 tyInferExpr (P.EData r c) k = do
   cid <- findDataId c
   cinfo <- findDataInfo cid
@@ -685,20 +724,20 @@ tyInferExpr e@(P.EApp r f xs) k =
             kx <- k v
             k <- freshLabel "k" [ret]
             pure $ TLetK k [v] kx (TApp f k xs)
-tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) Empty e1) e2) k = do
+tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) t Empty e1) e2) k = do
   -- 1. create the join point j
   -- 2. lower e2 to the body of j and create a meta-continuation that
   -- creates a letk binding and for j and
   -- 3. lower e1 and check that it has the type that e2 expects
   -- 4. create the letk binding by applying k
-  t <- freshMeta
+  t <- maybe freshMeta tyCheckType t
   j <- freshLabel "j" [t]
   k <- bindVar t \v -> do
     local (\ctx -> ctx
       { localTerms = Map.insert x v ctx.localTerms
       }) $ TLetK j [v] <$> tyInferExpr e2 k
   k <$> tyCheckExpr e1 t (Abstract j)
-tyInferExpr (P.ELet _ (P.ExprDecl _ _f _ps _e1) _e2) _k = do
+tyInferExpr (P.ELet _ (P.ExprDecl _ _f _t _ps _e1) _e2) _k = do
   error "TODO"
 tyInferExpr (P.EMatch _ e alts) k = do
   tyInferExpr e $ Wrap \x -> do
@@ -729,12 +768,12 @@ tyInferExpr (P.EMatch _ e alts) k = do
          } :<| rows)
 
 tyInferExprDecl :: HasCallStack => P.ExprDecl Range -> Elab Decl
-tyInferExprDecl (P.ExprDecl _r (P.Name _ f) ps e) = do
+tyInferExprDecl (P.ExprDecl _r (P.Name _ f) t ps e) = do
   ts <- traverse (const freshMeta) ps
   bindPatterns ps ts \_ps _vs -> do
     liftIO $ putStr "\t" >> print _ps
     liftIO $ putStr "\t" >> print _vs
-    t <- freshMeta
+    t <- maybe freshMeta tyCheckType t
     k <- freshLabel "k" [t]
     f <- freshName (\x i -> Label (Global x i) ts) f
     -- TODO: how do i know if this is a value? probably some check of triviality
@@ -742,12 +781,24 @@ tyInferExprDecl (P.ExprDecl _r (P.Name _ f) ps e) = do
 
 elaborate :: HasCallStack => P.Module -> Elab ()
 elaborate (P.Module ds) = do
+  -- get the names of all data types
   forM_ ds \case
     P.DData _ m c _ -> do
       makeTypeId m c $> ()
     _ -> pure ()
+  ElabState{primitives} <- ask
   exprs <- (`witherM` ds) \case
     P.DData _ m c xs -> tyCheckDataDecl m c xs $> Nothing
+    P.DPrim _ (P.Name r n) t -> do
+      readIORef primitives >>= Map.lookup n >>> \case
+        Just _ -> do
+          throwElab
+            [ "redefinition of primitive", errQuote ("#" <> n) ]
+            [ (r, This "redefined here") ]
+        Nothing -> do
+          t <- tyCheckType t
+          modifyIORef primitives (Map.insert n t)
+      pure Nothing
     P.DExpr e -> pure (Just e)
 
 -- mapM_ tyCheckExprDecl exprs
