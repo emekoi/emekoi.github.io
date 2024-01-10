@@ -11,8 +11,8 @@
 
 module Elab
     ( Elab
-    , runElab
     , elaborate
+    , runElab
     ) where
 
 -- TODO: the continuations we generate for pattern matching have messed up
@@ -34,8 +34,6 @@ import Data.Functor
 import Data.Functor.Identity
 import Data.IntMap.Strict         (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
-import Data.IORef                 (IORef)
-import Data.IORef                 qualified as IORef
 import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
@@ -47,51 +45,15 @@ import Data.Set                   qualified as Set
 import Data.Text                  (Text)
 import Data.Traversable
 import Error
-import GHC.Exts                   (coerce, oneShot)
+import GHC.Exts                   (coerce)
 import GHC.Stack
 import Lens.Micro
 import Lens.Micro.GHC             ()
 import Parser                     qualified as P
 import Prettyprinter              qualified as Pretty
 import Prettyprinter.Render.Text  qualified as Pretty
+import Util
 import Witherable
-
-newtype RecFold a b
-  = MkRecFold { fold :: a -> (RecFold a b -> b) -> b }
-
-pattern RecFold :: (a -> (RecFold a b -> b) -> b) -> RecFold a b
-pattern RecFold f <- MkRecFold f
-  where RecFold f = MkRecFold (oneShot f)
-{-# COMPLETE RecFold #-}
-
-foldr2 :: (Foldable f, Foldable g) => (a -> b -> c -> c) -> c -> f a -> g b -> c
-foldr2 c i xs =
-  foldr f (const i) xs . RecFold . foldr g (\_ _ -> i) where
-    g e2 r2 e1 r1 = c e1 e2 (r1 (RecFold r2))
-    f e r (RecFold f) = f e r
-{-# INLINEABLE foldr2 #-}
-
-foldM2
-  :: (Monad m, Foldable f, Foldable g)
-  => (c -> a -> b -> m c) -> c -> f a -> g b -> m c
-foldM2 f z0 xs ys = foldr2 c return xs ys z0
-  where c x y k z = f z x y >>= k; {-# INLINE c #-}
-{-# INLINEABLE foldM2 #-}
-
-newIORef :: (MonadIO m) => x -> m (IORef x)
-newIORef = liftIO . IORef.newIORef
-
-readIORef :: (MonadIO m) => IORef x -> m x
-readIORef = liftIO . IORef.readIORef
-
-writeIORef :: (MonadIO m) => IORef x -> x -> m ()
-writeIORef r = liftIO . IORef.writeIORef r
-
--- modifyIORef' :: (MonadIO m) => IORef x -> (x -> x) -> m ()
--- modifyIORef' k = liftIO . IORef.modifyIORef k
-
-modifyIORef :: (MonadIO m) => IORef x -> (x -> x) -> m ()
-modifyIORef k = liftIO . IORef.modifyIORef' k
 
 data ElabState = ElabState
   { fileName     :: FilePath
@@ -164,45 +126,6 @@ freshLabel x args = freshName (\x i -> Label (Local x i) args) x
 
 freshGlobal :: Text -> Type -> Elab Var
 freshGlobal x t = freshName (\x i -> Var (Global x i) t) x
-
-tyUnify :: Type -> Type -> Elab Bool
-tyUnify ty ty' | ty == ty' = pure True
-tyUnify (TyMeta _ (Trivial ty)) ty' = do
-  readIORef ty >>= \case
-    Just ty -> tyUnify ty ty'
-    Nothing ->
-      -- TODO: occurs check
-      writeIORef ty (Just ty') $> True
-tyUnify ty ty'@(TyMeta {}) = tyUnify ty' ty
-tyUnify (TyFun xs x) (TyFun ys y) = do
-  fail <- tyUnify x y
-  go fail xs ys
-  where
-    go True (x :<| xs) (y :<| ys) = do
-      stop <- tyUnify x y
-      go stop xs ys
-    go r _ _ = pure r
-tyUnify _ _ = pure False
-
-tyForce :: Type -> Elab Type
-tyForce (TyMeta i (Trivial m)) = go i m
-  where
-    go i m = readIORef m >>= \case
-      Just (TyMeta i (Trivial m')) -> do
-        m' <- go i m'
-        writeIORef m (Just m')
-        pure m'
-      Just m -> pure m
-      _ -> pure (TyMeta i (Trivial m))
-tyForce t = pure t
-
-tyZonk :: Type -> Elab Type
-tyZonk t@(TyMeta _ (Trivial m)) =
-  readIORef m >>= \case
-    Just m -> tyZonk m
-    _ -> pure t
-tyZonk (TyFun a b)  = TyFun <$> traverse tyZonk a <*> tyZonk b
-tyZonk x            = pure x
 
 tyErrorExpect
   :: (HasRange r, Pretty.Pretty a2, Pretty.Pretty a3)

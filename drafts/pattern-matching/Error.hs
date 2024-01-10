@@ -1,11 +1,16 @@
 {-# LANGUAGE Rank2Types   #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Error (module Error, Position(..), Marker(..), IsString(..), Report(..)) where
+module Error
+    ( module Error
+    , IsString (..)
+    , Marker (..)
+    , Position (..)
+    , Report (..)
+    ) where
 
 import Control.Exception
 import Data.Text              (Text)
--- import Data.Text                 qualified as Text
 import Control.Monad.IO.Class
 import Error.Diagnose
 import GHC.Exts               (IsList (..), IsString (..))

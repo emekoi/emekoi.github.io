@@ -2,13 +2,19 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NoFieldSelectors      #-}
 
-module Core (module Core, module Export) where
+module Core
+    ( module Core
+    , module Export
+    ) where
 
-import Data.IORef    (IORef)
-import Data.Sequence (Seq (..))
-import Data.Text     (Text)
-import Parser        as Export (HasInfo (..), HasRange, Range (..), range)
-import Prettyprinter qualified as P
+import Control.Monad.IO.Class (MonadIO (..))
+import Data.Functor           (($>))
+import Data.Sequence          (Seq (..))
+import Data.Text              (Text)
+import Parser                 as Export (HasInfo (..), HasRange, Range (..),
+                                         range)
+import Prettyprinter          qualified as P
+import Util
 
 newtype TrivialEq r
   = TrivialEq r
@@ -79,6 +85,55 @@ data Type
   | TyMeta Int (Trivial (IORef (Maybe Type)))
   | TyData TypeId
   deriving (Eq, Ord, Show)
+
+instance P.Pretty Type where
+  pretty = go False
+    where
+      go _ (TyMeta i _)         = "?" <> P.pretty i
+      go _ (TyData (TypeId c))  = P.pretty c
+      go False (TyFun args ret) =
+        P.concatWith (\x y -> x P.<+> "->" P.<+> y) (go True <$> args)
+         P.<+> "->" P.<+> go False ret
+      go True x                = P.parens $ go False x
+
+tyUnify :: (MonadIO m) => Type -> Type -> m Bool
+tyUnify ty ty' | ty == ty' = pure True
+tyUnify (TyMeta _ (Trivial ty)) ty' = do
+  readIORef ty >>= \case
+    Just ty -> tyUnify ty ty'
+    Nothing ->
+      -- TODO: occurs check
+      writeIORef ty (Just ty') $> True
+tyUnify ty ty'@(TyMeta {}) = tyUnify ty' ty
+tyUnify (TyFun xs x) (TyFun ys y) = do
+  fail <- tyUnify x y
+  go fail xs ys
+  where
+    go True (x :<| xs) (y :<| ys) = do
+      stop <- tyUnify x y
+      go stop xs ys
+    go r _ _ = pure r
+tyUnify _ _ = pure False
+
+tyForce :: (MonadIO m) => Type -> m Type
+tyForce (TyMeta i (Trivial m)) = go i m
+  where
+    go i m = readIORef m >>= \case
+      Just (TyMeta i (Trivial m')) -> do
+        m' <- go i m'
+        writeIORef m (Just m')
+        pure m'
+      Just m -> pure m
+      _ -> pure (TyMeta i (Trivial m))
+tyForce t = pure t
+
+tyZonk :: (MonadIO m) => Type -> m Type
+tyZonk t@(TyMeta _ (Trivial m)) =
+  readIORef m >>= \case
+    Just m -> tyZonk m
+    _ -> pure t
+tyZonk (TyFun a b)  = TyFun <$> traverse tyZonk a <*> tyZonk b
+tyZonk x            = pure x
 
 newtype TypeId
   = TypeId Name
@@ -179,18 +234,9 @@ data Term where
   TError :: Text -> Term
   deriving (Eq, Show)
 
-data Decl where -- -- | top-level value declarations
+data Decl where -- | top-level value declarations
   -- DValue :: Var -> Value -> Decl
   -- | top-level term declarations
   DTerm :: Label -> Label -> Term -> Decl
   deriving (Eq, Show)
 
-instance P.Pretty Type where
-  pretty = go False
-    where
-      go _ (TyMeta i _)         = "?" <> P.pretty i
-      go _ (TyData (TypeId c))  = P.pretty c
-      go False (TyFun args ret) =
-        P.concatWith (\x y -> x P.<+> "->" P.<+> y) (go True <$> args)
-         P.<+> "->" P.<+> go False ret
-      go True x                = P.parens $ go False x
