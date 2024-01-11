@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wno-unused-top-binds   #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds -Wno-unused-imports   #-}
 {-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns             #-}
@@ -60,6 +60,7 @@ import Parser                     qualified as P
 import Prettyprinter              qualified as Pretty
 import Util
 import Witherable
+import Unsafe.Coerce
 
 data UsageInfo r = Usage
   { usageInfo :: IntMap (r, IntSet)
@@ -96,17 +97,16 @@ usageSCCs = gets \(Usage {..}) ->
   where go x (k, xs) r = (k, x, IntSet.toList xs) : r
 
 data ElabState = ElabState
-  { fileName     :: FilePath
-  , fresh        :: IORef Int
-  , types        :: IORef (Map Text TypeId)
-  , typeInfo     :: IORef (IntMap TypeInfo)
-  , dataCons     :: IORef (Map Text DataId)
-  , dataConInfo  :: IORef (IntMap DataInfo)
-  , primitives   :: IORef (Map Text Type)
-  , globalTerms  :: IORef (Map Text Var)
-  , localTerms   :: Map Text Var
-  , termLevel    :: Int
-  , patternLevel :: Int
+  { fileName    :: FilePath
+  , fresh       :: IORef Int
+  , types       :: IORef (Map Text TypeId)
+  , typeInfo    :: IORef (IntMap TypeInfo)
+  , dataCons    :: IORef (Map Text DataId)
+  , dataConInfo :: IORef (IntMap DataInfo)
+  , primitives  :: IORef (Map Text Type)
+  , globalTerms :: IORef (Map Text Var)
+  , localTerms  :: Map Text Var
+  , termLevel   :: Int
   }
 
 newtype Elab s
@@ -141,7 +141,6 @@ runElab fp (Elab s) = do
     <*> newIORef mempty
     <*> newIORef mempty
     <*> pure mempty
-    <*> pure 0
     <*> pure 0
   runReaderT s ctx
 
@@ -289,18 +288,52 @@ lookupVar (P.Name r v) = do
           throwElab "variable not in scope"
           [(r, This $ errPretty v)]
 
-bindVar :: Type -> (Var -> Elab r) -> Elab r
-bindVar t k = bindVars @Identity (coerce t) (k . coerce)
+-- bindVar :: Type -> Var
+-- bindVar = coerce . bindVars @Identity . coerce
 
-bindVars :: (Traversable t) => t Type -> (t Var -> Elab r) -> Elab r
+-- bindVar :: Type -> (Var -> Elab r) -> Elab r
+-- bindVar t k = bindVars @Identity (coerce t) (k . coerce)
+
+-- bindVars :: (Traversable t) => t Type -> t Var
+-- bindVars ts = flip evalState 0 $
+--   mapM (\t -> state \i -> (Var (Bound "x" i) t, i + 1)) ts
+
+-- bindVars :: (Traversable t) => t Type -> (t Var -> Elab r) -> Elab r
+-- bindVars ts k = do
+--   ElabState{termIndex} <- ask
+--   let
+--     (vs, termIndex') = flip runState termIndex $
+--       mapM (\t -> state \i -> (Var (Bound "x" i) t, i + 1)) ts
+--   local (\ctx -> ctx
+--     { termIndex = termIndex'
+--     }) (k vs)
+
+bindVar :: forall a r. (Maybe (P.Name a), Type) -> (Var -> Elab r) -> Elab r
+bindVar t k = bindVars @Identity @a (coerce t) (k . coerce)
+
+bindVars :: (Traversable t) => t (Maybe (P.Name a), Type) -> (t Var -> Elab r) -> Elab r
 bindVars ts k = do
-  ElabState{termLevel} <- ask
-  let
-    (vs, termLevel') = flip runState termLevel $
-      mapM (\t -> state \i -> (Var (Bound "x" i) t, i + 1)) ts
+  ElabState{termLevel,localTerms} <- ask
+  let ((level, localTerms'), vs) = mapAccumL (f termLevel) (0, localTerms) ts
   local (\ctx -> ctx
-    { termLevel = termLevel'
+    { termLevel = ctx.termLevel + level
+    , localTerms = localTerms'
     }) (k vs)
+  where
+    g m v x = maybe m (\(P.Name _ x) -> Map.insert x v m) x
+    f l (i, m) (x, t) =
+      ( (i + 1, g m (Var (Bound "x" $ l + i) t) x)
+      , Var (Bound "x" i) t
+      )
+
+-- bindVars :: (Traversable t) => t Type -> (t Var -> Elab r) -> Elab r
+-- bindVars ts k =
+--   let
+--     vs = flip evalState 0 $
+--       mapM (\t -> state \i -> (Var (Bound "x" i) t, i + 1)) ts
+--   in local (\ctx -> ctx
+--     { termIndex = ctx.termIndex + length ts
+--     }) (k vs)
 
 data Level
   = Low
@@ -314,11 +347,11 @@ fromSeq Empty      = error "empty Seq"
 fromSeq (x :<| xs) = NESeq x xs
 
 data Pattern l where
-  PWild :: Var -> Maybe (Pattern 'Low) -> Pattern 'High
+  PWild :: Either Type (Text, Pattern 'Low) -> Pattern 'High
   PInt :: Integer -> Pattern l
   PString :: Text -> Pattern l
   PData :: DataId -> Seq (Pattern 'High) -> Pattern l
-  POr :: NESeq (Pattern 'Low) -> Maybe (Pattern 'High) -> Pattern l
+  POr :: NESeq (Pattern 'Low) -> Maybe (Pattern 'High) -> Pattern 'High
 
 deriving instance Show (Pattern l)
 deriving instance Eq (Pattern l)
@@ -328,11 +361,12 @@ lowerPat :: Pattern l -> Maybe (Pattern 'Low)
 lowerPat (PInt i)     = Just $ PInt i
 lowerPat (PString i)  = Just $ PString i
 lowerPat (PData c ps) = Just $ PData c ps
-lowerPat (POr qs p)   = Just $ POr qs p
 lowerPat _            = Nothing
 
+raisePat :: Pattern l -> Pattern 'High
+raisePat p = unsafeCoerce p
+
 patternTypeInfo :: Pattern 'Low -> Elab TypeInfo
--- patternTypeInfo (PWild (Var _ t) _) = t
 patternTypeInfo (PInt _) = makeTypeId True (P.Name () "Int")
   >>= findTypeInfo
 patternTypeInfo (PString _) = makeTypeId True (P.Name () "String")
@@ -340,19 +374,25 @@ patternTypeInfo (PString _) = makeTypeId True (P.Name () "String")
 patternTypeInfo (PData did _) = do
   dinfo <- findDataInfo did
   findTypeInfo dinfo.typeOf
-patternTypeInfo (POr (NESeq p _) _) = patternTypeInfo p
 
 data MatchRow = Row
   { cols  :: Map Var (Pattern 'Low)
   , guard :: Maybe (P.Expr Range, Pattern 'Low)
+  -- , vars  :: Map Text Var
   , body  :: Term
   }
 
 rColsL :: Lens' MatchRow (Map Var (Pattern 'Low))
 rColsL f x = (\x' -> x {cols = x'}) <$> f x.cols
 
+-- rVarsL :: Lens' MatchRow (Map Text Var)
+-- rVarsL f x = (\x' -> x {vars = x'}) <$> f x.vars
+
 rowMatchVar :: Var -> Pattern 'Low -> MatchRow -> MatchRow
 rowMatchVar x p = rColsL %~ Map.insert x p
+
+-- rowBindVar :: Text -> Var -> MatchRow -> MatchRow
+-- rowBindVar x v = rVarsL %~ Map.insert x v
 
 newtype PatternMatrix
   = Matrix { rows :: Seq MatchRow }
@@ -371,48 +411,32 @@ handlePattern var pat row f =
 rowDefault :: Var -> PatternMatrix -> PatternMatrix
 rowDefault var mat = mat { rows = foldl' f Empty mat.rows }
   where
-    hasWildCard :: Pattern l -> Bool
-    hasWildCard (PWild {})        = True
-    hasWildCard (POr _ (Just p )) = hasWildCard p
-    hasWildCard _                 = False
-
     f acc row = case Map.lookup var row.cols of
       -- add the row as is since its a wildcard
       Nothing                               -> acc :|> row
-      -- we only need to look at the last pattern to decide
-      -- whether we should add an or pattern row
-      Just (POr _ (Just p)) | hasWildCard p ->
-        -- we delete var since this is a wildcard row now
-        acc :|> (row & rColsL %~ Map.delete var)
       -- delete every other row
       Just _                                -> acc
 
 rowSpecialize :: Var -> AltCon -> PatternMatrix -> PatternMatrix
 rowSpecialize var alt mat = mat { rows = foldl' (f alt) Empty mat.rows }
   where
-    f alt acc row = f1 alt row acc (Map.lookup var row.cols)
-
-    -- since the constrcutors don't match delete the row
-    f1 _ row acc  Nothing   = acc :|> row
-    f1 alt row acc (Just p) = f2 alt row acc p
+    f alt acc row =
+      case Map.lookup var row.cols of
+        Nothing -> acc :|> row
+        Just p -> g alt row acc p
 
     -- delete the column since there are no sub patterns
-    f2 (AltInt i) row acc (PInt i') | i == i' =
+    g (VInt i) row acc (PInt i') | i == i' =
       acc :|> (row & rColsL %~ Map.delete var)
     -- delete the column since there are no sub patterns
-    f2 (AltString s) row acc (PString s') | s == s' =
+    g (VString s) row acc (PString s') | s == s' =
       acc :|> (row & rColsL %~ Map.delete var)
     -- otherwise replace the column with its sub patterns
-    f2 (AltData con (TrivialEq vars)) row acc (PData con' ps) | con == con' =
+    g (VData con vars) row acc (PData con' ps) | con == con' =
       let g row i p = handlePattern (vars `Seq.index` i) p row id in
         (acc :|>) $ Seq.foldlWithIndex g(row & rColsL %~ Map.delete var) ps
-    -- if any alternatives match then add the row
-    f2 alt row acc (POr qs p) =
-      case p >>= lowerPat of
-        -- the last pattern is a wildcard
-        Nothing -> acc :|> (row & rColsL %~ Map.delete var)
-        Just p  ->  foldl' (f2 alt row) (f2 alt row acc p) qs
-    f2 _ _ acc _ = acc
+    -- since the constrcutors don't match delete the row
+    g _ _ acc _ = acc
 
 -- NOTE: partial Map.!, foldl1
 columnPick :: PatternMatrix -> Elab (Var, TypeInfo)
@@ -425,8 +449,8 @@ columnPick (Matrix rows@(row :<| _)) =
     findMax a b
       | snd b > snd a = b
       | otherwise     = a
-    mkMap acc (Row m _ _) =
-      Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc m
+    mkMap acc r =
+      Map.foldlWithKey' (\acc k _ -> Map.insertWith (+) k 1 acc) acc r.cols
 
 matchComplete :: TypeInfo -> Set a -> Bool
 matchComplete (TypeInfo{span}) cons = Just (length cons) == span
@@ -435,8 +459,66 @@ mapFoldlM :: (acc -> k -> v -> Elab acc) -> acc -> Map k v -> Elab acc
 mapFoldlM f z0 xs = Map.foldrWithKey c return xs z0
   where c x y k z = f z x y >>= k; {-# INLINE c #-}
 
+-- matchCompile :: PatternMatrix -> Elab Term
+-- matchCompile (Matrix Empty) = do
+--   t <- tyString
+--   x <- freshLocal "s" t
+--   pure $ TLetV x (VString "in-exhaustive match") (TError x)
+-- matchCompile (Matrix (Row col Nothing body :<| _))
+--   | null col = pure body
+-- -- matchCompile k (Matrix (row@(Row col (Just (v, p)) _ _) :<| rs) pick)
+-- --   | null col =
+-- --     let row' = rowMatchVar v p row { guard = Nothing } in
+-- --       matchCompile k (Matrix (row' :<| rs) pick)
+-- matchCompile mat@(Matrix rows) = do
+--   -- pick a variable to scrutinize
+--   (var, tinfo) <- columnPick mat
+--   -- collect the heads of constructors tested against var
+--   -- then compile the subtrees and combine them into a switch
+--   (def, cons, cases) <- foldM (goRow var) (Nothing, mempty, Empty) rows
+--   case def of
+--     Just {} ->
+--       pure $ TMatch var cases def
+--     Nothing | matchComplete tinfo cons ->
+--       pure $ TMatch var cases Nothing
+--     Nothing ->
+--       TMatch var cases . Just
+--         <$> defaultCase var
+--   where
+--     defaultCase v = matchCompile (rowDefault v mat)
+
+--     -- filter out repeated test against constructors
+--     specialize v acc@(d, cs, ms) c = do
+--       if Set.notMember c cs then do
+--         let body = rowSpecialize v c mat
+--         m <- Alt c <$> matchCompile body
+--         pure (d, Set.insert c cs, ms :|> m)
+--       else pure acc
+
+--     -- for each constructor, specialize the pattern matrix
+--     goHead _ acc@(Just {}, _, _) _ = pure acc
+--     goHead v acc (PInt i)          = specialize v acc (VInt i)
+--     goHead v acc (PString s)       = specialize v acc (VString s)
+--     goHead v acc (PData c vs)      = do
+--       ElabState{localTerms} <- ask
+--       cinfo <- findDataInfo c
+--       ((_, localTerms'), vs) <- mapAccumM f
+--         (length vs - 1, localTerms)
+--         (mzip vs cinfo.fields)
+--       local (\ctx -> ctx
+--         { termLevel = ctx.termLevel + length vs
+--         , localTerms = localTerms'
+--         }) $ specialize v acc (VData c vs)
+--       where
+--         f (i, m :: Map Text Var) (PWild (Right (x, p)), t) = do
+--           liftIO $ print m
+--           f (i,  Map.insert x (Var (Bound "x" i) t) m) (raisePat p, t)
+--         f (i, m) (_, t) = pure ((i - 1, m), Var (Bound "x" i) t)
+
+--     goRow _  acc@(Just {}, _, _) _ = pure acc
+--     goRow v acc r                  = maybe (pure acc) (goHead v acc) (Map.lookup v r.cols)
+
 matchCompile :: PatternMatrix -> Elab Term
--- matchCompile = matchCompile
 matchCompile (Matrix Empty) = do
   t <- tyString
   x <- freshLocal "s" t
@@ -447,13 +529,13 @@ matchCompile (Matrix (Row col Nothing body :<| _))
 --   | null col =
 --     let row' = rowMatchVar v p row { guard = Nothing } in
 --       matchCompile k (Matrix (row' :<| rs) pick)
-matchCompile mat@(Matrix rows) = do
+matchCompile mat@(Matrix rows) = mdo
   -- pick a variable to scrutinize
   (var, tinfo) <- columnPick mat
   -- collect the heads of constructors tested against var
   -- then compile the subtrees and combine them into a switch
-  (def, cons, cases) <- foldM (goRow var) (Nothing, mempty, Empty) rows
-  case def of
+  (def, cons, cases, match) <- foldM (goRow var) (Nothing, mempty, Empty, body) rows
+  body <- case def of
     Just {} ->
       pure $ TMatch var cases def
     Nothing | matchComplete tinfo cons ->
@@ -461,46 +543,46 @@ matchCompile mat@(Matrix rows) = do
     Nothing ->
       TMatch var cases . Just
         <$> defaultCase var
+  pure match
   where
     defaultCase v = matchCompile (rowDefault v mat)
 
     -- filter out repeated test against constructors
-    specialize v acc@(d, cs, ms) c = do
+    specialize v@(Var _ t) acc@(d, cs, ms, body) c = do
       if Set.notMember c cs then do
-        let body = rowSpecialize v c mat
-        m <- Alt c <$> matchCompile body
-        pure (d, Set.insert c cs, ms :|> m)
-      else pure @Elab acc
+        let mat' = rowSpecialize v c mat
+        j <- freshLabel "j" [t]
+        (vs, e) <- bindVar (Nothing, t) \v ->
+          ([v],) <$> matchCompile mat'
+        pure ( d
+             , Set.insert c cs
+             , ms :|> Alt c (TJmp j [v])
+             , TLetK j vs e body
+             )
+      else pure acc
 
     -- for each constructor, specialize the pattern matrix
-    goHead _ acc@(Just {}, _, _) _ = pure acc
-    goHead v acc (POr qs p)        = do
-      acc <- foldM (goHead v) acc qs
-      case p >>= lowerPat of
-        -- compile the generalized pattern
-        Just q -> goHead v acc q
-        -- compile a default case
-        Nothing -> do
-          d <- defaultCase v
-          pure $ (_1 ?~ d) acc
-
-    goHead v acc (PInt i)          = specialize v acc (AltInt i)
-    goHead v acc (PString s)       = specialize v acc (AltString s)
-    goHead v acc (PData c vs)       = do
-      ElabState{termLevel} <- ask
+    goHead _ acc@(Just {}, _, _, _) _ = pure acc
+    goHead v acc (PInt i)             = specialize v acc (VInt i)
+    goHead v acc (PString s)          = specialize v acc (VString s)
+    goHead v acc (PData c vs)         = do
+      ElabState{localTerms} <- ask
       cinfo <- findDataInfo c
-      (termLevel', vs) <- mapAccumM' termLevel (mzip vs cinfo.fields) $ \i (p, t) ->
-        case p of
-          PWild v _ -> pure (i, v)
-          _         -> pure (i + 1, Var (Bound "x" i) t)
+      ((_, localTerms'), vs) <- mapAccumM f
+        (length vs - 1, localTerms)
+        (mzip vs cinfo.fields)
       local (\ctx -> ctx
-        { termLevel = termLevel'
-        }) $ specialize v acc (AltData c (TrivialEq vs))
+        { termLevel = ctx.termLevel + length vs
+        , localTerms = localTerms'
+        }) $ specialize v acc (VData c vs)
+      where
+        f (i, m :: Map Text Var) (PWild (Right (x, p)), t) = do
+          liftIO $ print m
+          f (i,  Map.insert x (Var (Bound "x" i) t) m) (raisePat p, t)
+        f (i, m) (_, t) = pure ((i - 1, m), Var (Bound "x" i) t)
 
-    mapAccumM' a b c = mapAccumM c a b
-
-    goRow _  acc@(Just {}, _, _) _ = pure acc
-    goRow v acc r                  = maybe (pure acc) (goHead v acc) (Map.lookup v r.cols)
+    goRow _  acc@(Just {}, _, _, _) _ = pure acc
+    goRow v acc r                     = maybe (pure acc) (goHead v acc) (Map.lookup v r.cols)
 
 localState :: (Applicative m) => (s -> s) -> StateT s m a -> StateT s m a
 localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
@@ -508,33 +590,149 @@ localState f (StateT k) = StateT \s -> k (f s) <&> _2 .~ s
 localState' :: (Applicative m) => StateT s m a -> StateT s m a
 localState' = localState id
 
-bindPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Seq Var -> Elab r) -> Elab r
-bindPattern p t k = bindPatterns @Identity (coerce p) (coerce t) (k . coerce)
+-- bindPattern :: P.Pattern Range -> Type -> (Pattern 'High -> Var -> Elab r) -> Elab r
+-- bindPattern p t k = bindPatterns @Identity (coerce p) (coerce t) (\a b -> k (coerce a) (coerce b))
 
 -- NOTE: we need to provide some way to get variables bound to a pattern or
 -- generate a fresh binding
 -- NOTE: can we iterate through the data patterns, use the wildcards as we see
 -- them and generate fresh names otherwise
-bindPatterns
-  :: (Traversable t, MonadZip t)
-  => t (P.Pattern Range)
-  -> t Type
-  -> (t (Pattern 'High) -> Seq Var -> Elab r)
-  -> Elab r
-bindPatterns ps ts k = do
-  ElabState{termLevel,localTerms} <- ask
-  (ps, (fmap fst -> bound, termLevel')) <- flip runStateT (mempty, termLevel) $
-    sequence $ mzipWith tyCheckPat ps ts
-  local (\ctx -> ctx
-    { termLevel = termLevel'
-    , localTerms = bound <> localTerms
-    }) (k ps $ Seq.fromList . List.sort $ Map.elems bound)
-  where
-    nextVar t = StateT \(m, i) ->
-      pure (Var (Bound "x" i) t, (m, i + 1))
+-- bindPatterns
+--   :: (Traversable t, MonadZip t)
+--   => t (P.Pattern Range)
+--   -> t Type
+--   -> (t (Pattern 'High) -> t Var -> Elab r)
+--   -> Elab r
+-- bindPatterns ps ts k = do
+--   ElabState{localTerms} <- ask
+--   let (level, vs) = mapAccumL (\i t -> (i + 1, Var (Bound "x" i) t)) 0 ts
+--   (ps, (fmap fst -> bound, _)) <- flip runStateT (mempty, length ps - 1) $
+--     sequence $ mzipWith tyCheckPatStep ps ts
+--   local (\ctx -> ctx
+--     { termLevel = ctx.termLevel + level
+--     , localTerms = bound <> localTerms
+--     }) (k ps vs)
+--   where
+--     -- nextVar t = StateT \(m, i) ->
+--     --   pure (Var (Bound "x" i) t, (m, i + 1))
 
-    bindVar (P.Name r n) v = StateT \(m, i) ->
-      pure ((), (Map.insert n (v, r) m, i))
+--     bindVar (P.Name r n) t = StateT \(m, i) ->
+--       pure ((), (Map.insert n (Var (Bound "x" i) t, r) m, i))
+
+--     tyCheckPatStep p t = do
+--       p <- tyCheckPat p t
+--       StateT \(m, i) -> pure ((), (m, i - 1))
+--       pure p
+
+--     tyCheckPat p t = do
+--       (p', t') <- tyInferPat p
+--       lift $ tyUnify t t' >>= flip unless
+--         (tyErrorExpect "pattern" t t' (range p))
+--       pure p'
+
+--     tyInferPat (P.PInt _ i)    = do
+--       (PInt i,) <$> lift tyInt
+--     tyInferPat (P.PString _ s) = do
+--       (PString s,) <$> lift tyString
+--     tyInferPat (P.PWild _)     = do
+--       t <- lift freshMeta
+--       pure (PWild (Left t), t)
+--     tyInferPat (P.PAs _ n p)   = do
+--       m <- gets fst
+--       case Map.lookup (P.getName n) m of
+--         Nothing -> do
+--           t <- lift freshMeta
+--           bindVar n t
+--           lowerPat <$> tyCheckPat p t >>= \case
+--             Nothing -> pure (PWild (Left t), t)
+--             Just p -> pure (PWild (Right (P.getName n, p)), t)
+--         Just (_, r') -> lift $ throwElab
+--           [ "non-linear occurence of variable", errPretty n ]
+--           [ (r', This "first defined here"), (P.range n, This "redefined here") ]
+--     tyInferPat (P.PType _ p t) = do
+--       t <- lift (tyCheckType t)
+--       (,t) <$> tyCheckPat p t
+--     tyInferPat (P.PData r c ps) = do
+--       cid <- lift $ findDataId c
+--       cinfo <- lift $ findDataInfo cid
+--       let
+--         arity = length cinfo.fields
+--         arity' = length ps
+--       unless (arity == arity') $ lift $ throwElab
+--         [ "constructor", errQuote c, "has arity", errPretty arity ]
+--         [ (r, This ["used with arity", errPretty arity']) ]
+--       ps <- localState' $ sequence $ Seq.zipWith tyCheckPat ps cinfo.fields
+--       pure (PData cid ps, TyData cinfo.typeOf)
+--     -- tyInferPat (P.POr _ p ps)  = do
+--     --   (p', t, m') <- localState' do
+--     --     (p', t) <- tyInferPat p
+--     --     m <- gets fst
+--     --     pure (p', t, m)
+--     --   case lowerPat p' of
+--     --     Nothing -> pure (p', t)
+--     --     Just p' -> do
+--     --       (om, ol) <- tyCheckOrPat (range p) m' t ([p'], Nothing) ps
+--     --       pure (POr (fromSeq om) ol, t)
+
+--     -- tyCheckOrPat _ _ _ acc Empty                    = pure acc
+--     -- -- tyCheckOrPat _ _ _ acc@(_, Just _) _            = pure acc
+--     -- tyCheckOrPat r m' t acc (P.POr r' p ps :<| ps') = do
+--     --   acc@(_, ol) <- tyCheckOrPat r m' t acc (p :<| ps)
+--     --   if isJust ol then pure acc else
+--     --     tyCheckOrPat r' m' t acc ps'
+--     -- tyCheckOrPat r m' t (om, ol) (p :<| ps) = do
+--     --   (p', m'') <- localState' do
+--     --     (,) <$> tyCheckPat p t <*> gets fst
+
+--     --   -- TODO: better error messages
+--     --   unless (m' == m'') $
+--     --     -- NOTE: this is safe since m' and m'' cannot both be empty.
+--     --     if length m' > length m'' then do
+--     --       let n = Set.findMin (Map.keysSet m' Set.\\ Map.keysSet m'')
+--     --       lift $ throwElab
+--     --         [ "missing occurence of variable", errPretty n, "in or pattern" ]
+--     --         [ (snd $ m' Map.! n, This "first defined here")
+--     --         , (range p, This "missing in this alternative")
+--     --         ]
+--     --     else do
+--     --       let n = Set.findMin (Map.keysSet m'' Set.\\ Map.keysSet m')
+--     --       lift $ throwElab
+--     --         [ "missing occurence of variable", errPretty n, "in or pattern" ]
+--     --         [ (snd $ m'' Map.! n, This "first defined here")
+--     --         , (r, This "missing in this alternative")
+--     --         ]
+--     --   case lowerPat p' of
+--     --     Nothing -> pure (om, Just p')
+--     --     Just p' -> tyCheckOrPat (range p) m' t (om :|> p', ol) ps
+
+bindPattern
+  :: P.Pattern Range
+  -> Var
+  -> (Map Var (Pattern 'Low) -> Seq Var -> Elab r)
+  -> Elab r
+bindPattern p v@(Var _ t) k = do
+  -- let (level, vs) = mapAccumL (\i t -> (i + 1, Var (Bound "x" i) t)) 0 ts
+  (p, (fmap fst -> bound, _)) <- flip runStateT (mempty, 0) $ tyCheckPat p t
+  cols <- bindRow False v p mempty
+  -- liftIO $ print (v, p, bound)
+  local (\ctx -> ctx
+    { termLevel = length cols + ctx.termLevel
+    , localTerms = bound <> ctx.localTerms
+    }) (k cols mempty)
+  where
+    -- bindRow Nothing _ m = m
+    -- bindRow (Just v) p m =
+    bindRow False _ (PData cid ps) m = do
+      cinfo <- findDataInfo cid
+      let (_, vs) = mapAccumL (\i t -> (i + 1, Var (Bound "x" i) t)) 0 cinfo.fields
+      foldM (\acc (v, p) -> bindRow True v p acc) m (mzip vs ps)
+    bindRow _ v p m =
+      case lowerPat p of
+        Just p' -> pure $ Map.insert v p' m
+        Nothing -> pure m
+
+    bindVar (P.Name r n) t = StateT \(m, i) ->
+      pure ((), (Map.insert n (Var (Bound "x" i) t, r) m, i))
 
     tyCheckPat p t = do
       (p', t') <- tyInferPat p
@@ -548,19 +746,16 @@ bindPatterns ps ts k = do
       (PString s,) <$> lift tyString
     tyInferPat (P.PWild _)     = do
       t <- lift freshMeta
-      v <- nextVar t
-      pure (PWild v Nothing, t)
+      pure (PWild (Left t), t)
     tyInferPat (P.PAs _ n p)   = do
-      m <- gets fst
+      m <- gets (^. _1)
       case Map.lookup (P.getName n) m of
         Nothing -> do
           t <- lift freshMeta
-          v <- nextVar t
-          bindVar n v
-          tyCheckPat p t >>= \case
-            p'@(PWild v _) -> bindVar n v $> (p', t)
-            p'             -> pure (PWild v (lowerPat p'), t)
-
+          bindVar n t
+          lowerPat <$> tyCheckPat p t >>= \case
+            Nothing -> pure (PWild (Left t), t)
+            Just p -> pure (PWild (Right (P.getName n, p)), t)
         Just (_, r') -> lift $ throwElab
           [ "non-linear occurence of variable", errPretty n ]
           [ (r', This "first defined here"), (P.range n, This "redefined here") ]
@@ -578,47 +773,6 @@ bindPatterns ps ts k = do
         [ (r, This ["used with arity", errPretty arity']) ]
       ps <- sequence $ Seq.zipWith tyCheckPat ps cinfo.fields
       pure (PData cid ps, TyData cinfo.typeOf)
-    tyInferPat (P.POr _ p ps)  = do
-      (p', t, m') <- localState' do
-        (p', t) <- tyInferPat p
-        m <- gets fst
-        pure (p', t, m)
-      case lowerPat p' of
-        Nothing -> pure (p', t)
-        Just p' -> do
-          (om, ol) <- tyCheckOrPat (range p) m' t ([p'], Nothing) ps
-          pure (POr (fromSeq om) ol, t)
-
-    tyCheckOrPat _ _ _ acc Empty                    = pure acc
-    -- tyCheckOrPat _ _ _ acc@(_, Just _) _            = pure acc
-    tyCheckOrPat r m' t acc (P.POr r' p ps :<| ps') = do
-      acc@(_, ol) <- tyCheckOrPat r m' t acc (p :<| ps)
-      if isJust ol then pure acc else
-        tyCheckOrPat r' m' t acc ps'
-    tyCheckOrPat r m' t (om, ol) (p :<| ps) = do
-      (p', m'') <- localState' do
-        (,) <$> tyCheckPat p t <*> gets fst
-
-      -- TODO: better error messages
-      unless (m' == m'') $
-        -- NOTE: this is safe since m' and m'' cannot both be empty.
-        if length m' > length m'' then do
-          let n = Set.findMin (Map.keysSet m' Set.\\ Map.keysSet m'')
-          lift $ throwElab
-            [ "missing occurence of variable", errPretty n, "in or pattern" ]
-            [ (snd $ m' Map.! n, This "first defined here")
-            , (range p, This "missing in this alternative")
-            ]
-        else do
-          let n = Set.findMin (Map.keysSet m'' Set.\\ Map.keysSet m')
-          lift $ throwElab
-            [ "missing occurence of variable", errPretty n, "in or pattern" ]
-            [ (snd $ m'' Map.! n, This "first defined here")
-            , (r, This "missing in this alternative")
-            ]
-      case lowerPat p' of
-        Nothing -> pure (om, Just p')
-        Just p' -> tyCheckOrPat (range p) m' t (om :|> p', ol) ps
 
 data Cont where
   Abstract :: Label -> Cont
@@ -662,7 +816,10 @@ tyInferExpr (P.EString _ s) k = do
   x <- freshLocal "s" t
   TLetV x (VString s) <$> apply k x
 tyInferExpr (P.EVar _ v) k = do
-  lookupVar v >>= apply k
+  ElabState{termLevel} <- ask
+  lookupVar v >>= \case
+    Var (Bound x l)  t -> apply k (Var (Bound x (termLevel - l - 1)) t)
+    v -> apply k v
 -- NOTE: i think disallowing bare primitives is fine, since they are not
 -- true functions.
 tyInferExpr (P.EPrim r p) k = do
@@ -748,62 +905,55 @@ tyInferExpr e@(P.EApp r f xs) k =
           pure $ TApp f k xs
         Abstract _ -> contArityError
         Wrap k     -> do
-          bindVar ret \v -> do
-            kx <- k v
-            k <- freshLabel "k" [ret]
-            pure $ TLetK k [v] kx (TApp f k xs)
-tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ x) t Empty e1) e2) k = do
-  -- 1. create the join point j
-  -- 2. lower e2 to the body of j and create a meta-continuation that
-  -- creates a letk binding and for j and
-  -- 3. lower e1 and check that it has the type that e2 expects
-  -- 4. create the letk binding by applying k
+          (vs, kx) <- bindVar (Nothing, ret) \v -> ([v],) <$> k v
+          k <- freshLabel "k" [ret]
+          pure $ TLetK k vs kx (TApp f k xs)
+tyInferExpr (P.ELet _ (P.ExprDecl _ x t Empty e1) e2) k = do
   t <- maybe freshMeta tyCheckType t
   j <- freshLabel "j" [t]
-  e2K <- bindVar t \v -> do
-    local (\ctx -> ctx
-      { localTerms = Map.insert x v ctx.localTerms
-      }) $ TLetK j [v] <$> tyInferExpr e2 k
-  e2K <$> tyCheckExpr e1 t (Abstract j)
-tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ f) t ps e1) e2) k = do
-  t <- maybe freshMeta tyCheckType t
-  ts <- traverse (const freshMeta) ps
-  f' <- freshLocal f (TyFun ts t)
-  -- TODO: audit this use of bind patterns
-  e1K <- bindPatterns ps ts \_ps vs -> do
-    -- HACK: i don't think we are binding the right parameters for k
-    k <- freshLabel "k" [t]
-    TLetF f' k vs <$> tyCheckExpr e1 t (Abstract k)
-  local (\ctx -> ctx
-      { localTerms = Map.insert f f' ctx.localTerms
-      }) $ e1K <$> tyInferExpr e2 k
-tyInferExpr (P.EMatch _ e alts) k = do
-  tyInferExpr e $ Wrap \x -> do
-    case k of
-      Abstract (Label _ [t]) -> mkMatrix x t k
-      Abstract _ -> contArityError
-      Wrap k     -> do
-        t <- freshMeta
-        kx <- bindVar t k
-        k <- freshLabel "k" [t]
-        TLetK k [x] kx <$>
-          mkMatrix x t (Abstract k)
-  where
-    mkMatrix x t k = mdo
-      -- NOTE: mkRow never evalutates `body`
-      (letKs, Matrix -> m) <- foldM (mkRow x t k) (body, Empty) alts
-      body <- matchCompile m
-      pure letKs
+  (vs, e2) <- bindVar (Just x, t) \v ->
+    ([v],) <$> tyInferExpr e2 k
+  TLetK j vs e2 <$> tyCheckExpr e1 t (Abstract j)
+-- tyInferExpr (P.ELet _ (P.ExprDecl _ (P.Name _ f) t ps e1) e2) k = do
+--   t <- maybe freshMeta tyCheckType t
+--   ts <- traverse (const freshMeta) ps
+--   f' <- freshLocal f (TyFun ts t)
+--   -- TODO: audit this use of bind patterns
+--   e1K <- bindPatterns ps ts \_ps vs -> do
+--     -- HACK: i don't think we are binding the right parameters for k
+--     k <- freshLabel "k" [t]
+--     TLetF f' k vs <$> tyCheckExpr e1 t (Abstract k)
+--   local (\ctx -> ctx
+--       { localTerms = Map.insert f f' ctx.localTerms
+--       }) $ e1K <$> tyInferExpr e2 k
+-- tyInferExpr (P.EMatch _ e alts) k = do
+--   tyInferExpr e $ Wrap \x -> do
+--     case k of
+--       Abstract (Label _ [t]) -> mkMatrix x t k
+--       Abstract _ -> contArityError
+--       Wrap k     -> do
+--         t <- freshMeta
+--         kx <- bindVar (Nothing, t) k
+--         k <- freshLabel "k" [t]
+--         TLetK k [x] kx <$>
+--           mkMatrix x t (Abstract k)
+--   where
+--     mkMatrix x t k = mdo
+--       -- NOTE: mkRow never evalutates `body`
+--       (letKs, Matrix -> m) <- foldM (mkRow x t k) (body, Empty) alts
+--       body <- matchCompile m
+--       pure letKs
 
-    mkRow x@(Var _ xt) t k (body, rows) (P.Alt _ p _g e) =
-      bindPattern p xt \p vs -> do
-        e <- tyCheckExpr e t k
-        k <- freshLabel "k" $ (\(Var _ t) -> t) <$> vs
-        pure (TLetK k vs e body, Row
-         { cols = maybe [] (\p -> [(x,p)]) (lowerPat p)
-         , guard = Nothing
-         , body = TJmp k vs
-         } :<| rows)
+--     mkRow x t k (body, rows) (P.Alt _ p _g e) =
+--       bindPattern p x \cols vs -> do
+--         e <- tyCheckExpr e t k
+--         k <- freshLabel "k" $ (\(Var _ t) -> t) <$> vs
+--         pure (TLetK k vs e body, Row
+--          { cols
+--          , guard = Nothing
+--          , body = TJmp k vs
+--          } :<| rows)
+tyInferExpr _ _ = error "TODO"
 
 -- TODO: how do i know if this is a value? probably some check of triviality
 tyInferExprDecl :: HasCallStack => P.ExprDecl Range -> Elab Decl
@@ -826,9 +976,12 @@ tyInferExprDecl (P.ExprDecl _r (P.Name _ f) t ps e) = do
   t <- maybe freshMeta tyCheckType t
   k <- freshLabel "k" [t]
   f <- freshGlobal f (TyFun ts t)
-  bindPatterns ps ts \_ps vs -> do
-    -- liftIO $ putStr "\t" >> print ps
-    -- liftIO $ putStr "\t" >> print vs
+  bindVars ((Nothing,) <$> ts) \vs -> do
+    -- liftIO do
+    --   print (void d)
+    --   putStr "\t" >> print _ps
+    --   putStr "\t" >> print vs
+    --   putStrLn ""
     e <- tyCheckExpr e t (Abstract k)
     pure $ DTerm f k vs e
 

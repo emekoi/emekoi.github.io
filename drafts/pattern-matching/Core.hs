@@ -17,40 +17,6 @@ import Prettyprinter          (Pretty (..), (<+>))
 import Prettyprinter          qualified as P
 import Util
 
-newtype TrivialEq r
-  = TrivialEq r
-  deriving (Show)
-    via r
-  deriving (Foldable, Functor, Traversable)
-
-instance Eq (TrivialEq r) where
-  (==) _ _ = True
-
-instance Ord (TrivialEq r) where
-  compare _ _ = EQ
-
-newtype TrivialOrd r
-  = TrivialOrd r
-  deriving (Show)
-    via r
-  deriving (Eq, Foldable, Functor, Traversable)
-
-instance (Eq r) => Ord (TrivialOrd r) where
-  compare _ _ = EQ
-
-newtype Trivial r
-  = Trivial r
-  deriving (Foldable, Functor, Traversable)
-
-instance Eq (Trivial r) where
-  (==) _ _ = True
-
-instance Ord (Trivial r) where
-  compare _ _ = EQ
-
-instance Show (Trivial a) where
-  show _ = "<trivial>"
-
 data NameKind
   -- deBruijn indicies
   = BoundName
@@ -74,12 +40,32 @@ pattern Global x i = Name (TrivialOrd GlobalName) (TrivialEq x) i
 {-# COMPLETE Local, Global, Bound #-}
 
 instance Pretty Name where
-  pretty (Bound x i)  = "%" <> P.pretty x <> P.pretty i
-  pretty (Local x i)  = "$" <> P.pretty x <> P.pretty i
-  pretty (Global x i) = "@" <> P.pretty x <> P.pretty i
+  pretty (Bound x i)  = "%" <> P.pretty x <> "." <> P.pretty i
+  pretty (Local x i)  = "$" <> P.pretty x <> "." <> P.pretty i
+  pretty (Global x i) = "@" <> P.pretty x <> "." <> P.pretty i
 
 instance Show Name where
   show = show . P.pretty
+
+class Shift r where
+  -- | shiftFrom k n r
+  -- | increment names by n starting from a minimum index of k in r
+  shiftFrom :: Int -> Int -> r -> r
+
+instance (Functor t, Shift r) => Shift (t r) where
+  shiftFrom k n = fmap (shiftFrom k n)
+
+shift :: (Shift r) => Int -> r -> r
+shift = shiftFrom 0
+
+shift' :: (Shift r) => Int -> r -> r
+shift' = shiftFrom (-1)
+
+instance Shift Name where
+  shiftFrom k n v@(Bound x i)
+    | i < k  = v
+    | i >= k = Bound x (i + n)
+  shiftFrom _  _ v = v
 
 data Type
   = TyFun (Seq Type) Type
@@ -195,6 +181,9 @@ instance Show Var where
 instance Pretty Var where
   pretty (Var v t) = P.parens $ pretty v <+> ":" <+> pretty t
 
+instance Shift Var where
+  shiftFrom k n (Var v t) = Var (shiftFrom k n v) t
+
 instance Zonk Var where
   zonk (Var v t) = Var v <$> zonk t
 
@@ -222,7 +211,7 @@ data Value where
   VString :: Text -> Value
   -- | tagged union from algebraic data types
   VData :: DataId -> Seq Var -> Value
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 instance Pretty Value where
   pretty (VInt i) = pretty i
@@ -230,28 +219,16 @@ instance Pretty Value where
   pretty (VData (DataId c) vs) =
     P.concatWith (<+>) (pretty c :<| (P.pretty <$> vs))
 
+instance Shift Value where
+  shiftFrom k n (VData d vs) = VData d $ shiftFrom k n vs
+  shiftFrom _ _ v            = v
+
 instance Zonk Value where
   zonk (VData d vs) = VData d <$> zonk vs
   zonk v            = pure v
 
--- TODO: merge this with `Value`?
-data AltCon
-  = AltInt Integer
-  | AltString Text
-  | AltData DataId (TrivialEq (Seq Var))
-  deriving (Eq, Ord, Show)
+type AltCon = Value
 
-instance Pretty AltCon where
-  pretty (AltInt i) = pretty i
-  pretty (AltString s) = P.dquotes $ P.pretty s
-  pretty (AltData (DataId c) (TrivialEq vs)) =
-    P.concatWith (<+>) (pretty c :<| (P.pretty <$> vs))
-
-instance Zonk AltCon where
-  zonk (AltData d vs) = AltData d <$> zonk vs
-  zonk v              = pure v
-
--- TODO: use Level?
 data Alt = Alt
   { alt  :: AltCon
   , body :: Term
@@ -260,6 +237,10 @@ data Alt = Alt
 
 instance Pretty Alt where
   pretty alt = pretty alt.alt <+> "->" <> P.nest 2 (P.hardline <> pretty alt.body)
+
+instance Shift Alt where
+  shiftFrom k n (Alt a@(VData _ xs) b) = Alt a (shiftFrom (k + length xs) n b)
+  shiftFrom _ _ v = v
 
 instance Zonk Alt where
   zonk (Alt a b) = Alt <$> zonk a <*> zonk b
@@ -319,8 +300,28 @@ instance Pretty Term where
     where
       alts' = case fb of
         Nothing -> P.pretty <$> alts
-        Just a  -> (P.pretty <$> alts) :|> "__default__ -> " <> pretty a
+        Just a  -> (P.pretty <$> alts) :|>
+          "__default__ ->" <> P.nest 2 (P.hardline <> pretty a)
   pretty (TError v) = "error" <+> pretty v
+
+instance Shift Term where
+  shiftFrom k n (TLetV v x e) =
+    TLetV (shiftFrom k n v) (shiftFrom k n x) (shiftFrom k n e)
+  shiftFrom k n (TLetP v p xs e) =
+    TLetP (shiftFrom k n v) p (shiftFrom k n xs) (shiftFrom k n e)
+  shiftFrom k n (TLetK k' xs e1 e2) =
+    TLetK k' xs (shiftFrom (k + length xs) n e1) (shiftFrom (k + length xs) n e2)
+  shiftFrom k n (TLetF f k' xs e1 e2) =
+    TLetF f k' xs (shiftFrom (k + length xs) n e1) (shiftFrom (k + length xs) n e2)
+  shiftFrom k n (TJmp k' xs) =
+    TJmp k' (shiftFrom k n xs)
+  shiftFrom k n (TApp f k' xs) =
+    TApp (shiftFrom k n f) k' (shiftFrom k n xs)
+  -- TODO: increase k by number of variables bound
+  shiftFrom k n (TMatch v alts fb) =
+    TMatch (shiftFrom k n v) (shiftFrom k n alts) (shiftFrom k n fb)
+  shiftFrom k n (TError v) =
+    TError (shiftFrom k n v)
 
 instance Zonk Term where
   zonk (TLetV v x e) = TLetV <$> zonk v <*> zonk x <*> zonk e

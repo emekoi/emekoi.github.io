@@ -1,5 +1,10 @@
+{-# LANGUAGE DerivingVia #-}
+
 module Util
     ( IORef
+    , Trivial (..)
+    , TrivialEq (..)
+    , TrivialOrd (..)
     , foldM2
     , foldr2
     , modifyIORef
@@ -55,3 +60,37 @@ modifyIORef' k = liftIO . IORef.modifyIORef k
 -- | `Data.IORef.modifyIORef'` lifted to `MonadIO`
 modifyIORef :: (MonadIO m) => IORef x -> (x -> x) -> m ()
 modifyIORef k = liftIO . IORef.modifyIORef' k
+
+newtype TrivialEq r
+  = TrivialEq r
+  deriving (Show)
+    via r
+  deriving (Foldable, Functor, Traversable)
+
+instance Eq (TrivialEq r) where
+  (==) _ _ = True
+
+instance Ord (TrivialEq r) where
+  compare _ _ = EQ
+
+newtype TrivialOrd r
+  = TrivialOrd r
+  deriving (Show)
+    via r
+  deriving (Eq, Foldable, Functor, Traversable)
+
+instance (Eq r) => Ord (TrivialOrd r) where
+  compare _ _ = EQ
+
+newtype Trivial r
+  = Trivial r
+  deriving (Foldable, Functor, Traversable)
+
+instance Eq (Trivial r) where
+  (==) _ _ = True
+
+instance Ord (Trivial r) where
+  compare _ _ = EQ
+
+instance Show (Trivial a) where
+  show _ = "<trivial>"
