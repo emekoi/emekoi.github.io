@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wno-unused-top-binds -Wno-unused-imports   #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds -Wno-unused-imports #-}
 {-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns             #-}
@@ -20,6 +20,8 @@ module Elab
 -- TODO: switch to using de bruijn indices
 -- TODO: we need to fix the generation of bindings and continuations for pattern
 -- matching.
+
+-- TODO: i think we just throw away all or patterns
 
 import Control.Applicative
 import Control.Category           qualified ((>>>))
@@ -436,7 +438,7 @@ rowSpecialize var alt mat = mat { rows = foldl' (f alt) Empty mat.rows }
     -- otherwise replace the column with its sub patterns
     g (VData con vars) row acc (PData con' ps) | con == con' =
       let g row i p = handlePattern (vars `Seq.index` i) p row id in
-        (acc :|>) $ Seq.foldlWithIndex g(row & rColsL %~ Map.delete var) ps
+        (acc :|>) $ Seq.foldlWithIndex g (row & rColsL %~ Map.delete var) ps
     -- since the constrcutors don't match delete the row
     g _ _ acc _ = acc
 
@@ -568,7 +570,7 @@ matchCompile mat@(Matrix rows) = mdo
       if Set.notMember c cs then do
         let mat' = rowSpecialize v c mat
         ts <- patternBinds c
-        j <- freshLabel "j" ts
+        j <- freshLabel "jmatch" ts
         (vs, e) <- bindVars ((Nothing,) <$> ts) \vs ->
           (vs,) <$> matchCompile mat'
         pure ( d
@@ -588,8 +590,13 @@ matchCompile mat@(Matrix rows) = mdo
       ((_, localTerms'), vs) <- mapAccumM f
         (0, localTerms)
         (mzip vs cinfo.fields)
+      -- HACK: the variables in the as patterns are bound to the variables
+      -- introduced by the match arm. they should be bound to the variables
+      -- introduced by the continuation `jmatch` created in specialize. as a
+      -- hack we can simply decrease the level by length vs here so the increase
+      -- in level performed in bindVars in specialize gives us the right levels
       local (\ctx -> ctx
-        { termLevel = ctx.termLevel + length vs
+        { termLevel = ctx.termLevel - (length vs - 1)
         , localTerms = localTerms'
         }) $ specialize v acc (VData c vs)
       where
@@ -936,11 +943,11 @@ tyInferExpr e@(P.EApp r f xs) k =
         Abstract _ -> contArityError
         Wrap k     -> do
           (vs, kx) <- bindVar (Nothing, ret) \v -> ([v],) <$> k v
-          k <- freshLabel "k" [ret]
+          k <- freshLabel "kapp" [ret]
           pure $ TLetK k vs kx (TApp f k xs)
 tyInferExpr (P.ELet _ (P.ExprDecl _ x t Empty e1) e2) k = do
   t <- maybe freshMeta tyCheckType t
-  j <- freshLabel "j" [t]
+  j <- freshLabel "jlet" [t]
   (vs, e2) <- bindVar (Just x, t) \v ->
     ([v],) <$> tyInferExpr e2 k
   TLetK j vs e2 <$> tyCheckExpr e1 t (Abstract j)
@@ -963,9 +970,9 @@ tyInferExpr (P.EMatch _ e alts) k = do
       Abstract _ -> contArityError
       Wrap k     -> do
         t <- freshMeta
-        kx <- bindVar (Nothing, t) k
-        k <- freshLabel "k" [t]
-        TLetK k [x] kx <$>
+        (v, kv) <- bindVar (Nothing, t) \v -> (v,) <$> k v
+        k <- freshLabel "kmatch" [t]
+        TLetK k [v] kv <$>
           mkMatrix x t (Abstract k)
   where
     mkMatrix x t k = do
@@ -1012,7 +1019,7 @@ tyInferExprDecl :: HasCallStack => P.ExprDecl Range -> Elab Decl
 tyInferExprDecl (P.ExprDecl _r (P.Name _ f) t ps e) = do
   ts <- traverse (const freshMeta) ps
   t <- maybe freshMeta tyCheckType t
-  k <- freshLabel "k" [t]
+  k <- freshLabel "return" [t]
   f <- freshGlobal f (TyFun ts t)
   bindVars ((Nothing,) <$> ts) \vs -> do
     -- liftIO do
