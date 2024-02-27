@@ -1,39 +1,29 @@
+\usepackage{amssymb,textcomp,fullpage,hyperref,soul,xparse}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+\hypersetup{colorlinks=true}
+
 \usepackage{enumitem}
 \textheight=10in
 \pagestyle{empty}
-\raggedright
+\raggedright%
 
 \def\bull{\vrule height 0.8ex width .7ex depth -.1ex }
 % \setlist[itemize]{noitemsep, topsep=0pt}
 
-\newcommand{\lineunder} {
-    \vspace*{-8pt} \\
-    \hspace*{-18pt} \hrulefill \\
-}
-
 \newcommand{\header} [1] {
     {\hspace*{-18pt}\vspace*{6pt} \textsc{#1}}
-    \vspace*{-6pt} \lineunder
+    \vspace*{-6pt} \vspace*{-8pt} \\ \hspace*{-18pt} \hrulefill\\
 }
 
-\newcommand{\contact} [5] {
+\newcommand{\contact} [4] {
     \vspace*{-50pt}
     \begin{center}
         {\Large \scshape {#1}}\\
         \vspace*{8pt}
-        #2 $\cdot$ #3 $\cdot$ #4 $\cdot$ Github: #5
+        #2 $\cdot$ #3 $\cdot$ #4
     \end{center}
-}
-
-\newenvironment{achievements}{
-    \begin{itemize}[topsep=7pt, partopsep=10pt, itemsep=-1pt]
-    % \parsep -10pt
-    % \topsep -10pt
-    % \partopsep -10pt
-    % \itemsep -10pt
-} {
-    \end{itemize}
-    \vspace*{-4pt}
 }
 
 \newenvironment{school} [4] {
@@ -41,31 +31,34 @@
     \textit{GPA}: #3\hfill#4 \\
     \vspace*{4pt}
     Relevant Coursework:
-    \begin{achievements}
+    \begin{itemize}[topsep=7pt, partopsep=10pt, itemsep=-1pt]
 } {
-    \end{achievements}
+    \end{itemize}
+    \vspace*{-4pt}
 }
 
-\newenvironment{award} [3] {
+% \newenvironment{award} [3] {
+%     \textbf{#1}\hfill #2\\
+%     \textit{#3}\\
+%     \vspace*{2pt}
+% } {
+%     \vspace*{2pt}
+%   }
+\newcommand{\award} [3] {
     \textbf{#1}\hfill #2\\
     \textit{#3}\\
     \vspace*{4pt}
-} {
-    \vspace*{15pt}
 }
 
-\newenvironment{award*} [3] {
+\newenvironment{activity} [2] {
     \textbf{#1}\hfill #2\\
-    \textit{#3}\\
-    \vspace*{2pt}
+    % \vspace*{4pt}
 } {
-    \vspace*{8pt}
 }
 
-
-\newenvironment{activity} [5] {
-    \textbf{#1}\hfill #4\\
-    \vspace*{4pt}
+\newenvironment{activity*} [3] {
+    \textbf{#1}, #2\hfill #3\\
+    % \vspace*{4pt}
 } {
 }
 
@@ -73,5 +66,5 @@
     \textbf{#1}\\
     \vspace*{4pt}
 } {
-    \vspace*{15pt}
+    \vspace*{10pt}
 }
