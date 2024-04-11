@@ -16,6 +16,7 @@ import System.Process                  (readProcess)
 import Text.Blaze.Html.Renderer.String qualified as H
 import Text.Blaze.Html5                qualified as H
 import Text.Blaze.Html5.Attributes     qualified as A
+import Data.Text                       qualified as T
 
 basename :: Routes
 basename = customRoute (takeFileName . toFilePath)
@@ -91,7 +92,7 @@ tagsField = field "tags" \(Item id _) -> do
         H.! A.rel "tag" $ H.toHtml x
 
 gitHash :: Compiler String
-gitHash = unsafeCompiler $
+gitHash = unsafeCompiler . fmap (T.unpack . T.strip . T.pack) $
   readProcess "git" ["rev-parse", "--short", "master"] []
 
 -- relativizeUrls :: Item String -> Compiler (Item String)

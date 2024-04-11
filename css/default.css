@@ -10,6 +10,7 @@ $partial("css/fira_code.css")$
 $partial("css/flexoki.css")$
 $partial("css/sakura.css")$
 $partial("css/highlighting.css")$
+$partial("css/agda.css")$
 
 /* Light and Dark Theme Handling */
 .color-scheme-btn, .color-scheme-btn:hover {

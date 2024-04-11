@@ -90,14 +90,20 @@ draftsPattern :: Pattern
 draftsPattern = foldr1 (.||.)
   [ "drafts/*.md"
   , "drafts/*.lhs"
+  -- , "drafts/*.html"
+  , "drafts/*/*.md"
   , "drafts/*/*.lhs"
+  -- , "drafts/*/*.html"
   ]
 
 postsPattern :: Pattern
 postsPattern = foldr1 (.||.)
   [ "posts/*.md"
   , "posts/*.lhs"
+  -- , "posts/*.html"
+  , "posts/*/*.md"
   , "posts/*/*.lhs"
+  -- , "posts/*/*.html"
   ]
 
 resumePattern :: Pattern
