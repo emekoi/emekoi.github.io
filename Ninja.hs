@@ -112,13 +112,16 @@ instance Pretty Target where
     : (uncurry pVar <$> Map.toList variables)
 
 data Ninja = Ninja
-  { rules   :: Map Text Rule
-  , targets :: [Target]
+  { rules     :: Map Text Rule
+  , targets   :: [Target]
+  , variables :: Map Text SomePretty
   }
 
 instance Pretty Ninja where
   pretty Ninja{..} = P.vsep $
-    fmap pretty (Map.elems rules) ++ fmap pretty targets
+    (uncurry pVar <$> Map.toList variables)
+    ++ fmap pretty (Map.elems rules)
+    ++ fmap pretty targets
 
 type NinjaM r = ReaderT (IR.IORef Ninja) IO r
 
@@ -126,13 +129,21 @@ target :: Target -> NinjaM ()
 target t = do
   ninja <- ask
   lift $ IR.modifyIORef' ninja \Ninja{..} ->
-    Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets }
+    Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets, .. }
+
+variable :: Text -> SomePretty -> NinjaM ()
+variable x v = do
+  ninja <- ask
+  lift $ IR.modifyIORef' ninja \Ninja{..} ->
+    Ninja { variables = Map.insert x v variables, .. }
 
 generator :: Text -> NinjaM ()
 generator main = do
   self <- Text.pack <$> lift getExecutablePath
 
   hsFiles <- lift $ Glob.glob "*.hs"
+
+  variable "builddir" ".cache"
 
   target def
     { rule = Rule "generate" self [("generator", Pretty True)]
@@ -143,9 +154,9 @@ generator main = do
   target def
     { rule = Rule
         "ghc"
-        "ghc --make -outputdir .cache -o $out -main-is $$(basename $in .hs) $in"
+        "ghc --make -outputdir $builddir -o $out -main-is $$(basename $in .hs) $in"
         []
-    , output = Output [self] (hsOut hsFiles ++ [".cache"])
+    , output = Output [self] (hsOut hsFiles)
     , input = Input [main] (Text.pack <$> hsFiles) []
     , variables = [("restat", "true")]
     }
@@ -153,12 +164,12 @@ generator main = do
   where
     hsOut files = foldMap (\x ->
       let (a, b) = FP.splitFileName x in [
-        Text.pack $ a FP.</> ".cache" FP.</> (b FP.-<.> ext) | ext <- ["hi", "o"]
+        Text.pack $ a FP.</> "$builddir" FP.</> (b FP.-<.> ext) | ext <- ["hi", "o"]
       ]) files
 
 writeNinja :: NinjaM () -> IO ()
 writeNinja m = do
-  r <- IR.newIORef (Ninja mempty mempty)
+  r <- IR.newIORef (Ninja mempty mempty mempty)
   SIO.withFile "build.ninja" SIO.WriteMode \handle -> do
     ninjaDoc <- pretty <$> (runReaderT m r >> IR.readIORef r)
     P.hPutDoc handle (ninjaDoc <> P.hardline <> "default build.ninja")
