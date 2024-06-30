@@ -7,22 +7,32 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RecordWildCards       #-}
 
-module Ninja where
+module Ninja
+  ( Input (..)
+  , Output (..)
+  , Rule (..)
+  , Target(..)
+  , SomePretty (..)
+  , target
+  , generator
+  , writeNinja
+  ) where
 
 import           Control.Monad.Reader      (ReaderT (..), ask, lift)
 import           Data.Default
-import           Data.IORef                (IORef, modifyIORef', newIORef,
-                                            readIORef)
+import qualified Data.IORef                as IR
 import           Data.Map.Strict           (Map)
 import qualified Data.Map.Strict           as Map
+import           Data.String               (IsString (..))
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import           Prettyprinter             (Pretty (..), (<+>))
 import qualified Prettyprinter.Internal    as P
 import qualified Prettyprinter.Render.Text as P
 import           System.Environment        (getExecutablePath)
+import qualified System.FilePath           as FP
+import qualified System.FilePath.Glob      as Glob
 import qualified System.IO                 as SIO
-import Data.String (IsString(..))
 
 data SomePretty where
   Pretty :: Pretty p => p -> SomePretty
@@ -110,75 +120,46 @@ instance Pretty Ninja where
   pretty Ninja{..} = P.vsep $
     fmap pretty (Map.elems rules) ++ fmap pretty targets
 
-type NinjaM r = ReaderT (IORef Ninja) IO r
-
-runNinja :: NinjaM () -> IO Ninja
-runNinja m = do
-  r <- newIORef (Ninja mempty mempty)
-  () <- runReaderT m r
-  readIORef r
-
--- rule :: Rule -> NinjaM ()
--- rule t = do
---   ninja <- ask
---   lift $ modifyIORef' ninja \Ninja{..} ->
---     Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets }
+type NinjaM r = ReaderT (IR.IORef Ninja) IO r
 
 target :: Target -> NinjaM ()
 target t = do
   ninja <- ask
-  lift $ modifyIORef' ninja \Ninja{..} ->
+  lift $ IR.modifyIORef' ninja \Ninja{..} ->
     Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets }
 
 generator :: Text -> NinjaM ()
 generator main = do
   self <- Text.pack <$> lift getExecutablePath
 
+  hsFiles <- lift $ Glob.glob "*.hs"
+
   target def
     { rule = Rule "generate" self [("generator", Pretty True)]
     , input = Input [] [self] []
     , output = Output ["build.ninja"] []
-    , variables = []
     }
-
-  -- target def
-  --   { rule = Rule "ghc-depends" "ghc -M $in -dep-makefile $out"
-  --     [ ("depfile", "$out.d")
-  --     , ("deps", "gcc")
-  --     ]
-  --   , output = Output ["Ninja.d"] []
-  --   , input = Input ["Ninja.hs"] [] []
-  --   , variables = []
-  --   }
 
   target def
-    { rule = Rule "ghc" "ghc --make $in -o $out -outputdir .cache" []
-    , output = Output [self] [".cache/Main.hi", ".cache/Main.o"]
-    , input = Input [main] [] []
-    -- , variables = [("restat", "True")]
+    { rule = Rule
+        "ghc"
+        "ghc --make -outputdir .cache -o $out -main-is $$(basename $in .hs) $in"
+        []
+    , output = Output [self] (hsOut hsFiles ++ [".cache"])
+    , input = Input [main] (Text.pack <$> hsFiles) []
+    , variables = [("restat", "true")]
     }
 
-  -- target def
-  --   { rule = ghc
-  --   , output = Output ["Ninja.o"] ["Ninja.hi"]
-  --   , input = Input ["Ninja.hs"] [] []
-  --   }
-
-  -- target def
-  --   { rule = ghc
-  --   , output = Output ["Ninja.o"] ["Ninja.hi"]
-  --   , input = Input ["Ninja.hs"] [] []
-  --   }
-
-  -- where
-  --   ghc = Rule "ghc" "ghc -M $in -dep-makefile $$(basename $in .hs).d && ghc $in -o $out"
-  --     [ ("depfile", "$out.d")
-  --     , ("deps", "gcc")
-  --     ]
+  where
+    hsOut files = foldMap (\x ->
+      let (a, b) = FP.splitFileName x in [
+        Text.pack $ a FP.</> ".cache" FP.</> (b FP.-<.> ext) | ext <- ["hi", "o"]
+      ]) files
 
 writeNinja :: NinjaM () -> IO ()
-writeNinja m =
+writeNinja m = do
+  r <- IR.newIORef (Ninja mempty mempty)
   SIO.withFile "build.ninja" SIO.WriteMode \handle -> do
-    ninjaDoc <- pretty <$> runNinja m
+    ninjaDoc <- pretty <$> (runReaderT m r >> IR.readIORef r)
     P.hPutDoc handle (ninjaDoc <> P.hardline <> "default build.ninja")
     SIO.hPutChar handle '\n'

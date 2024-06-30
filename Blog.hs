@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -Wall -Wextra -Wno-name-shadowing #-}
 {-# LANGUAGE ApplicativeDo         #-}
 {-# LANGUAGE BlockArguments        #-}
 {-# LANGUAGE DataKinds             #-}
@@ -9,25 +8,26 @@
 {-# LANGUAGE RecordWildCards       #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TypeApplications      #-}
+{-# OPTIONS_GHC -Wall -Wextra -Wno-name-shadowing #-}
 
-module Main where
+module Blog where
 
-import           Data.Time.Clock
 -- import Data.Time.Format
 
 import           Data.Map.Strict (Map)
 import           Data.Text       (Text)
+import           Data.Time.Clock
 import           Ninja
 
 newtype Tag = Tag Text
 
 data Post = Info
-  { title     :: Text
-  , slug      :: Text
-  , published :: UTCTime
-  , updated   :: Maybe UTCTime
-  , tags      :: [Tag]
-  , other     :: Map Text Text
+  { title     :: Text,
+    slug      :: Text,
+    published :: UTCTime,
+    updated   :: Maybe UTCTime,
+    tags      :: [Tag],
+    other     :: Map Text Text
   }
 
 -- data Metadata = Meta
