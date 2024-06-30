@@ -1,38 +1,37 @@
 {-# OPTIONS_GHC -Wall -Wextra -Wno-name-shadowing #-}
-{-# LANGUAGE ApplicativeDo         #-}
 {-# LANGUAGE BlockArguments        #-}
-{-# LANGUAGE OverloadedStrings     #-}
-{-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE DataKinds             #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE RecordWildCards       #-}
+{-# LANGUAGE NoFieldSelectors      #-}
 {-# LANGUAGE OverloadedLists       #-}
 {-# LANGUAGE OverloadedRecordDot   #-}
-{-# LANGUAGE NoFieldSelectors      #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE RecordWildCards       #-}
 
--- import Control.Monad
--- import Data.Time.Format
-import System.Environment
+module Ninja where
 
-import Data.Map.Strict (Map)
-import Data.Text (Text)
-import Prettyprinter (Pretty(..),(<+>))
+import           Control.Monad.Reader      (ReaderT (..), ask, lift)
+import           Data.Default
+import           Data.IORef                (IORef, modifyIORef', newIORef,
+                                            readIORef)
+import           Data.Map.Strict           (Map)
+import qualified Data.Map.Strict           as Map
+import           Data.Text                 (Text)
+import qualified Data.Text                 as Text
+import           Prettyprinter             (Pretty (..), (<+>))
+import qualified Prettyprinter.Internal    as P
+import qualified Prettyprinter.Render.Text as P
+import           System.Environment        (getExecutablePath)
+import qualified System.IO                 as SIO
+import Data.String (IsString(..))
 
-import Data.IORef
-import Control.Monad.Reader
+data SomePretty where
+  Pretty :: Pretty p => p -> SomePretty
 
--- import System.FilePath.Glob (Pattern)
+instance Pretty SomePretty where
+  pretty (Pretty p) = pretty p
 
-import Data.Text qualified as Text
-import Data.Map.Strict qualified as Map
-import System.FilePath.Glob qualified as Glob
-import Prettyprinter qualified as P
-import Prettyprinter.Internal qualified as P
-import Prettyprinter.Render.Text qualified as P
-import System.IO
+instance IsString SomePretty where
+  fromString s = Pretty s
 
 pVar :: (Pretty p) => Text -> p -> P.Doc a
 pVar x v = pretty x <+> "=" <+> pretty v
@@ -40,13 +39,16 @@ pVar x v = pretty x <+> "=" <+> pretty v
 (</>) :: P.Doc a -> P.Doc a -> P.Doc a
 P.Empty </> y = y
 x </> P.Empty = x
-x </> y = x <+> y
+x </> y       = x <+> y
 
 data Rule = Rule
   { name      :: Text
   , command   :: Text
-  , variables :: Map Text Text
+  , variables :: Map Text SomePretty
   }
+
+instance Default Rule where
+  def = Rule mempty mempty mempty
 
 instance Pretty Rule where
   pretty Rule{..} = P.nest 2 . P.vsep $
@@ -60,6 +62,9 @@ data Input = Input
   , ordered  :: [Text]
   }
 
+instance Default Input where
+  def = Input mempty mempty mempty
+
 instance Pretty Input where
   pretty Input{..} =
     hsep explicit
@@ -72,6 +77,9 @@ data Output = Output
   , implicit :: [Text]
   }
 
+instance Default Output where
+  def = Output mempty mempty
+
 instance Pretty Output where
   pretty Output{..} =
     hsep explicit
@@ -82,28 +90,16 @@ data Target = Target
   { rule      :: Rule
   , input     :: Input
   , output    :: Output
-  , variables :: Map Text Text
+  , variables :: Map Text SomePretty
   }
+
+instance Default Target where
+  def = Target def def def def
 
 instance Pretty Target where
   pretty Target{..} =
     P.nest 2 . P.vsep  $ "build" <+> pretty output <> ":" <+> pretty rule.name <+> pretty input
     : (uncurry pVar <$> Map.toList variables)
-
-copyRule :: Rule
-copyRule = Rule
-  { name      = "copy"
-  , command   = "cp $in $out"
-  , variables = []
-  }
-
--- copy ::  -> Text -> Target
--- copy src dst = Target copyRule (Input [] [] []) (Output [] [])
-
--- css :: IO Target
--- css = do
---   files <- Glob.glob "css/*."
---   pure $ Target copy [] []
 
 data Ninja = Ninja
   { rules   :: Map Text Rule
@@ -118,14 +114,15 @@ type NinjaM r = ReaderT (IORef Ninja) IO r
 
 runNinja :: NinjaM () -> IO Ninja
 runNinja m = do
-  io <- newIORef (Ninja mempty mempty)
-  () <- runReaderT m io
-  readIORef io
+  r <- newIORef (Ninja mempty mempty)
+  () <- runReaderT m r
+  readIORef r
 
 -- rule :: Rule -> NinjaM ()
--- rule r = do
+-- rule t = do
 --   ninja <- ask
---   lift $ modifyIORef' ninja (\Ninja{..} -> Ninja { rules = Map.insert r.name r rules, .. })
+--   lift $ modifyIORef' ninja \Ninja{..} ->
+--     Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets }
 
 target :: Target -> NinjaM ()
 target t = do
@@ -133,45 +130,55 @@ target t = do
   lift $ modifyIORef' ninja \Ninja{..} ->
     Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets }
 
--- ninja :: Input -> NinjaM ()
--- ninja input = do
---   -- self <- Text.pack <$> lift getProgName
---   self <- Text.pack <$> lift getExecutablePath
---   target Target { rule = rule self , variables = [] , .. }
---   where
---     rule prog = Rule "ninja" prog [("generator", "true")]
---     output = Output { explicit = ["build.ninja"] , implicit = [] }
-
-ninja :: NinjaM ()
-ninja = do
-  -- self <- Text.pack <$> lift getProgName
+generator :: Text -> NinjaM ()
+generator main = do
   self <- Text.pack <$> lift getExecutablePath
 
-  target Target
-    { rule = Rule
-      { name      = "ghc"
-      , command   = "ghc --make $in -o $out"
-      , variables = []
-      }
-    , output = Output ["Ninja"] ["Ninja.hi", "Ninja.o"]
-    , input = Input ["Ninja.hs"] [] []
-    , variables = []
-    }
-
-  target Target
-    { rule = ninja self
-    , input = Input [] ["Ninja"] []
+  target def
+    { rule = Rule "generate" self [("generator", Pretty True)]
+    , input = Input [] [self] []
     , output = Output ["build.ninja"] []
     , variables = []
     }
-  where
-    ninja prog = Rule "ninja" prog [("generator", "true")]
 
-main :: IO ()
-main = do
-  files <- fmap Text.pack <$> Glob.glob "*.hs"
-  ninjaFile <- runNinja ninja
+  -- target def
+  --   { rule = Rule "ghc-depends" "ghc -M $in -dep-makefile $out"
+  --     [ ("depfile", "$out.d")
+  --     , ("deps", "gcc")
+  --     ]
+  --   , output = Output ["Ninja.d"] []
+  --   , input = Input ["Ninja.hs"] [] []
+  --   , variables = []
+  --   }
 
-  withFile "build.ninja" WriteMode \handle -> do
-    P.hPutDoc handle (pretty ninjaFile <> P.hardline <> "default build.ninja")
-    hPutChar handle '\n'
+  target def
+    { rule = Rule "ghc" "ghc --make $in -o $out -outputdir .cache" []
+    , output = Output [self] [".cache/Main.hi", ".cache/Main.o"]
+    , input = Input [main] [] []
+    -- , variables = [("restat", "True")]
+    }
+
+  -- target def
+  --   { rule = ghc
+  --   , output = Output ["Ninja.o"] ["Ninja.hi"]
+  --   , input = Input ["Ninja.hs"] [] []
+  --   }
+
+  -- target def
+  --   { rule = ghc
+  --   , output = Output ["Ninja.o"] ["Ninja.hi"]
+  --   , input = Input ["Ninja.hs"] [] []
+  --   }
+
+  -- where
+  --   ghc = Rule "ghc" "ghc -M $in -dep-makefile $$(basename $in .hs).d && ghc $in -o $out"
+  --     [ ("depfile", "$out.d")
+  --     , ("deps", "gcc")
+  --     ]
+
+writeNinja :: NinjaM () -> IO ()
+writeNinja m =
+  SIO.withFile "build.ninja" SIO.WriteMode \handle -> do
+    ninjaDoc <- pretty <$> runNinja m
+    P.hPutDoc handle (ninjaDoc <> P.hardline <> "default build.ninja")
+    SIO.hPutChar handle '\n'
