@@ -130,7 +130,11 @@ target :: Target -> NinjaM ()
 target t = do
   ninja <- ask
   lift $ IR.modifyIORef' ninja \Ninja{..} ->
-    Ninja { rules = Map.insert t.rule.name t.rule rules, targets = t : targets, .. }
+    Ninja
+      { rules = Map.insert t.rule.name t.rule rules
+      , targets = t : targets
+      , ..
+      }
 
 variable :: Text -> SomePretty -> NinjaM ()
 variable x v = do

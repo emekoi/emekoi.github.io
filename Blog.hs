@@ -1,5 +1,6 @@
 module Blog where
 
+import           Blog.MMark
 import           Blog.Ninja
 import           Data.Default
 import           Data.Foldable
@@ -10,7 +11,6 @@ import           Data.Text            (Text)
 import qualified Data.Text            as Text
 import           Data.Time.Clock
 import           Options.Applicative
-import qualified System.FilePath      as FP
 import qualified System.FilePath.Glob as Glob
 
 newtype Tag = Tag Text
@@ -47,7 +47,7 @@ data Options = Options
 
 data Command
   = Generate
-  -- | Pandoc
+  | Render Text
   | Metadata Bool [Text]
 
 options :: Parser Options
@@ -55,6 +55,7 @@ options = do
   command <- hsubparser (mconcat
     [ command "generate" (info pGenerate (progDesc "generate build.ninja"))
     , command "metadata" (info pMetadata (progDesc "generate post metadata"))
+    , command "render" (info pRender (progDesc "render a page"))
     ]) <|> pure Generate
 
   pure Options{..}
@@ -64,6 +65,8 @@ options = do
     pMetadata = Metadata
       <$> switch (long "clean" <> short 'c')
       <*> some (strArgument $ metavar "FILES")
+    pRender = Render
+      <$> (strArgument $ metavar "FILE")
 
 config :: Map Text SomePretty
 config =
@@ -73,17 +76,18 @@ config =
 
 run :: Command -> Options -> IO ()
 run Generate Options{} = do
-  hsFiles <- fmap Text.pack <$> do
-    let pat = Glob.compile "*.hs"
-    files1 <- fmap FP.takeFileName <$> Glob.globDir1 pat "."
-    files2 <- Glob.globDir1 pat "Blog"
-    pure $ files1 ++ files2
+  hsFiles <- (driver :) . (fmap Text.pack) <$> do
+     Glob.globDir1 (Glob.compile "*.hs") "Blog"
 
   writeNinja do
     traverse_ (uncurry variable) $ Map.toList config
-    generator "Blog.hs" hsFiles ["generate"]
+    generator driver hsFiles ["generate"]
+  where
+    driver = "Blog.hs"
 run (Metadata clean files) Options{} = do
   print (clean, files)
+run (Render file) Options{} = do
+  render file
 
 main :: IO ()
 main = do
