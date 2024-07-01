@@ -1,0 +1,8 @@
+<entry>
+    <title>$title$</title>
+    <link href="$root$$url$"/>
+    <id>$root$$url$</id>
+    <published>$date(published, "%Y-%m-%dT%H:%M:%S%Ez")$</published>
+    <updated>$date(updated, "%Y-%m-%dT%H:%M:%S%Ez")$</updated>
+    <content type="html">$description$</content>
+</entry>

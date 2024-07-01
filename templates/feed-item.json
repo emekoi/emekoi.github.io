@@ -1,0 +1,9 @@
+{
+    "id": "$root$$url$",
+    "url": "$root$$url$",
+    "content_html": "$description$",
+    "title": "$title$",
+    "date_published": "$date(published, "%Y-%m-%dT%H:%M:%S%Ez")$",
+    "date_modified": "$date(updated, "%Y-%m-%dT%H:%M:%S%Ez")$",
+    "tags": $tags$
+}
