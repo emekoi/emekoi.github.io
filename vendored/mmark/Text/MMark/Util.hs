@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 -- |
 -- Module      :  Text.MMark.Util
@@ -13,11 +14,15 @@
 -- Internal utilities.
 module Text.MMark.Util
   ( asPlainText,
+    lucidAttributes
   )
 where
 
 import           Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.Map.Strict    as Map
+import           Data.Monoid        (Last (..))
 import           Data.Text          (Text)
+import           Lucid
 import           Text.MMark.Type
 
 -- | Convert a non-empty collection of 'Inline's into their plain text
@@ -25,7 +30,6 @@ import           Text.MMark.Type
 asPlainText :: NonEmpty Inline -> Text
 asPlainText = foldMap $ \case
   Plain txt -> txt
-  Raw txt -> txt
   LineBreak -> "\n"
   Emphasis xs -> asPlainText xs
   Strong xs -> asPlainText xs
@@ -35,3 +39,15 @@ asPlainText = foldMap $ \case
   CodeSpan txt -> txt
   Link xs _ _ -> asPlainText xs
   Image xs _ _ -> asPlainText xs
+  RawInline txt -> txt
+  Math _ txt -> txt
+  Span _ xs -> asPlainText xs
+
+-- | Convert 'Attributes' to lists of Lucid 'Attribute's
+lucidAttributes :: Attributes -> [Attribute]
+lucidAttributes Attributes{..} =
+  Map.foldrWithKey (\k v acc -> term k v : acc) attrs pairs
+  where
+    attrs = case getLast identifier of
+      Nothing -> [classes_ classes]
+      Just x  -> [id_ x, classes_ classes]

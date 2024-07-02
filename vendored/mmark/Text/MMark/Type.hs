@@ -20,9 +20,11 @@ module Text.MMark.Type
     Extension (..),
     Render (..),
     Bni,
+    Attributes(..),
     Block (..),
     CellAlign (..),
     Inline (..),
+    MathType (..),
     Ois,
     mkOisInternal,
     getOis,
@@ -35,6 +37,8 @@ import           Data.Aeson
 import           Data.Data          (Data)
 import           Data.Function      (on)
 import           Data.List.NonEmpty (NonEmpty (..))
+import           Data.Map.Strict    (Map)
+import           Data.Monoid        (Last (..))
 import           Data.Text          (Text)
 import           Data.Typeable      (Typeable)
 import           GHC.Generics
@@ -125,6 +129,22 @@ instance Monoid (Render m a) where
   mempty = Render id
   mappend = (<>)
 
+data Attributes = Attributes
+  { identifier :: Last Text
+  , classes    :: [Text]
+  , pairs      :: Map Text Text
+  }
+  deriving (Show, Eq, Ord, Data, Typeable, Generic)
+
+instance Semigroup Attributes where
+  Attributes x1 x2 x3 <> Attributes y1 y2 y3 =
+    Attributes (x1 <> y1) (x2 <> y2) (x3 <> y3)
+
+instance Monoid Attributes where
+  mempty = Attributes mempty mempty mempty
+
+instance NFData Attributes
+
 -- | A shortcut for the frequently used type @'Block' ('NonEmpty'
 -- 'Inline')@.
 type Bni = Block (NonEmpty Inline)
@@ -173,6 +193,8 @@ data Block a
     --
     -- @since 0.0.4.0
     Table (NonEmpty CellAlign) (NonEmpty (NonEmpty a))
+  | -- | Divs
+    Div Attributes (NonEmpty (Block a))
   deriving (Show, Eq, Ord, Data, Typeable, Generic, Functor, Foldable, Traversable)
 
 instance (NFData a) => NFData (Block a)
@@ -193,12 +215,17 @@ data CellAlign
 
 instance NFData CellAlign
 
+data MathType
+  = InlineMath
+  | DisplayMath
+  deriving (Show, Eq, Ord, Data, Typeable, Generic)
+
+instance NFData MathType
+
 -- | Inline markdown content.
 data Inline
   = -- | Plain text
     Plain Text
-  |  -- | Raw content
-    Raw Text
   | -- | Line break (hard)
     LineBreak
   | -- | Emphasis
@@ -217,6 +244,12 @@ data Inline
     Link (NonEmpty Inline) URI (Maybe Text)
   | -- | Image with description, URL, and optionally title
     Image (NonEmpty Inline) URI (Maybe Text)
+  |  -- | Raw inline content
+    RawInline Text
+  | -- | Math
+    Math MathType Text
+  | -- | Spans
+    Span Attributes (NonEmpty Inline)
   deriving (Show, Eq, Ord, Data, Typeable, Generic)
 
 instance NFData Inline

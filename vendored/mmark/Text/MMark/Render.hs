@@ -121,6 +121,8 @@ defaultBlockRender blockRender = \case
           newline
       newline
     newline
+  Div attrs blocks ->
+    div_ (lucidAttributes attrs) (mapM_ blockRender blocks)
   where
     alignStyle = \case
       CellAlignDefault -> []
@@ -138,8 +140,6 @@ defaultInlineRender :: Monad m => (Inline -> HtmlT m ()) -> Inline -> HtmlT m ()
 defaultInlineRender inlineRender = \case
   Plain txt ->
     toHtml txt
-  Raw txt ->
-    toHtmlRaw txt
   LineBreak ->
     br_ [] >> newline
   Emphasis inner ->
@@ -156,10 +156,17 @@ defaultInlineRender inlineRender = \case
     code_ (toHtml txt)
   Link inner dest mtitle ->
     let title = maybe [] (pure . title_) mtitle
-     in a_ (href_ (URI.render dest) : title) (mapM_ inlineRender inner)
+      in a_ (href_ (URI.render dest) : title) (mapM_ inlineRender inner)
   Image desc src mtitle ->
     let title = maybe [] (pure . title_) mtitle
-     in img_ (alt_ (asPlainText desc) : src_ (URI.render src) : title)
+      in img_ (alt_ (asPlainText desc) : src_ (URI.render src) : title)
+  RawInline txt ->
+    toHtmlRaw txt
+  Math t txt ->
+    let c = case t of InlineMath -> "math inline"; DisplayMath -> "math display"
+      in span_ [class_ c] (toHtmlRaw txt)
+  Span attrs inner ->
+    span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
 
 -- | HTML containing a newline.
 newline :: Monad m => HtmlT m ()

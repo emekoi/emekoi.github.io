@@ -24,6 +24,7 @@ import qualified Text.MMark            as MMark
 import           Text.MMark.Extension  as MMark
 import           Text.MMark.Trans
 import           Text.MMark.Type       as MMark
+import           Text.MMark.Util
 import qualified Text.URI              as URI
 
 newline :: Monad m => HtmlT m ()
@@ -105,6 +106,8 @@ baseBlockRender blockRender = \case
           newline
       newline
     newline
+  Div attrs blocks ->
+    div_ (lucidAttributes attrs) (mapM_ blockRender blocks)
   where
     alignStyle = \case
       CellAlignDefault -> []
@@ -119,8 +122,6 @@ baseInlineRender :: Monad m => (Inline -> HtmlT m ()) -> Inline -> HtmlT m ()
 baseInlineRender inlineRender = \case
   Plain txt ->
     toHtml txt
-  Raw txt ->
-    toHtmlRaw txt
   LineBreak ->
     br_ [] >> newline
   Emphasis inner ->
@@ -140,6 +141,13 @@ baseInlineRender inlineRender = \case
   Image desc src mtitle ->
     let title = maybe [] (pure . title_) mtitle in
       img_ (alt_ (asPlainText desc) : src_ (URI.render src) : loading_ "lazy" : title)
+  RawInline txt ->
+    toHtmlRaw txt
+  Math t txt ->
+    let c = case t of InlineMath -> "math inline"; DisplayMath -> "math display"
+      in span_ [class_ c] (toHtmlRaw txt)
+  Span attrs inner ->
+    span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
 
 render :: forall m. Monad m => [Extension m] -> MMark m -> HtmlT m ()
 render exts (MMark.useExtensions exts -> MMark {..}) =

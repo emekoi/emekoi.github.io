@@ -2,21 +2,22 @@ module Blog where
 
 import           Blog.MMark
 import           Blog.Ninja
+import           Data.Aeson            (Value (..), (.=))
 import           Data.Default
 import           Data.Foldable
-import           Data.Map.Strict      (Map)
-import qualified Data.Map.Strict      as Map
+import           Data.Map.Strict       (Map)
+import qualified Data.Map.Strict       as Map
 import           Data.Set
-import           Data.Text            (Text)
-import qualified Data.Text            as Text
-import qualified Data.Text.Lazy       as TextL
-import qualified Data.Text.Lazy.IO    as TextL
-import qualified Data.Text.IO         as Text
+import           Data.Text             (Text)
+import qualified Data.Text             as Text
+import qualified Data.Text.IO          as Text
+import qualified Data.Text.Lazy        as TextL
+import qualified Data.Text.Lazy.IO     as TextL
 import           Data.Time.Clock
 import           Options.Applicative
-import qualified System.FilePath.Glob as Glob
-import qualified Text.Mustache as Stache
-import Data.Aeson ((.=), Value(..))
+import qualified System.FilePath.Glob  as Glob
+import qualified Text.Megaparsec.Error as Mega
+import qualified Text.Mustache         as Stache
 
 newtype Tag = Tag Text
   deriving (Eq, Ord)
@@ -51,9 +52,9 @@ data Options = Options
   }
 
 data RenderOptions = RenderOptions
-  { template :: Maybe Text
+  { template   :: Maybe Text
   , preprocess :: Bool
-  , file :: Text
+  , file       :: Text
   }
 
 data MetadataOptions = MetadataOptions
@@ -105,19 +106,41 @@ run Generate Options{} = do
 run (Metadata MetadataOptions{..}) Options{} = do
   print (clean, files)
 run (Render RenderOptions{..}) Options{} = do
-  source <- Text.readFile (Text.unpack file)
+  source <- do
+    src <- Text.readFile (Text.unpack file)
+    if not preprocess then pure src
+    else case Stache.compileMustacheText (Stache.PName file) src of
+      Left errs -> fail $ Mega.errorBundlePretty errs
+      Right t -> pure . TextL.toStrict $ Stache.renderMustache t (Object baseMeta)
   doc@Doc{..} <- parse file source
   case template of
-    -- TODO: depend on all
-    Just template | Object obj <- meta -> do
+    Just template | Object meta <- meta -> do
       t <- Stache.compileMustacheDir (Stache.PName template) "templates"
       let sbody = TextL.toStrict doc.body
-      TextL.putStrLn $ Stache.renderMustache t (Object $ obj <> ("body" .= sbody))
-      -- print $ Stache.renderMustacheW t (Object $ obj <> ("body" .= sbody))
-      -- print (Object $ obj <> ("body" .= sbody))
+      TextL.putStrLn $ Stache.renderMustache t (Object $ baseMeta <> meta <> ("body" .= sbody))
     _ ->
        TextL.putStrLn doc.body
+  where
+    author, email, github :: String
+    author = "Emeka Nkurumeh"
+    email = "e.nk@caltech.edu"
+    github = "https://github.com/emekoi"
 
+    siteLang, siteTitle, siteSource, siteURL :: String
+    siteLang = "en"
+    siteTitle = author ++ "'s Blog"
+    siteSource = "https://github.com/emekoi/emekoi.github.io"
+    siteURL = "https://emekoi.github.io"
+
+    baseMeta =
+      [ "author" .= author
+      , "lang" .= siteLang
+      , "github" .= github
+      , "site-source" .= siteSource
+      , "site-title" .= siteTitle
+      , "site-url" .= siteURL
+      , "email" .= email
+      ]
 
 main :: IO ()
 main = do
