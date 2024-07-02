@@ -1,0 +1,8 @@
+<div class="post-info">
+  <ul>
+    <li>{{ published }}</li>
+    {{# updated }}<li>Updated: $date(updated)$</li>{{/ updated }}
+    {{# tags }}{{.}}{{/ tags }}
+  </ul>
+</div>
+<article>{{& body }}</article>

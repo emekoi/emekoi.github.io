@@ -10,10 +10,10 @@ You can find my resume [here](/static/resume.pdf).
 
 # Contact
 Email
-: <$email$>
+: <{{email}}>
 
 Github
-: [@emekoi]($github$)
+: [@emekoi]({{github}})
 
 <!-- # Publications -->
 

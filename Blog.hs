@@ -9,10 +9,14 @@ import qualified Data.Map.Strict      as Map
 import           Data.Set
 import           Data.Text            (Text)
 import qualified Data.Text            as Text
+import qualified Data.Text.Lazy       as TextL
+import qualified Data.Text.Lazy.IO    as TextL
 import qualified Data.Text.IO         as Text
 import           Data.Time.Clock
 import           Options.Applicative
 import qualified System.FilePath.Glob as Glob
+import qualified Text.Mustache as Stache
+import Data.Aeson ((.=), Value(..))
 
 newtype Tag = Tag Text
   deriving (Eq, Ord)
@@ -46,10 +50,21 @@ data Options = Options
   { command :: Command
   }
 
+data RenderOptions = RenderOptions
+  { template :: Maybe Text
+  , preprocess :: Bool
+  , file :: Text
+  }
+
+data MetadataOptions = MetadataOptions
+  { clean :: Bool
+  , files :: [Text]
+  }
+
 data Command
   = Generate
-  | Render Text
-  | Metadata Bool [Text]
+  | Render RenderOptions
+  | Metadata MetadataOptions
 
 options :: Parser Options
 options = do
@@ -63,11 +78,13 @@ options = do
 
   where
     pGenerate = pure Generate
-    pMetadata = Metadata
+    pMetadata = fmap Metadata $ MetadataOptions
       <$> switch (long "clean" <> short 'c')
       <*> some (strArgument $ metavar "FILES" <> action "file")
-    pRender = Render
-      <$> (strArgument $ metavar "FILE" <> action "file")
+    pRender = fmap Render $ RenderOptions
+      <$> optional (strOption $ long "template" <> short 't' <> metavar "TEMPLATE" <> action "file")
+      <*> switch (long "preprocess" <> short 'p')
+      <*> (strArgument $ metavar "FILE" <> action "file")
 
 config :: Map Text SomePretty
 config =
@@ -85,12 +102,22 @@ run Generate Options{} = do
     generator driver hsFiles ["generate"]
   where
     driver = "Blog.hs"
-run (Metadata clean files) Options{} = do
+run (Metadata MetadataOptions{..}) Options{} = do
   print (clean, files)
-run (Render file) Options{} = do
+run (Render RenderOptions{..}) Options{} = do
   source <- Text.readFile (Text.unpack file)
-  doc@Doc{} <- parse file source
-  print doc
+  doc@Doc{..} <- parse file source
+  case template of
+    -- TODO: depend on all
+    Just template | Object obj <- meta -> do
+      t <- Stache.compileMustacheDir (Stache.PName template) "templates"
+      let sbody = TextL.toStrict doc.body
+      TextL.putStrLn $ Stache.renderMustache t (Object $ obj <> ("body" .= sbody))
+      -- print $ Stache.renderMustacheW t (Object $ obj <> ("body" .= sbody))
+      -- print (Object $ obj <> ("body" .= sbody))
+    _ ->
+       TextL.putStrLn doc.body
+
 
 main :: IO ()
 main = do
