@@ -133,11 +133,11 @@ module Text.MMark
   )
 where
 
-import Control.Foldl qualified as L
-import Data.Aeson
-import Text.MMark.Parser (MMarkErr (..), parse)
-import Text.MMark.Render (render)
-import Text.MMark.Type
+import qualified Control.Foldl     as L
+import           Data.Aeson
+import           Text.MMark.Parser (MMarkErr (..), parse)
+import           Text.MMark.Render (render)
+import           Text.MMark.Type
 
 ----------------------------------------------------------------------------
 -- Extensions

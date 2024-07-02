@@ -1,8 +1,8 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveDataTypeable         #-}
+{-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE LambdaCase                 #-}
+{-# LANGUAGE TemplateHaskell            #-}
 
 -- |
 -- Module      :  Text.MMark.Parser.Internal.Type
@@ -45,24 +45,24 @@ module Text.MMark.Parser.Internal.Type
   )
 where
 
-import Control.DeepSeq
-import Data.CaseInsensitive (CI)
-import Data.CaseInsensitive qualified as CI
-import Data.Data (Data)
-import Data.HashMap.Strict (HashMap)
-import Data.HashMap.Strict qualified as HM
-import Data.Hashable (Hashable)
-import Data.List (intercalate)
-import Data.List.NonEmpty (NonEmpty (..))
-import Data.List.NonEmpty qualified as NE
-import Data.Proxy
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Typeable (Typeable)
-import GHC.Generics
-import Lens.Micro.TH
-import Text.Megaparsec
-import Text.URI (URI)
+import           Control.DeepSeq
+import           Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
+import           Data.Data            (Data)
+import           Data.Hashable        (Hashable)
+import           Data.HashMap.Strict  (HashMap)
+import qualified Data.HashMap.Strict  as HM
+import           Data.List            (intercalate)
+import           Data.List.NonEmpty   (NonEmpty (..))
+import qualified Data.List.NonEmpty   as NE
+import           Data.Proxy
+import           Data.Text            (Text)
+import qualified Data.Text            as T
+import           Data.Typeable        (Typeable)
+import           GHC.Generics
+import           Lens.Micro.TH
+import           Text.Megaparsec
+import           Text.URI             (URI)
 
 ----------------------------------------------------------------------------
 -- Block-level parser state
@@ -75,9 +75,9 @@ data BlockState = BlockState
     _bstAllowNaked :: Bool,
     -- | Current reference level: 1 column for top-level of document, column
     -- where content starts for block quotes and lists.
-    _bstRefLevel :: Pos,
+    _bstRefLevel   :: Pos,
     -- | Reference and footnote definitions
-    _bstDefs :: Defs
+    _bstDefs       :: Defs
   }
 
 -- | Initial value for 'BlockState'.
@@ -95,15 +95,15 @@ initialBlockState =
 -- | Inline-level parser state.
 data InlineState = InlineState
   { -- | Type of the last encountered character
-    _istLastChar :: !CharType,
+    _istLastChar    :: !CharType,
     -- | Whether to allow empty inlines
-    _istAllowEmpty :: Bool,
+    _istAllowEmpty  :: Bool,
     -- | Whether to allow parsing of links
-    _istAllowLinks :: Bool,
+    _istAllowLinks  :: Bool,
     -- | Whether to allow parsing of images
     _istAllowImages :: Bool,
     -- | Reference link definitions
-    _istDefs :: Defs
+    _istDefs        :: Defs
   }
 
 -- | Initial value for 'InlineState'.
@@ -242,9 +242,9 @@ instance NFData MMarkErr
 -- | Print a pretty list where items are separated with commas and the word
 -- “or” according to the rules of English punctuation.
 orList :: NonEmpty String -> String
-orList (x :| []) = x
+orList (x :| [])  = x
 orList (x :| [y]) = x <> " or " <> y
-orList xs = intercalate ", " (NE.init xs) <> ", or " <> NE.last xs
+orList xs         = intercalate ", " (NE.init xs) <> ", or " <> NE.last xs
 
 ----------------------------------------------------------------------------
 -- Lens TH

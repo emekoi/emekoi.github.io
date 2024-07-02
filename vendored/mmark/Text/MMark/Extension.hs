@@ -97,16 +97,14 @@ module Text.MMark.Extension
 
     -- * Utils
     asPlainText,
-    headerId,
-    headerFragment,
   )
 where
 
-import Control.Foldl qualified as L
-import Control.Arrow
-import Lucid
-import Text.MMark.Type
-import Text.MMark.Util
+import           Control.Arrow
+import qualified Control.Foldl   as L
+import           Lucid
+import           Text.MMark.Type
+import           Text.MMark.Util
 
 -- | Create an extension that performs a transformation on 'Block's of
 -- markdown document. Since a block may contain other blocks we choose to

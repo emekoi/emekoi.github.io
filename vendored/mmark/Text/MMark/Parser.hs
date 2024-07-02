@@ -1,12 +1,12 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE BangPatterns              #-}
+{-# LANGUAGE CPP                       #-}
+{-# LANGUAGE DataKinds                 #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE LambdaCase                #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE RankNTypes                #-}
+{-# LANGUAGE TypeFamilies              #-}
 
 -- |
 -- Module      :  Text.MMark.Parser
@@ -24,39 +24,40 @@ module Text.MMark.Parser
   )
 where
 
-import Control.Applicative hiding (many, some)
-import Control.Monad
-import Control.Monad.Combinators.NonEmpty qualified as NE
-import Data.Aeson qualified as Aeson
-import Data.Bifunctor (Bifunctor (..))
-import Data.Bool (bool)
-import Data.Char qualified as Char
-import Data.DList qualified as DList
-import Data.HTML.Entities (htmlEntityMap)
-import Data.HashMap.Strict qualified as HM
-import Data.List.NonEmpty (NonEmpty (..), (<|))
-import Data.List.NonEmpty qualified as NE
-import Data.Maybe (catMaybes, fromJust, isJust, isNothing)
-import Data.Monoid (Any (..))
-import Data.Ratio ((%))
-import Data.Set qualified as E
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
-import Lens.Micro ((^.))
-import Text.Email.Validate qualified as Email
-import Text.MMark.Parser.Internal
-import Text.MMark.Type
-import Text.MMark.Util
-import Text.Megaparsec hiding (State (..), parse)
-import Text.Megaparsec.Char hiding (eol)
-import Text.Megaparsec.Char.Lexer qualified as L
-import Text.URI (URI)
-import Text.URI qualified as URI
-import Text.URI.Lens (uriPath)
+import           Control.Applicative                hiding (many, some)
+import           Control.Monad
+import qualified Control.Monad.Combinators.NonEmpty as NE
+import qualified Data.Aeson                         as Aeson
+import           Data.Bifunctor                     (Bifunctor (..))
+import           Data.Bool                          (bool)
+import qualified Data.Char                          as Char
+import qualified Data.DList                         as DList
+import qualified Data.HashMap.Strict                as HM
+import           Data.HTML.Entities                 (htmlEntityMap)
+import           Data.List.NonEmpty                 (NonEmpty (..), (<|))
+import qualified Data.List.NonEmpty                 as NE
+import           Data.Maybe                         (catMaybes, fromJust,
+                                                     isJust, isNothing)
+import           Data.Monoid                        (Any (..))
+import           Data.Ratio                         ((%))
+import qualified Data.Set                           as E
+import           Data.Text                          (Text)
+import qualified Data.Text                          as T
+import qualified Data.Text.Encoding                 as TE
+import           Lens.Micro                         ((^.))
+import qualified Text.Email.Validate                as Email
+import           Text.Megaparsec                    hiding (State (..), parse)
+import           Text.Megaparsec.Char               hiding (eol)
+import qualified Text.Megaparsec.Char.Lexer         as L
+import           Text.MMark.Parser.Internal
+import           Text.MMark.Type
+import           Text.MMark.Util
+import qualified Text.URI                           as URI
+import           Text.URI                           (URI)
+import           Text.URI.Lens                      (uriPath)
 
 #if !defined(ghcjs_HOST_OS)
-import qualified Data.Yaml as Yaml
+import qualified Data.Yaml                          as Yaml
 #endif
 
 ----------------------------------------------------------------------------
@@ -297,7 +298,7 @@ pIndentedCodeBlock = do
       -- interpreting input as an indented code block, so we need to restore
       -- the space this way.
       f x = T.replicate (unPos alevel - 1) " " <> x
-      g [] = []
+      g []       = []
       g (x : xs) = f x : xs
   ls <- g . ($ []) <$> go id
   CodeBlock Nothing (assembleCodeBlock clevel ls) <$ sc
@@ -443,7 +444,7 @@ pReferenceDef = do
         else return Nothing
     case (hadSpN, mtitle) of
       (Just True, Nothing) -> return ()
-      _ -> hidden eof <|> eol
+      _                    -> hidden eof <|> eol
     conflict <- registerReference dlabel (uri, mtitle)
     when conflict $
       customFailure' o (DuplicateReferenceDefinition dlabel)
@@ -503,9 +504,9 @@ pTable = do
       return $
         case (l, r) of
           (False, False) -> CellAlignDefault
-          (True, False) -> CellAlignLeft
-          (False, True) -> CellAlignRight
-          (True, True) -> CellAlignCenter
+          (True, False)  -> CellAlignLeft
+          (False, True)  -> CellAlignRight
+          (True, True)   -> CellAlignCenter
     isHeaderLike txt =
       T.length (T.filter isHeaderConstituent txt) % T.length txt
         > 8 % 10
@@ -950,7 +951,7 @@ foldSome' :: (MonadPlus m) => m ([a] -> [a]) -> m [a]
 foldSome' f = liftA2 ($) f (foldMany' f)
 
 sepByCount :: (MonadPlus m) => Int -> m a -> m sep -> m [a]
-sepByCount 0 _ _ = pure []
+sepByCount 0 _ _   = pure []
 sepByCount n p sep = liftA2 (:) p (count (n - 1) (sep *> p))
 
 nonEmptyLine :: BParser Text
@@ -991,7 +992,7 @@ entityRef :: (MonadParsec MMarkErr Text m) => m String
 entityRef = do
   o <- getOffset
   let f (TrivialError _ us es) = TrivialError o us es
-      f (FancyError _ xs) = FancyError o xs
+      f (FancyError _ xs)      = FancyError o xs
   name <-
     try . region f $
       between
@@ -1108,8 +1109,8 @@ stripIndent indent txt = T.drop m txt
 assembleParagraph :: [Text] -> Text
 assembleParagraph = go
   where
-    go [] = ""
-    go [x] = T.dropWhileEnd isSpace x
+    go []       = ""
+    go [x]      = T.dropWhileEnd isSpace x
     go (x : xs) = x <> "\n" <> go xs
 
 collapseWhiteSpace :: Text -> Text
@@ -1119,13 +1120,13 @@ collapseWhiteSpace =
     f seenSpace ch =
       case (seenSpace, g ch) of
         (False, False) -> (False, ch)
-        (True, False) -> (False, ch)
-        (False, True) -> (True, ' ')
-        (True, True) -> (True, '\0')
-    g ' ' = True
+        (True, False)  -> (False, ch)
+        (False, True)  -> (True, ' ')
+        (True, True)   -> (True, '\0')
+    g ' '  = True
     g '\t' = True
     g '\n' = True
-    g _ = False
+    g _    = False
 
 inlineStateDel :: InlineState -> Text
 inlineStateDel = \case
@@ -1158,7 +1159,7 @@ replaceEof altLabel = \case
   FancyError pos xs -> FancyError pos xs
   where
     f EndOfInput = Label (NE.fromList altLabel)
-    f x = x
+    f x          = x
 
 isEmailUri :: URI -> Maybe Text
 isEmailUri uri =
@@ -1206,7 +1207,7 @@ splitYamlError = \case
         ( Just (Yaml.yamlIndex mark),
           case context of
             "" -> problem
-            _ -> context ++ ", " ++ problem
+            _  -> context ++ ", " ++ problem
         )
   Yaml.AesonException s -> (Nothing, s)
   Yaml.OtherParseException exc -> (Nothing, show exc)
@@ -1230,7 +1231,7 @@ normalizeListItems xs' =
   if getAny $ foldMap (foldMap (Any . isParagraph)) (drop 1 x :| xs)
     then fmap toParagraph <$> xs'
     else case x of
-      [] -> xs'
+      []       -> xs'
       (y : ys) -> r $ (toNaked y : ys) :| xs
   where
     (x :| xs) = r xs'
@@ -1241,9 +1242,9 @@ normalizeListItems xs' =
       Naked _ -> False
       _ -> True
     toParagraph (Naked inner) = Paragraph inner
-    toParagraph other = other
+    toParagraph other         = other
     toNaked (Paragraph inner) = Naked inner
-    toNaked other = other
+    toNaked other             = other
 
 succeeds :: (Alternative m) => m () -> m Bool
 succeeds m = True <$ m <|> pure False

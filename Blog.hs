@@ -9,10 +9,10 @@ import qualified Data.Map.Strict      as Map
 import           Data.Set
 import           Data.Text            (Text)
 import qualified Data.Text            as Text
+import qualified Data.Text.IO         as Text
 import           Data.Time.Clock
 import           Options.Applicative
 import qualified System.FilePath.Glob as Glob
-import qualified Data.Text.IO          as Text
 
 newtype Tag = Tag Text
   deriving (Eq, Ord)
@@ -89,10 +89,8 @@ run (Metadata clean files) Options{} = do
   print (clean, files)
 run (Render file) Options{} = do
   source <- Text.readFile (Text.unpack file)
-  case parse file source of
-    Left err -> putStrLn err
-    Right Doc{..} ->
-      print body
+  doc@Doc{} <- parse file source
+  print doc
 
 main :: IO ()
 main = do

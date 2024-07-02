@@ -1,6 +1,6 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 -- |
 -- Module      :  Text.MMark.Render
@@ -17,38 +17,19 @@ module Text.MMark.Render
   )
 where
 
-import Control.Arrow
-import Control.Monad
-import Data.Char (isSpace)
-import Data.Function (fix)
-import Data.List.NonEmpty (NonEmpty (..))
-import Data.List.NonEmpty qualified as NE
-import Data.Text qualified as T
-import Lucid
-import Text.MMark.Trans
-import Text.MMark.Type
-import Text.MMark.Util
-import Text.URI qualified as URI
-import Control.Monad.Trans
-
--- -- | Render a 'MMark' markdown document. You can then render @'Html' ()@ to
--- -- various things:
--- --
--- --     * to lazy 'Data.Taxt.Lazy.Text' with 'renderText'
--- --     * to lazy 'Data.ByteString.Lazy.ByteString' with 'renderBS'
--- --     * directly to file with 'renderToFile'
--- render :: MMark -> Html ()
--- render MMark {..} =
---   mapM_ rBlock mmarkBlocks
---   where
---     Extension {..} = mmarkExtension
---     rBlock =
---       applyBlockRender extBlockRender
---         . fmap rInlines
---         . applyBlockTrans extBlockTrans
---     rInlines =
---       (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender))
---         . fmap (applyInlineTrans extInlineTrans)
+import           Control.Arrow
+import           Control.Monad
+import           Control.Monad.Trans
+import           Data.Char           (isSpace)
+import           Data.Function       (fix)
+import           Data.List.NonEmpty  (NonEmpty (..))
+import qualified Data.List.NonEmpty  as NE
+import qualified Data.Text           as T
+import           Lucid
+import           Text.MMark.Trans
+import           Text.MMark.Type
+import           Text.MMark.Util
+import qualified Text.URI            as URI
 
 -- | Render a 'MMark' markdown document. You can then render @'Html' ()@ to
 -- various things:
@@ -157,6 +138,8 @@ defaultInlineRender :: Monad m => (Inline -> HtmlT m ()) -> Inline -> HtmlT m ()
 defaultInlineRender inlineRender = \case
   Plain txt ->
     toHtml txt
+  Raw txt ->
+    toHtmlRaw txt
   LineBreak ->
     br_ [] >> newline
   Emphasis inner ->

@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveFoldable #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE DeriveFoldable     #-}
+{-# LANGUAGE DeriveFunctor      #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE RecordWildCards    #-}
 
 -- |
 -- Module      :  Text.MMark.Type
@@ -29,26 +29,26 @@ module Text.MMark.Type
   )
 where
 
-import Control.Arrow
-import Control.DeepSeq
-import Data.Aeson
-import Data.Data (Data)
-import Data.Function (on)
-import Data.List.NonEmpty (NonEmpty (..))
-import Data.Text (Text)
-import Data.Typeable (Typeable)
-import GHC.Generics
-import Lucid
-import Text.URI (URI (..))
+import           Control.Arrow
+import           Control.DeepSeq
+import           Data.Aeson
+import           Data.Data          (Data)
+import           Data.Function      (on)
+import           Data.List.NonEmpty (NonEmpty (..))
+import           Data.Text          (Text)
+import           Data.Typeable      (Typeable)
+import           GHC.Generics
+import           Lucid
+import           Text.URI           (URI (..))
 
 -- | Representation of complete markdown document. You can't look inside of
 -- 'MMark' on purpose. The only way to influence an 'MMark' document you
 -- obtain as a result of parsing is via the extension mechanism.
 data MMark m = MMark
   { -- | Parsed YAML document at the beginning (optional)
-    mmarkYaml :: Maybe Value,
+    mmarkYaml      :: Maybe Value,
     -- | Actual contents of the document
-    mmarkBlocks :: [Bni],
+    mmarkBlocks    :: [Bni],
     -- | Extension specifying how to process and render the blocks
     mmarkExtension :: Extension m
   }
@@ -85,11 +85,11 @@ instance Show (MMark m) where
 -- list passed to 'mconcat' will be applied later.
 data Extension m = Extension
   { -- | Block transformation
-    extBlockTrans :: Kleisli m Bni Bni,
+    extBlockTrans   :: Kleisli m Bni Bni,
     -- | Block render
-    extBlockRender :: Render m (Block (Ois, HtmlT m ())),
+    extBlockRender  :: Render m (Block (Ois, HtmlT m ())),
     -- | Inline transformation
-    extInlineTrans :: Kleisli m Inline Inline,
+    extInlineTrans  :: Kleisli m Inline Inline,
     -- | Inline render
     extInlineRender :: Render m Inline
   }
@@ -197,6 +197,8 @@ instance NFData CellAlign
 data Inline
   = -- | Plain text
     Plain Text
+  |  -- | Raw content
+    Raw Text
   | -- | Line break (hard)
     LineBreak
   | -- | Emphasis

@@ -16,8 +16,8 @@ module Text.MMark.Trans
   )
 where
 
-import Text.MMark.Type
-import Control.Arrow
+import           Control.Arrow
+import           Text.MMark.Type
 
 -- | Apply block transformation in the @'Endo' 'Bni'@ form to a block 'Bni'.
 applyBlockTrans :: Monad m => Kleisli m Bni Bni -> Bni -> m Bni

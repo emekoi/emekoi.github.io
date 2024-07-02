@@ -43,21 +43,21 @@ module Text.MMark.Parser.Internal
   )
 where
 
-import Control.Monad.State.Strict
-import Data.Bifunctor
-import Data.Function ((&))
-import Data.HashMap.Strict (HashMap)
-import Data.HashMap.Strict qualified as HM
-import Data.List.NonEmpty qualified as NE
-import Data.Ratio ((%))
-import Data.Text (Text)
-import Data.Text.Metrics (damerauLevenshteinNorm)
-import Lens.Micro (Lens', over, set, (.~), (^.))
-import Lens.Micro.Extras (view)
-import Text.MMark.Parser.Internal.Type
-import Text.Megaparsec hiding (State)
-import Text.Megaparsec qualified as M
-import Text.URI (URI)
+import           Control.Monad.State.Strict
+import           Data.Bifunctor
+import           Data.Function                   ((&))
+import           Data.HashMap.Strict             (HashMap)
+import qualified Data.HashMap.Strict             as HM
+import qualified Data.List.NonEmpty              as NE
+import           Data.Ratio                      ((%))
+import           Data.Text                       (Text)
+import           Data.Text.Metrics               (damerauLevenshteinNorm)
+import           Lens.Micro                      (Lens', over, set, (.~), (^.))
+import           Lens.Micro.Extras               (view)
+import qualified Text.Megaparsec                 as M
+import           Text.Megaparsec                 hiding (State)
+import           Text.MMark.Parser.Internal.Type
+import           Text.URI                        (URI)
 
 ----------------------------------------------------------------------------
 -- Block-level parser monad
@@ -78,7 +78,7 @@ runBParser ::
 runBParser p file input =
   case runState (snd <$> runParserT' p st) initialBlockState of
     (Left bundle, _) -> Left bundle
-    (Right x, st') -> Right (x, st' ^. bstDefs)
+    (Right x, st')   -> Right (x, st' ^. bstDefs)
   where
     st = mkInitialState file input 0
 
@@ -213,7 +213,7 @@ lookupGeneric l name = do
   defs <- gets (view (istDefs . l))
   case HM.lookup dlabel defs of
     Nothing -> return . Left $ closeNames dlabel (HM.keys defs)
-    Just x -> return (Right x)
+    Just x  -> return (Right x)
 
 -- | Select close enough (using the normalized Damerau-Levenshtein metric)
 -- definition labels.
