@@ -16,11 +16,13 @@
 -- Internal type definitions. Some of these are re-exported in the public
 -- modules.
 module Text.MMark.Type
-  ( MMark (..),
-    Extension (..),
-    Render (..),
+  ( MMarkT (..),
+    MMark,
+    ExtensionT (..),
+    Extension,
+    RenderT (..),
     Bni,
-    Attributes(..),
+    Attributes (..),
     Block (..),
     CellAlign (..),
     Inline (..),
@@ -34,36 +36,39 @@ where
 import           Control.Arrow
 import           Control.DeepSeq
 import           Data.Aeson
-import           Data.Data          (Data)
-import           Data.Function      (on)
-import           Data.List.NonEmpty (NonEmpty (..))
-import           Data.Map.Strict    (Map)
-import           Data.Monoid        (Last (..))
-import           Data.Text          (Text)
-import           Data.Typeable      (Typeable)
+import           Data.Data             (Data)
+import           Data.Function         (on)
+import           Data.Functor.Identity (Identity)
+import           Data.List.NonEmpty    (NonEmpty (..))
+import           Data.Map.Strict       (Map)
+import           Data.Monoid           (Last (..))
+import           Data.Text             (Text)
+import           Data.Typeable         (Typeable)
 import           GHC.Generics
 import           Lucid
-import           Text.URI           (URI (..))
+import           Text.URI              (URI (..))
 
 -- | Representation of complete markdown document. You can't look inside of
 -- 'MMark' on purpose. The only way to influence an 'MMark' document you
 -- obtain as a result of parsing is via the extension mechanism.
-data MMark m = MMark
+data MMarkT m = MMark
   { -- | Parsed YAML document at the beginning (optional)
     mmarkYaml      :: Maybe Value,
     -- | Actual contents of the document
     mmarkBlocks    :: [Bni],
     -- | Extension specifying how to process and render the blocks
-    mmarkExtension :: Extension m
+    mmarkExtension :: ExtensionT m
   }
 
-instance NFData (MMark m) where
+type MMark = MMarkT Identity
+
+instance NFData (MMarkT m) where
   rnf MMark {..} = rnf mmarkYaml `seq` rnf mmarkBlocks
 
 -- | Dummy instance.
 --
 -- @since 0.0.5.0
-instance Show (MMark m) where
+instance Show (MMarkT m) where
   show = const "MMark {..}"
 
 -- | An extension. You can apply extensions with 'Text.MMark.useExtension'
@@ -87,18 +92,20 @@ instance Show (MMark m) where
 -- Here, @e0@ will be applied first, then @e1@, then @e2@. The same applies
 -- to expressions involving 'mconcat'—extensions closer to beginning of the
 -- list passed to 'mconcat' will be applied later.
-data Extension m = Extension
+data ExtensionT m = Extension
   { -- | Block transformation
     extBlockTrans   :: Kleisli m Bni Bni,
     -- | Block render
-    extBlockRender  :: Render m (Block (Ois, HtmlT m ())),
+    extBlockRender  :: RenderT m (Block (Ois, HtmlT m ())),
     -- | Inline transformation
     extInlineTrans  :: Kleisli m Inline Inline,
     -- | Inline render
-    extInlineRender :: Render m Inline
+    extInlineRender :: RenderT m Inline
   }
 
-instance Monad m => Semigroup (Extension m) where
+type Extension = ExtensionT Identity
+
+instance Monad m => Semigroup (ExtensionT m) where
   x <> y =
     Extension
       { extBlockTrans = on (<<<) extBlockTrans x y,
@@ -107,7 +114,7 @@ instance Monad m => Semigroup (Extension m) where
         extInlineRender = on (<>) extInlineRender x y
       }
 
-instance Monad m => Monoid (Extension m) where
+instance Monad m => Monoid (ExtensionT m) where
   mempty =
     Extension
       { extBlockTrans = Kleisli pure,
@@ -120,12 +127,12 @@ instance Monad m => Monoid (Extension m) where
 -- | An internal type that captures the extensible rendering process we use.
 -- 'Render' has a function inside which transforms a rendering function of
 -- the type @a -> Html ()@.
-newtype Render m a = Render ((a -> HtmlT m ()) -> a -> HtmlT m ())
+newtype RenderT m a = Render ((a -> HtmlT m ()) -> a -> HtmlT m ())
 
-instance Semigroup (Render m a) where
+instance Semigroup (RenderT m a) where
   Render f <> Render g = Render (f . g)
 
-instance Monoid (Render m a) where
+instance Monoid (RenderT m a) where
   mempty = Render id
   mappend = (<>)
 

@@ -116,11 +116,14 @@ module Text.MMark
   ( -- * Parsing
     MMark,
     MMarkErr (..),
+    parseM,
     parse,
 
     -- * Extensions
     Extension,
+    useExtensionM,
     useExtension,
+    useExtensionsM,
     useExtensions,
 
     -- * Scanning
@@ -129,14 +132,15 @@ module Text.MMark
     projectYaml,
 
     -- * Rendering
+    renderM,
     render,
   )
 where
 
 import qualified Control.Foldl     as L
 import           Data.Aeson
-import           Text.MMark.Parser (MMarkErr (..), parse)
-import           Text.MMark.Render (render)
+import           Text.MMark.Parser (MMarkErr (..), parse, parseM)
+import           Text.MMark.Render (render, renderM)
 import           Text.MMark.Type
 
 ----------------------------------------------------------------------------
@@ -146,9 +150,12 @@ import           Text.MMark.Type
 -- apply 'Extension's /does matter/. Extensions you apply first take effect
 -- first. The extension system is designed in such a way that in many cases
 -- the order doesn't matter, but sometimes the difference is important.
-useExtension :: Monad m => Extension m -> MMark m -> MMark m
-useExtension ext mmark =
+useExtensionM :: Monad m => ExtensionT m -> MMarkT m -> MMarkT m
+useExtensionM ext mmark =
   mmark {mmarkExtension = ext <> mmarkExtension mmark}
+
+useExtension :: Extension -> MMark -> MMark
+useExtension = useExtensionM
 
 -- | Apply several 'Extension's to an 'MMark' document.
 --
@@ -159,8 +166,11 @@ useExtension ext mmark =
 -- As mentioned in the docs for 'useExtension', the order in which you apply
 -- extensions matters. Extensions closer to beginning of the list are
 -- applied later, i.e. the last extension in the list is applied first.
-useExtensions :: Monad m => [Extension m] -> MMark m -> MMark m
-useExtensions exts = useExtension (mconcat exts)
+useExtensionsM :: Monad m => [ExtensionT m] -> MMarkT m -> MMarkT m
+useExtensionsM exts = useExtensionM (mconcat exts)
+
+useExtensions :: [Extension] -> MMark -> MMark
+useExtensions = useExtensionsM
 
 ----------------------------------------------------------------------------
 -- Scanning
@@ -172,7 +182,7 @@ useExtensions exts = useExtension (mconcat exts)
 -- scanners of your own.
 runScanner ::
   -- | Document to scan
-  MMark m ->
+  MMark ->
   -- | 'L.Fold' to use
   L.Fold Bni a ->
   -- | Result of scanning
@@ -188,7 +198,7 @@ runScanner MMark {..} f = L.fold f mmarkBlocks
 runScannerM ::
   (Monad m) =>
   -- | Document to scan
-  MMark m ->
+  MMarkT n ->
   -- | 'L.FoldM' to use
   L.FoldM m Bni a ->
   -- | Result of scanning
@@ -196,5 +206,5 @@ runScannerM ::
 runScannerM MMark {..} f = L.foldM f mmarkBlocks
 
 -- | Extract contents of an optional YAML block that may have been parsed.
-projectYaml :: MMark m -> Maybe Value
+projectYaml :: MMarkT m -> Maybe Value
 projectYaml = mmarkYaml

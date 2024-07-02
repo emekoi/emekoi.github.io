@@ -42,7 +42,7 @@ mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link] h)
           uriFragment = URI.mkFragment anchor
         }
 
-applyBlockRender :: Monad m => Render m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
+applyBlockRender :: Monad m => RenderT m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
 applyBlockRender (Render r) = fix (r . baseBlockRender)
 
 baseBlockRender :: Monad m => (Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
@@ -115,7 +115,7 @@ baseBlockRender blockRender = \case
       CellAlignRight -> [style_ "text-align:right"]
       CellAlignCenter -> [style_ "text-align:center"]
 
-applyInlineRender :: Monad m => Render m Inline -> (Inline -> HtmlT m ())
+applyInlineRender :: Monad m => RenderT m Inline -> (Inline -> HtmlT m ())
 applyInlineRender (Render r) = fix (r . baseInlineRender)
 
 baseInlineRender :: Monad m => (Inline -> HtmlT m ()) -> Inline -> HtmlT m ()
@@ -149,8 +149,8 @@ baseInlineRender inlineRender = \case
   Span attrs inner ->
     span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
 
-render :: forall m. Monad m => [Extension m] -> MMark m -> HtmlT m ()
-render exts (MMark.useExtensions exts -> MMark {..}) =
+render :: forall m. Monad m => [ExtensionT m] -> MMarkT m -> HtmlT m ()
+render exts (MMark.useExtensionsM exts -> MMark {..}) =
   mapM_ rBlock mmarkBlocks
   where
     Extension {..} = mmarkExtension
@@ -174,7 +174,7 @@ data Document = Doc
 
 parse :: MonadFail m => Text -> Text -> m Document
 parse (Text.unpack -> input) source = do
-  case MMark.parse input source of
+  case MMark.parseM input source of
     Left errs -> fail $ Mega.errorBundlePretty errs
     Right r -> do
       let meta = fromMaybe Null $ MMark.projectYaml r

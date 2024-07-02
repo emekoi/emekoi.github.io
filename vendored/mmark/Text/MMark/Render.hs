@@ -13,7 +13,8 @@
 --
 -- MMark rendering machinery.
 module Text.MMark.Render
-  ( render,
+  ( renderM,
+    render
   )
 where
 
@@ -37,8 +38,8 @@ import qualified Text.URI            as URI
 --     * to lazy 'Data.Taxt.Lazy.Text' with 'renderText'
 --     * to lazy 'Data.ByteString.Lazy.ByteString' with 'renderBS'
 --     * directly to file with 'renderToFile'
-render :: forall m. Monad m => MMark m -> HtmlT m ()
-render MMark {..} =
+renderM :: forall m. Monad m => MMarkT m -> HtmlT m ()
+renderM MMark {..} =
   mapM_ rBlock mmarkBlocks
   where
     Extension {..} = mmarkExtension
@@ -54,8 +55,11 @@ render MMark {..} =
       x1 <- traverse (applyInlineTrans extInlineTrans) x0
       pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
 
+render :: MMark -> Html ()
+render = renderM
+
 -- | Apply a 'Render' to a given @'Block' 'Html' ()@.
-applyBlockRender :: Monad m => Render m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
+applyBlockRender :: Monad m => RenderT m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
 applyBlockRender (Render r) = fix (r . defaultBlockRender)
 
 -- | The default 'Block' render.
@@ -131,7 +135,7 @@ defaultBlockRender blockRender = \case
       CellAlignCenter -> [style_ "text-align:center"]
 
 -- | Apply a render to a given 'Inline'.
-applyInlineRender :: Monad m => Render m Inline -> (Inline -> HtmlT m ())
+applyInlineRender :: Monad m => RenderT m Inline -> (Inline -> HtmlT m ())
 applyInlineRender (Render r) = fix (r . defaultInlineRender)
 
 -- | The default render for 'Inline' elements.

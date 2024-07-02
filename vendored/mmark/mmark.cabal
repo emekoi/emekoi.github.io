@@ -12,6 +12,9 @@ synopsis:        Strict markdown processor for writers
 description:     Strict markdown processor for writers.
 category:        Text
 build-type:      Simple
+data-files:
+    data/*.md
+    data/*.html
 
 extra-doc-files:
     CHANGELOG.md
@@ -77,3 +80,80 @@ library
     if impl(ghcjs >=0)
         ghcjs-options: +RTS -K1G -RTS -Wall
 
+test-suite tests
+    type:             exitcode-stdio-1.0
+    main-is:          Spec.hs
+    hs-source-dirs:   tests
+    other-modules:
+        Text.MMarkSpec
+        Text.MMark.ExtensionSpec
+        Text.MMark.TestUtils
+
+    default-language: GHC2021
+    build-depends:
+        QuickCheck >=2.4 && <3,
+        aeson >=0.11 && <3,
+        base >=4.15 && <5,
+        foldl >=1.2 && <1.5,
+        hspec >=2 && <3,
+        hspec-megaparsec >=2 && <3,
+        lucid >=2.9.13 && <3,
+        megaparsec >=8 && <10,
+        mmark,
+        modern-uri >=0.3.4.4 && <0.4,
+        text >=0.2 && <2.2
+
+    if flag(dev)
+        ghc-options:
+            -Wall -Werror -Wredundant-constraints -Wpartial-fields
+            -Wunused-packages
+
+    else
+        ghc-options: -O2 -Wall
+
+    if impl(ghcjs >=0)
+        ghcjs-options: -O0 +RTS -K1G -M5G -RTS -Wall -Wwarn=missing-home-modules
+
+benchmark bench-speed
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   bench/speed
+    default-language: GHC2021
+    build-depends:
+        base >=4.15 && <5,
+        criterion >=0.6.2.1 && <1.7,
+        mmark,
+        text >=0.2 && <2.2
+
+    if flag(dev)
+        ghc-options:
+            -Wall -Werror -Wredundant-constraints -Wpartial-fields
+            -Wunused-packages
+
+    else
+        ghc-options: -O2 -Wall
+
+    if impl(ghcjs >=0)
+        ghcjs-options: -O0 +RTS -K1G -M6G -RTS -Wall -Wwarn=missing-home-modules
+
+benchmark bench-memory
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   bench/memory
+    default-language: GHC2021
+    build-depends:
+        base >=4.15 && <5,
+        mmark,
+        text >=0.2 && <2.2,
+        weigh >=0.0.4
+
+    if flag(dev)
+        ghc-options:
+            -Wall -Werror -Wredundant-constraints -Wpartial-fields
+            -Wunused-packages
+
+    else
+        ghc-options: -O2 -Wall
+
+    if impl(ghcjs >=0)
+        ghcjs-options: -O0 +RTS -K1G -M6G -RTS -Wall -Wwarn=missing-home-modules
