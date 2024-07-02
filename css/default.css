@@ -1,0 +1,156 @@
+@import url("https://cdn.jsdelivr.net/npm/normalize.css@8.0.1/normalize.css");
+
+*,::after,::before {
+  box-sizing: border-box;
+  min-width: 0;
+  position: relative;
+}
+
+$partial("css/fira_code.css")$
+$partial("css/flexoki.css")$
+$partial("css/sakura.css")$
+$partial("css/highlighting.css")$
+$partial("css/agda.css")$
+
+/* Light and Dark Theme Handling */
+.color-scheme-btn, .color-scheme-btn:hover {
+  background: none;
+  border: none;
+  opacity: 50%;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.color-scheme-btn:hover {
+  opacity: 100%;
+}
+
+/* Hide mode toggle when printing */
+@media print {
+  .color-scheme-btn, .color-scheme-btn:hover {
+      visibility: hidden;
+  }
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+.page-header {
+  font-size: 2.0rem;
+}
+
+.page-header ul {
+  column-gap: 5%;
+  display: flex;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+}
+
+.page-footer, footer {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin-top: auto;
+}
+
+.post-info * {
+  color: var(--color-tx-muted);
+}
+
+/* HACK: no clue how to get muted links with colored hover */
+.post-info a {
+  color: inherit;
+}
+
+.post-info ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.post-info li {
+  display: inline-block;
+}
+
+.post-info li:not(:last-child) {
+  padding-right: 1ch;
+}
+
+.post-list .date {
+  color: var(--color-tx-muted);
+  font-family: var(--font-family-monospace);
+  margin-right: 2%;
+}
+
+.post-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* h1 a, h2 a, h3 a, h4 a, h5 a, h6 a { */
+/*   text-decoration: none; */
+/* } */
+
+/* h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover, h6 a:hover { */
+/*   text-decoration: underline; */
+/* } */
+
+:is(h1, h2, h3, h4, h5, h6) a {
+  text-decoration: none;
+}
+
+:is(h1, h2, h3, h4, h5, h6) a:hover {
+  text-decoration: underline;
+}
+
+/* taken from the default pandoc styles */
+span.smallcaps {
+  font-variant: small-caps;
+}
+
+div.columns {
+  display: flex; gap: min(4vw, 1.5em);
+}
+
+div.column {
+  flex: auto; overflow-x: auto;
+}
+
+div.csl-bib-body { }
+
+div.csl-entry {
+  clear: both;
+/* $if(csl-entry-spacing)$ */
+/*   margin-bottom: $csl-entry-spacing$; */
+/* $endif$ */
+}
+
+.hanging-indent div.csl-entry {
+  margin-left:2em;
+  text-indent:-2em;
+}
+
+div.csl-left-margin {
+  min-width:2em;
+  float:left;
+}
+
+div.csl-right-inline {
+  margin-left:2em;
+  padding-left:1em;
+}
+
+div.csl-indent {
+  margin-left: 2em;
+}
