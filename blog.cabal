@@ -21,6 +21,7 @@ common base
     BlockArguments
     DuplicateRecordFields
     GADTs
+    LambdaCase
     NoFieldSelectors
     OverloadedLists
     OverloadedRecordDot
@@ -64,6 +65,7 @@ executable blog
       , text-icu               ^>= 0.8
       , time                   ^>= 1.12
       , aeson ^>= 2.2
+      , modern-uri
       -- , http-types ^>= 0.12
       -- , wai ^>= 3.2
       -- , wai-app-static ^>= 3.1

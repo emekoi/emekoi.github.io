@@ -12,6 +12,7 @@ import qualified Data.Text            as Text
 import           Data.Time.Clock
 import           Options.Applicative
 import qualified System.FilePath.Glob as Glob
+import qualified Data.Text.IO          as Text
 
 newtype Tag = Tag Text
   deriving (Eq, Ord)
@@ -64,9 +65,9 @@ options = do
     pGenerate = pure Generate
     pMetadata = Metadata
       <$> switch (long "clean" <> short 'c')
-      <*> some (strArgument $ metavar "FILES")
+      <*> some (strArgument $ metavar "FILES" <> action "file")
     pRender = Render
-      <$> (strArgument $ metavar "FILE")
+      <$> (strArgument $ metavar "FILE" <> action "file")
 
 config :: Map Text SomePretty
 config =
@@ -87,7 +88,11 @@ run Generate Options{} = do
 run (Metadata clean files) Options{} = do
   print (clean, files)
 run (Render file) Options{} = do
-  render file
+  source <- Text.readFile (Text.unpack file)
+  case parse file source of
+    Left err -> putStrLn err
+    Right Doc{..} ->
+      print body
 
 main :: IO ()
 main = do
