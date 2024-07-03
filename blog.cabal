@@ -41,7 +41,6 @@ executable blog
     other-modules:
       Blog.MMark
       Blog.Config
-      Blog.Ninja
       Blog.Slug
       Blog.Template
     if !flag(ci)

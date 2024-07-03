@@ -1,9 +1,80 @@
+{-# LANGUAGE CPP #-}
+
 module Blog where
+
+#if 1
+
+import qualified Blog.MMark          as M
+import           Control.Applicative
+import           Development.Shake
+import           GHC.Conc            (numCapabilities)
+import qualified Options.Applicative as A
+
+data Options = Options
+  { command   :: Command
+  , verbosity :: Verbosity
+  , jobs      :: Int
+  }
+
+data BuildOptions = BuildOptions
+  { buildDrafts :: Bool
+  }
+
+data WatchOptions = WatchOptions
+  { port :: Int
+  }
+
+data Command
+  = Watch WatchOptions
+  | Build BuildOptions
+
+run :: Command -> Options -> IO ()
+run (Build _) Options{..} = shake options do
+  pure ()
+  where
+    options = shakeOptions
+      { shakeVerbosity = verbosity
+      , shakeThreads   = jobs
+      , shakeColor     = True
+      , shakeFiles     = "_build"
+      }
+run (Watch {}) _ = error "TODO: watch"
+
+parseOptions :: A.Parser Options
+parseOptions = do
+  command <- A.hsubparser (mconcat
+    [ A.command "build" (A.info pBuild (A.progDesc "Build the site"))
+    ]) <|> pBuild
+
+  verbosity <- (A.option A.auto $ mconcat
+    [ A.long "verbosity"
+    , A.short 'v'
+    , A.metavar "VERBOSITY"
+    , A.completeWith $ map show [minBound :: Verbosity .. maxBound]
+    ]) <|> pure Error
+
+  jobs <- (A.option A.auto $ mconcat
+    [ A.long "jobs"
+    , A.short 'j'
+    , A.metavar "N"
+    ]) <|> pure (numCapabilities `div` 2)
+
+  pure Options{..}
+
+  where
+    pBuild = fmap Build $ BuildOptions
+      <$> A.switch (A.long "drafts" <> A.short 'd')
+
+main :: IO ()
+main = do
+  options <- A.execParser (A.info (parseOptions A.<**> A.helper) mempty)
+  run options.command options
+
+#else
 
 import           Blog.MMark
 import           Blog.Ninja
 import           Data.Aeson            (Value (..), (.=))
-import           Data.Default
 import           Data.Foldable
 import           Data.Map.Strict       (Map)
 import qualified Data.Map.Strict       as Map
@@ -31,21 +102,11 @@ data Post = Info
     other     :: Map Text Text
   }
 
-copy :: Rule
-copy = def
-  { name = "copy"
-  , command = "cp $in $out"
-  }
-
 data Metadata = Meta
   { posts  :: [Post]
   , drafts :: [Post]
   , tags   :: Set Tag
   }
-
--- newtype Task c k v = Task
---   { runTask :: forall f. c f => (k -> f v) -> f v
---   }
 
 data Options = Options
   { command :: Command
@@ -146,3 +207,5 @@ main :: IO ()
 main = do
   options <- execParser (info options idm)
   run options.command options
+
+#endif
