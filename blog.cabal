@@ -18,9 +18,11 @@ common base
   default-language: Haskell2010
   default-extensions:
     ApplicativeDo
+    BangPatterns
     BlockArguments
     DuplicateRecordFields
     GADTs
+    GeneralizedNewtypeDeriving
     LambdaCase
     NoFieldSelectors
     OverloadedLists
@@ -38,34 +40,38 @@ executable blog
     main-is:     Blog.hs
     other-modules:
       Blog.MMark
+      Blog.Config
       Blog.Ninja
       Blog.Slug
+      Blog.Template
     if !flag(ci)
       cpp-options: -DPREVIEW_SERVER
     build-depends:
       , Glob                   ^>= 0.10
+      , aeson                  ^>= 2.2
       , base                   ^>= 4.19
-      , lucid                  ^>= 2.11
+      , binary                 ^>= 0.8
       , bytestring             ^>= 0.11
       , containers             ^>= 0.6
       , data-default           ^>= 0.7
       , directory              ^>= 1.3
       , filepath               ^>= 1.4
       , ghc-syntax-highlighter ^>= 0.0.10
-      , mmark                  ^>= 0.0.7
-      , mtl                    ^>= 2.3
+      , lucid                  ^>= 2.11
       , megaparsec             ^>= 9.6
+      , mmark                  ^>= 0.0.7
+      , modern-uri             ^>= 0.3
+      , mtl                    ^>= 2.3
       , optparse-applicative   ^>= 0.18
       , prettyprinter          ^>= 1.7
       , process                ^>= 1.6
       , raw-strings-qq         ^>= 1.1
-      , store                  ^>= 0.7
+      , shake                  ^>= 0.19
       , stache                 ^>= 2.3
+      , store                  ^>= 0.7
       , text                   ^>= 2.1
       , text-icu               ^>= 0.8
       , time                   ^>= 1.12
-      , aeson ^>= 2.2
-      , modern-uri
       -- , http-types ^>= 0.12
       -- , wai ^>= 3.2
       -- , wai-app-static ^>= 3.1

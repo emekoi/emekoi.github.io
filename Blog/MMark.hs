@@ -9,8 +9,7 @@ import           Blog.Slug
 import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.Trans
-import           Data.Aeson.Types      (Value (..))
-import           Data.Char             (isSpace)
+import           Data.Aeson.Types      (Object)
 import           Data.Function         (fix)
 import           Data.List.NonEmpty    (NonEmpty (..))
 import qualified Data.List.NonEmpty    as NE
@@ -61,9 +60,8 @@ baseBlockRender blockRender = \case
     mkHeader h5_ i html >> newline
   Heading6 (i, html) ->
     mkHeader h6_ i html >> newline
-  CodeBlock infoString txt -> do
-    let f x = class_ $ "language-" <> Text.takeWhile (not . isSpace) x
-    pre_ $ code_ (maybe [] (pure . f) infoString) (toHtml txt)
+  CodeBlock _ txt -> do
+    div_ [class_ "hl"] (newline <* (pre_ $ toHtml txt))
     newline
   Naked (_, html) ->
     html >> newline
@@ -106,8 +104,9 @@ baseBlockRender blockRender = \case
           newline
       newline
     newline
-  Div attrs blocks ->
-    div_ (lucidAttributes attrs) (mapM_ blockRender blocks)
+  Div attrs blocks -> do
+    div_ (lucidAttributes attrs) (newline <* mapM_ blockRender blocks)
+    newline
   where
     alignStyle = \case
       CellAlignDefault -> []
@@ -167,7 +166,7 @@ render exts (MMark.useExtensionsM exts -> MMark {..}) =
       pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
 
 data Document = Doc
-  { meta :: Value
+  { meta :: Object
   , body :: TextL.Text
   }
   deriving (Show)
@@ -177,7 +176,7 @@ parse (Text.unpack -> input) source = do
   case MMark.parseM input source of
     Left errs -> fail $ Mega.errorBundlePretty errs
     Right r -> do
-      let meta = fromMaybe Null $ MMark.projectYaml r
+      let meta = fromMaybe mempty $ MMark.projectYaml r
       body <- renderTextT $ render extensions r
       pure Doc {..}
   where

@@ -1,16 +1,15 @@
 @import url("https://cdn.jsdelivr.net/npm/normalize.css@8.0.1/normalize.css");
+@import url("/css/fira_code.css");
+@import url("/css/flexoki.css");
+@import url("/css/sakura.css");
+@import url("/css/highlighting.css");
+@import url("/css/agda.css");
 
 *,::after,::before {
   box-sizing: border-box;
   min-width: 0;
   position: relative;
 }
-
-$partial("css/fira_code.css")$
-$partial("css/flexoki.css")$
-$partial("css/sakura.css")$
-$partial("css/highlighting.css")$
-$partial("css/agda.css")$
 
 /* Light and Dark Theme Handling */
 .color-scheme-btn, .color-scheme-btn:hover {

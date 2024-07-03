@@ -114,7 +114,7 @@ run (Render RenderOptions{..}) Options{} = do
       Right t -> pure . TextL.toStrict $ Stache.renderMustache t (Object baseMeta)
   doc@Doc{..} <- parse file source
   case template of
-    Just template | Object meta <- meta -> do
+    Just template -> do
       t <- Stache.compileMustacheDir (Stache.PName template) "templates"
       let sbody = TextL.toStrict doc.body
       TextL.putStrLn $ Stache.renderMustache t (Object $ baseMeta <> meta <> ("body" .= sbody))
