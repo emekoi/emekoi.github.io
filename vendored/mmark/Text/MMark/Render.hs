@@ -125,8 +125,9 @@ defaultBlockRender blockRender = \case
           newline
       newline
     newline
-  Div attrs blocks ->
-    div_ (lucidAttributes attrs) (mapM_ blockRender blocks)
+  Div attrs blocks -> do
+    div_ (lucidAttributes attrs) (newline <* mapM_ blockRender blocks)
+    newline
   where
     alignStyle = \case
       CellAlignDefault -> []

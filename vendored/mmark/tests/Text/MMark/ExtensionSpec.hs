@@ -11,8 +11,8 @@ import qualified Lucid                as L
 import           Test.Hspec
 import           Test.QuickCheck
 import qualified Text.MMark           as MMark
-import           Text.MMark.Extension (Block (..), Inline (..))
 import qualified Text.MMark.Extension as Ext
+import           Text.MMark.Extension (Block (..), Inline (..))
 import           Text.MMark.TestUtils
 
 spec :: Spec

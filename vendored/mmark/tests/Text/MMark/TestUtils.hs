@@ -21,8 +21,8 @@ import qualified Data.Text.Lazy     as TL
 import qualified Lucid              as L
 import           Test.Hspec
 import           Text.Megaparsec
-import           Text.MMark         (MMark, MMarkErr)
 import qualified Text.MMark         as MMark
+import           Text.MMark         (MMark, MMarkErr)
 
 ----------------------------------------------------------------------------
 -- Document creation and rendering

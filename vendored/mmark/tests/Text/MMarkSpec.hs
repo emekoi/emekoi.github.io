@@ -16,10 +16,10 @@ import           Lucid
 import           Test.Hspec
 import           Test.Hspec.Megaparsec
 import           Text.Megaparsec       (ErrorFancy (..))
-import           Text.MMark            (MMarkErr (..))
 import qualified Text.MMark            as MMark
-import           Text.MMark.Extension  (Inline (..))
+import           Text.MMark            (MMarkErr (..))
 import qualified Text.MMark.Extension  as Ext
+import           Text.MMark.Extension  (Inline (..))
 import           Text.MMark.TestUtils
 
 -- NOTE This test suite is mostly based on (sometimes altered) examples from

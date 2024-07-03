@@ -201,7 +201,7 @@ data Block a
     -- @since 0.0.4.0
     Table (NonEmpty CellAlign) (NonEmpty (NonEmpty a))
   | -- | Divs
-    Div Attributes (NonEmpty (Block a))
+    Div Attributes [Block a]
   deriving (Show, Eq, Ord, Data, Typeable, Generic, Functor, Foldable, Traversable)
 
 instance (NFData a) => NFData (Block a)

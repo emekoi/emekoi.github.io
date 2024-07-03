@@ -45,9 +45,8 @@ asPlainText = foldMap $ \case
 
 -- | Convert 'Attributes' to lists of Lucid 'Attribute's
 lucidAttributes :: Attributes -> [Attribute]
-lucidAttributes Attributes{..} =
-  Map.foldrWithKey (\k v acc -> term k v : acc) attrs pairs
+lucidAttributes Attributes{..} = id' ++ classes' ++ pairs'
   where
-    attrs = case getLast identifier of
-      Nothing -> [classes_ classes]
-      Just x  -> [id_ x, classes_ classes]
+    pairs' = Map.foldrWithKey (\k v acc -> term k v : acc) [] pairs
+    classes' = if null classes then [] else [classes_ classes]
+    id' = maybe [] (pure . id_) (getLast identifier)
