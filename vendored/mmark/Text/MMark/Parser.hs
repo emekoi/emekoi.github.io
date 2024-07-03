@@ -157,7 +157,7 @@ pMMark = do
       (Just yaml, blocks)
 
 -- | Parse a set of attributes.
-pAttributes :: BParser Attributes
+pAttributes :: MonadParsec MMarkErr Text m => m Attributes
 pAttributes = between (char '{') (char '}') $ do
   mconcat <$> some ((pClass <|> pId <|> pPair) <* sc)
   where
@@ -653,9 +653,12 @@ pInlines = do
         '`' -> pCodeSpan
         '[' -> do
           allowsLinks <- isLinksAllowed
-          if allowsLinks
-            then pLink
-            else unexpEic (Tokens $ nes '[')
+          allowsSpans <- isSpansAllowed
+          case (allowsLinks, allowsSpans) of
+            (False, False) -> unexpEic (Tokens $ nes '[')
+            (True, True)   -> (try pSpan) <|> pLink
+            (False, True)  -> pSpan
+            (True, False)  -> pLink
         '!' -> do
           gotImage <- (succeeds . void . lookAhead . string) "!["
           allowsImages <- isImagesAllowed
@@ -677,27 +680,6 @@ pInlines = do
           if isFrameConstituent ch
             then pEnclosedInline
             else pPlain
-
--- | Parse a math block.
---
--- See also: 'pCodeSpanB'.
-pMath :: IParser Inline
-pMath = do
-  n <- try (length <$> some (char '$'))
-  let finalizer = try $ do
-        void $ count n (char '$')
-        notFollowedBy (char '$')
-  guard (n <= 2)
-  let style = if n == 1 then InlineMath else DisplayMath
-  r <-
-    Math style . collapseWhiteSpace . T.concat
-      <$> manyTill
-        ( label "LaTeX" $
-            takeWhile1P Nothing (== '$')
-              <|> takeWhile1P Nothing (/= '$')
-        )
-        finalizer
-  r <$ lastChar OtherChar
 
 -- | Parse a code span.
 --
@@ -723,7 +705,7 @@ pLink :: IParser Inline
 pLink = do
   void (char '[')
   o <- getOffset
-  txt <- disallowLinks (disallowEmpty pInlines)
+  txt <- disallowLinks $ disallowEmpty pInlines
   void (char ']')
   (dest, mtitle) <- pLocation o txt
   Link txt dest mtitle <$ lastChar OtherChar
@@ -837,6 +819,36 @@ pPlain = fmap (Plain . bakeText) . foldSome $ do
                 if Char.isPunctuation ch
                   then char ch <* lastChar PunctChar
                   else char ch <* lastChar OtherChar
+
+-- | Parse a math block.
+--
+-- See also: 'pCodeSpanB'.
+pMath :: IParser Inline
+pMath = do
+  n <- try (length <$> some (char '$'))
+  let finalizer = try $ do
+        void $ count n (char '$')
+        notFollowedBy (char '$')
+  guard (n <= 2)
+  let style = if n == 1 then InlineMath else DisplayMath
+  r <-
+    Math style . collapseWhiteSpace . T.concat
+      <$> manyTill
+        ( label "LaTeX" $
+            takeWhile1P Nothing (== '$')
+              <|> takeWhile1P Nothing (/= '$')
+        )
+        finalizer
+  r <$ lastChar OtherChar
+
+-- | Parse a span.
+pSpan :: IParser Inline
+pSpan = do
+  void (char '[')
+  txt <- disallowSpans $ disallowEmpty pInlines
+  void (char ']')
+  attr <- pAttributes <* sc
+  Span attr txt <$ lastChar OtherChar
 
 ----------------------------------------------------------------------------
 -- Auxiliary inline-level parsers

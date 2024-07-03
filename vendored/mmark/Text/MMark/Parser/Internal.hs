@@ -32,6 +32,8 @@ module Text.MMark.Parser.Internal
     getLastChar,
     lastChar,
     lookupReference,
+    disallowSpans,
+    isSpansAllowed,
     Isp (..),
     CharType (..),
 
@@ -223,6 +225,14 @@ closeNames r' =
     . map unDefLabel
   where
     r = unDefLabel r'
+
+-- | Ask whether parsing of links is allowed.
+isSpansAllowed :: IParser Bool
+isSpansAllowed = gets (view istAllowLinks)
+
+-- | Disallow parsing of images.
+disallowSpans :: IParser a -> IParser a
+disallowSpans = locally istAllowSpans False
 
 ----------------------------------------------------------------------------
 -- Helpers
