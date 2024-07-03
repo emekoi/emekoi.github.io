@@ -672,10 +672,32 @@ pInlines = do
             else pPlain
         '\\' ->
           try pHardLineBreak <|> pPlain
+        '$' -> pMath
         ch ->
           if isFrameConstituent ch
             then pEnclosedInline
             else pPlain
+
+-- | Parse a math block.
+--
+-- See also: 'pCodeSpanB'.
+pMath :: IParser Inline
+pMath = do
+  n <- try (length <$> some (char '$'))
+  let finalizer = try $ do
+        void $ count n (char '$')
+        notFollowedBy (char '$')
+  guard (n <= 2)
+  let style = if n == 1 then InlineMath else DisplayMath
+  r <-
+    Math style . collapseWhiteSpace . T.concat
+      <$> manyTill
+        ( label "LaTeX" $
+            takeWhile1P Nothing (== '$')
+              <|> takeWhile1P Nothing (/= '$')
+        )
+        finalizer
+  r <$ lastChar OtherChar
 
 -- | Parse a code span.
 --
@@ -1114,6 +1136,7 @@ isMarkupChar x = isFrameConstituent x || f x
       '[' -> True
       ']' -> True
       '`' -> True
+      '$' -> True
       _ -> False
 
 isSpecialChar :: Char -> Bool

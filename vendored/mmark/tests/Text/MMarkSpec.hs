@@ -1825,7 +1825,8 @@ spec = parallel $ do
           ==-> "<p>foo\nbaz</p>\n"
     context "6.11 Textual content" $ do
       it "CM622" $
-        "hello $.;'there"
+        -- NOTE: modified to account for LaTeX fragments
+        "hello \\$.;'there"
           ==-> "<p>hello $.;&#39;there</p>\n"
       it "CM623" $
         "Foo χρῆν"
