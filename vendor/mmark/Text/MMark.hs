@@ -206,5 +206,5 @@ runScannerM ::
 runScannerM MMark {..} f = L.foldM f mmarkBlocks
 
 -- | Extract contents of an optional YAML block that may have been parsed.
-projectYaml :: MMarkT m -> Maybe Value
+projectYaml :: MMarkT m -> Maybe Object
 projectYaml = mmarkYaml

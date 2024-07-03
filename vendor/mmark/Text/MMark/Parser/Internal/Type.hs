@@ -106,7 +106,7 @@ data InlineState = InlineState
     -- | Reference link definitions
     _istDefs        :: Defs,
     -- | Whether to allow parsing of spans
-    _istAllowSpans :: Bool
+    _istAllowSpans  :: Bool
   }
 
 -- | Initial value for 'InlineState'.

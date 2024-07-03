@@ -53,7 +53,7 @@ import           Text.URI              (URI (..))
 -- obtain as a result of parsing is via the extension mechanism.
 data MMarkT m = MMark
   { -- | Parsed YAML document at the beginning (optional)
-    mmarkYaml      :: Maybe Value,
+    mmarkYaml      :: Maybe Object,
     -- | Actual contents of the document
     mmarkBlocks    :: [Bni],
     -- | Extension specifying how to process and render the blocks
