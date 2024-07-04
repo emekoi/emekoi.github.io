@@ -47,7 +47,6 @@ executable blog
     if !flag(ci)
       cpp-options: -DPREVIEW_SERVER
     build-depends:
-      , Glob                   ^>= 0.10
       , aeson                  ^>= 2.2
       , base                   ^>= 4.19
       , binary                 ^>= 0.8
@@ -70,10 +69,7 @@ executable blog
       , stache                 ^>= 2.3
       , text                   ^>= 2.1
       , text-icu               ^>= 0.8
-      , time                   ^>= 1.14
-      , microlens-platform
-      , microlens-aeson
-      , microlens
+      , time                   ^>= 1.12
 
       -- , http-types ^>= 0.12
       -- , wai ^>= 3.2

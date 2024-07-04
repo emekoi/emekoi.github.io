@@ -1,9 +1,8 @@
-{-# LANGUAGE QuasiQuotes #-}
-
 module Blog.MMark
-    ( Page (..)
-    , Blog.MMark.render
-    ) where
+  ( Page (..)
+  , renderMarkdown
+  , renderMarkdownIO
+  ) where
 
 import           Blog.Slug
 import           Control.Arrow
@@ -16,6 +15,7 @@ import qualified Data.List.NonEmpty    as NE
 import           Data.Maybe            (fromMaybe)
 import           Data.Text             (Text)
 import qualified Data.Text             as Text
+import qualified Data.Text.IO          as Text
 import qualified Data.Text.Lazy        as TextL
 import           Lucid
 import qualified Text.Megaparsec.Error as Mega
@@ -171,8 +171,8 @@ data Page = Page
   }
   deriving (Show)
 
-render :: MonadFail m => Text -> Text -> m Page
-render (Text.unpack -> input) source = do
+renderMarkdown :: MonadFail m => FilePath -> Text -> m Page
+renderMarkdown input source = do
   case MMark.parseM input source of
     Left errs -> fail $ Mega.errorBundlePretty errs
     Right r -> do
@@ -181,3 +181,8 @@ render (Text.unpack -> input) source = do
       pure Page {..}
   where
     extensions = []
+
+renderMarkdownIO :: (MonadFail m, MonadIO m) => FilePath -> m Page
+renderMarkdownIO file = do
+  input <- liftIO $ Text.readFile file
+  renderMarkdown file input

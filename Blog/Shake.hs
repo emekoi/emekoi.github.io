@@ -2,8 +2,11 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TypeFamilies   #-}
 
-module Blog.Shake where
+module Blog.Shake
+  ( module Blog.Shake
+  ) where
 
+import           Control.Monad
 import           Data.Aeson
 import qualified Data.Char                 as Char
 import qualified Data.List                 as List
@@ -28,6 +31,16 @@ aesonOptions = defaultOptions
       . List.groupBy (const Char.isLower)
   }
 
+newtype GitHash = GitHash String
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+
+type instance RuleResult GitHash = Text
+
+gitHashOracle :: Rules ()
+gitHashOracle =
+  void . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
+    cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
+
 newtype Tag = Tag Text
   deriving (Eq, Ord, ToJSON, FromJSON)
 
@@ -48,6 +61,7 @@ instance ToHtml Tag where
 
 data Post = Post
   { body      :: TextL.Text
+  , direction :: Maybe Text
   , hideTitle :: Bool
   , published :: Maybe UTCTime
   , subtitle  :: Maybe Text
@@ -83,16 +97,6 @@ instance ToJSON Site where
 
 instance FromJSON Site where
   parseJSON = genericParseJSON aesonOptions
-
-newtype GitHash = GitHash String
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
-
-type instance RuleResult GitHash = Text
-
-gitHash :: Rules (GitHash -> Action Text)
-gitHash =
-  addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
-    cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
 
 defaultSite :: Action Site
 defaultSite = do

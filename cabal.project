@@ -1,5 +1,2 @@
 packages: ./*.cabal
 optional-packages: vendor/*/*.cabal
-
--- only time 1.14 makes the generic instances available
-allow-newer: time

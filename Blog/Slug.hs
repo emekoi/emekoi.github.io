@@ -1,6 +1,6 @@
 module Blog.Slug
-    ( module Blog.Slug
-    ) where
+  ( titleSlug
+  ) where
 
 import qualified Data.Char          as Char
 import           Data.Text          (Text)
