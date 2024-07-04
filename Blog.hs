@@ -9,16 +9,20 @@ import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
 import qualified Data.ByteString.Lazy       as LBS
+import           Data.String                (IsString (..))
 import qualified Data.Text.Lazy.Encoding    as TextL
 import           Development.Shake          hiding (shakeOptions)
 import qualified Development.Shake          as Shake
-import           Development.Shake.FilePath ((</>))
+import           Development.Shake.FilePath ((</>), (<.>))
 import qualified Development.Shake.FilePath as FP
 import           GHC.Conc                   (numCapabilities)
 import           GHC.Stack
 import qualified Options.Applicative        as A
 import           Prelude                    hiding (writeFile)
 import qualified System.Directory           as Dir
+import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
+import qualified Data.Text.IO          as Text
 
 data Options = Options
   { command   :: Command
@@ -33,6 +37,7 @@ data BuildOptions = BuildOptions
 data Command
   = Build BuildOptions
   | Clean
+
 
 shakeOptions :: Options -> IO ShakeOptions
 shakeOptions Options{..} = do
@@ -51,35 +56,69 @@ writeFile name x = liftIO $ do
   Dir.createDirectoryIfMissing True (FP.takeDirectory name)
   LBS.writeFile name x
 
-staticFiles :: Action ()
-staticFiles = do
-  files <- getDirectoryFiles "." ["css/*.css", "fonts//*"]
-  buildDir <- shakeFiles <$> getShakeOptions
-  void $ forP files $ \file -> do
-    copyFileChanged file (buildDir </> file)
+data Route
+  = Dynamic (FilePath -> FilePath) FilePattern
+  | Static Bool (Maybe FilePath) FilePath
 
+instance IsString Route where
+  fromString = Static False Nothing
 
+getOutputRules :: FilePath -> Rules FilePath
+getOutputRules file = do
+  buildDir <- shakeFiles <$> getShakeOptionsRules
+  pure $ buildDir </> file
+
+route :: Route -> (FilePath -> FilePath -> Action ()) -> Rules ()
+route (Static isPat input output) f = do
+  output <- getOutputRules output
+  unless isPat $ want [output]
+  output %> \x -> f (fromMaybe x input) x
+route (Dynamic g pat) f = do
+  buildDir <- shakeFiles <$> getShakeOptionsRules
+  let getOut x = buildDir </> g x
+
+  -- split into 2 steps to avoid indirect recursion
+  action $ getDirectoryFiles "" [pat] >>= need . fmap getOut
+
+  -- convert an Action r to a Rules (Action r)
+  outputMap <- fmap ($ ()) $ newCache \() ->
+    Map.fromList <$> fmap (\x -> (getOut x, x)) <$> getDirectoryFiles "" [pat]
+
+  action $ void outputMap
+  getOut pat %> \output -> do
+    input <- (Map.! output) <$> outputMap
+    f input output
+
+routePage :: FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
+routePage = route . Dynamic (\x -> FP.takeBaseName x <.> "html")
+
+routeStatic :: FilePattern -> Rules ()
+routeStatic = flip route copyFileChanged . Dynamic id
 
 run :: Options -> Command -> IO ()
 run o (Build _) = do
   options <- shakeOptions o
   shake options $ do
     sequence_ [ Blog.gitHashOracle ]
-    action staticFiles
-
-    buildDir <- shakeFiles <$> getShakeOptionsRules
 
     template <- Blog.compileTemplates "templates"
 
-    want [buildDir </> "404.html"]
+    routeStatic "css/*.css"
+    routeStatic "fonts//*"
 
-    (buildDir </> "404.html") %> \out -> do
+    routePage "pages/404.md" \input output -> do
       Just t <- template "page.html"
-      -- let file = FP.dropDirectory1 $ out -<.> "md"
-      need ["pages/404.md"]
-      page <- Blog.renderMarkdownIO "pages/404.md"
-      output <- Blog.renderPage t page
-      writeFile out (TextL.encodeUtf8 output)
+      page <- Blog.renderMarkdownIO input
+      content <- TextL.encodeUtf8 <$> Blog.renderPage t page
+      writeFile output content
+
+    routePage "pages/index.md" \input output -> do
+      Just t <- template "page.html"
+      page <- do
+        raw <- Blog.preprocess input
+        Blog.renderMarkdown input raw
+      content <- TextL.encodeUtf8 <$> Blog.renderPage t page
+      writeFile output content
 
 run o Clean = do
   options <- shakeOptions o

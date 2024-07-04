@@ -31,7 +31,6 @@ compileTemplates :: FilePath -> Rules (Text -> Action (Maybe Template))
 compileTemplates dir = newCache $ \(Stache.PName -> pname) -> do
   putInfo "Compiling Templates"
   files <- Stache.getMustacheFilesInDir dir
-  need [dir]
   case files of
     []     ->  pure Nothing
     x : xs -> do
