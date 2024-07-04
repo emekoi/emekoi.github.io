@@ -26,8 +26,8 @@ import           Text.MMark.Type       as MMark
 import           Text.MMark.Util
 import qualified Text.URI              as URI
 
-newline :: Monad m => HtmlT m ()
-newline = "\n"
+nl :: Monad m => HtmlT m ()
+nl = "\n"
 
 mkHeader :: Monad m => ([Attribute] -> HtmlT m () -> HtmlT m ()) -> Ois -> HtmlT m () -> HtmlT m ()
 mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link] h)
@@ -47,66 +47,66 @@ applyBlockRender (Render r) = fix (r . baseBlockRender)
 baseBlockRender :: Monad m => (Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
 baseBlockRender blockRender = \case
   ThematicBreak ->
-    hr_ [] >> newline
+    hr_ [] >> nl
   Heading1 (i, html) ->
-    mkHeader h1_ i html >> newline
+    mkHeader h1_ i html >> nl
   Heading2 (i, html) ->
-    mkHeader h2_ i html >> newline
+    mkHeader h2_ i html >> nl
   Heading3 (i, html) ->
-    mkHeader h3_ i html >> newline
+    mkHeader h3_ i html >> nl
   Heading4 (i, html) ->
-    mkHeader h4_ i html >> newline
+    mkHeader h4_ i html >> nl
   Heading5 (i, html) ->
-    mkHeader h5_ i html >> newline
+    mkHeader h5_ i html >> nl
   Heading6 (i, html) ->
-    mkHeader h6_ i html >> newline
+    mkHeader h6_ i html >> nl
   CodeBlock _ txt -> do
-    div_ [class_ "hl"] (newline <* (pre_ $ toHtml txt))
-    newline
+    div_ [class_ "hl"] (nl <* (pre_ $ toHtml txt))
+    nl
   Naked (_, html) ->
-    html >> newline
+    html >> nl
   Paragraph (_, html) ->
-    p_ html >> newline
+    p_ html >> nl
   Blockquote blocks -> do
-    blockquote_ (newline <* mapM_ blockRender blocks)
-    newline
+    blockquote_ (nl <* mapM_ blockRender blocks)
+    nl
   OrderedList i items -> do
     let startIndex = [start_ (Text.pack $ show i) | i /= 1]
     ol_ startIndex $ do
-      newline
+      nl
       forM_ items $ \x -> do
-        li_ (newline <* mapM_ blockRender x)
-        newline
-    newline
+        li_ (nl <* mapM_ blockRender x)
+        nl
+    nl
   UnorderedList items -> do
     ul_ $ do
-      newline
+      nl
       forM_ items $ \x -> do
-        li_ (newline <* mapM_ blockRender x)
-        newline
-    newline
+        li_ (nl <* mapM_ blockRender x)
+        nl
+    nl
   Table calign (hs :| rows) -> do
     table_ $ do
-      newline
+      nl
       thead_ $ do
-        newline
+        nl
         tr_ $
           forM_ (NE.zip calign hs) $ \(a, h) ->
             th_ (alignStyle a) (snd h)
-        newline
-      newline
+        nl
+      nl
       tbody_ $ do
-        newline
+        nl
         forM_ rows $ \row -> do
           tr_ $
             forM_ (NE.zip calign row) $ \(a, h) ->
               td_ (alignStyle a) (snd h)
-          newline
-      newline
-    newline
+          nl
+      nl
+    nl
   Div attrs blocks -> do
-    div_ (lucidAttributes attrs) (newline <* mapM_ blockRender blocks)
-    newline
+    div_ (lucidAttributes attrs) (nl <* mapM_ blockRender blocks)
+    nl
   where
     alignStyle = \case
       CellAlignDefault -> []
@@ -122,7 +122,7 @@ baseInlineRender inlineRender = \case
   Plain txt ->
     toHtml txt
   LineBreak ->
-    br_ [] >> newline
+    br_ [] >> nl
   Emphasis inner ->
     em_ (mapM_ inlineRender inner)
   Strong inner ->
@@ -180,9 +180,34 @@ renderMarkdown input source = do
       content <- renderTextT $ renderHTML extensions r
       pure Page {..}
   where
-    extensions = []
+    extensions =
+      [ descriptionList
+      , rawBlocks
+      ]
 
 renderMarkdownIO :: (MonadFail m, MonadIO m) => FilePath -> m Page
 renderMarkdownIO file = do
   input <- liftIO $ Text.readFile file
   renderMarkdown file input
+
+-- scuffed implementation of description lists
+descriptionList :: MonadFail m => ExtensionT m
+descriptionList = blockRenderM \old -> \case
+  Div attrs blocks | elem "dl" (MMark.classes attrs) -> do
+    dl_ $ forM_ (pairUp blocks) \(x, y) -> do
+      dt_ (old x)
+      dd_ (old y)
+    nl
+  x -> old x
+  where
+    pairUp = reverse . fst . foldl go ([], Nothing)
+
+    go (acc, Nothing) fst = (acc, Just fst)
+    go (acc, Just fst) snd = ((fst, snd) : acc, Nothing)
+
+-- emit blocks with language 'raw' as raw HTML
+rawBlocks :: MonadFail m => ExtensionT m
+rawBlocks = blockRenderM \old -> \case
+  CodeBlock (Just "{=raw}") txt -> toHtmlRaw txt
+  x -> old x
+

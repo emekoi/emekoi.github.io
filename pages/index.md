@@ -9,16 +9,21 @@ I am Emeka Nkurumeh, a third-year undergraduate student at Caltech. My main inte
 You can find my resume [here](/static/resume.pdf).
 
 # Contact
+
+::: {.dl}
+
 Email
-: <{{email}}>
+
+<{{site.email}}>
 
 Github
-: [@emekoi]({{github}})
 
-<!-- # Publications -->
+[@emekoi]({{site.github}})
+
+:::
 
 # Recent Posts
-$partial("templates/post-list.html")$
+`$partial("templates/post-list.html")$`
 
 # Bibliography
 You can find a list of all the works I have cited (or hope to cite) [here](/bibliography).
