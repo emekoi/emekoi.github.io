@@ -1,30 +1,36 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Blog.MMark
   ( Page (..)
   , renderMarkdown
   , renderMarkdownIO
+  , md
   ) where
 
-import           Blog.Slug
+import           Blog.Util
 import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.Trans
-import           Data.Aeson.Types      (Object)
-import           Data.Function         (fix)
-import           Data.List.NonEmpty    (NonEmpty (..))
-import qualified Data.List.NonEmpty    as NE
-import           Data.Maybe            (fromMaybe)
-import           Data.Text             (Text)
-import qualified Data.Text             as Text
-import qualified Data.Text.IO          as Text
-import qualified Data.Text.Lazy        as TextL
+import           Data.Aeson.Types           (Object)
+import           Data.Function              (fix)
+import           Data.List.NonEmpty         (NonEmpty (..))
+import qualified Data.List.NonEmpty         as NE
+import           Data.Maybe                 (fromMaybe)
+import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
+import qualified Data.Text.IO               as Text
+import qualified Data.Text.Lazy             as TextL
+import qualified Language.Haskell.TH        as TH
+import qualified Language.Haskell.TH.Quote  as TH
+import qualified Language.Haskell.TH.Syntax as TH
 import           Lucid
-import qualified Text.Megaparsec.Error as Mega
-import qualified Text.MMark            as MMark
-import           Text.MMark.Extension  as MMark
+import qualified Text.Megaparsec.Error      as Mega
+import qualified Text.MMark                 as MMark
+import           Text.MMark.Extension       as MMark
 import           Text.MMark.Trans
-import           Text.MMark.Type       as MMark
+import           Text.MMark.Type            as MMark
 import           Text.MMark.Util
-import qualified Text.URI              as URI
+import qualified Text.URI                   as URI
 
 nl :: Monad m => HtmlT m ()
 nl = "\n"
@@ -171,6 +177,19 @@ data Page = Page
   }
   deriving (Show)
 
+instance TH.Lift Page where
+  liftTyped p = TH.unsafeCodeCoerce (TH.lift p)
+  lift (Page m t) =
+    liftA2 (\m t -> TH.ConE 'Page `TH.AppE` m `TH.AppE` t) (TH.lift m) (TH.lift t)
+
+md :: TH.QuasiQuoter
+md = TH.QuasiQuoter
+  { quoteExp  = \x -> renderMarkdown "<quasiquote>" (Text.pack x) >>= TH.lift
+  , quotePat  = \_ -> fail "illegal Page QuasiQuote"
+  , quoteType = \_ -> fail "illegal Page QuasiQuote"
+  , quoteDec  = \_ -> fail "illegal Page QuasiQuote"
+  }
+
 renderMarkdown :: MonadFail m => FilePath -> Text -> m Page
 renderMarkdown input source = do
   case MMark.parseM input source of
@@ -210,4 +229,3 @@ rawBlocks :: MonadFail m => ExtensionT m
 rawBlocks = blockRenderM \old -> \case
   CodeBlock (Just "{=raw}") txt -> toHtmlRaw txt
   x -> old x
-

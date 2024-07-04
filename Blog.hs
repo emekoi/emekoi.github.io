@@ -1,16 +1,19 @@
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE NoOverloadedLists #-}
+{-# LANGUAGE QuasiQuotes       #-}
 {-# LANGUAGE TypeFamilies      #-}
 
 module Blog (main) where
 
+import           Blog.MMark                 (md)
 import qualified Blog.MMark                 as Blog
 import           Blog.Shake
-import qualified Blog.Slug                  as Blog
 import qualified Blog.Template              as Blog
+import           Blog.Util
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
+import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString.Lazy       as LBS
 import           Data.Function              ((&))
@@ -20,6 +23,7 @@ import           Data.String                (IsString (..))
 import           Data.Text                  (Text)
 import qualified Data.Text                  as Text
 import qualified Data.Text.Encoding         as Text
+import qualified Data.Text.IO               as Text
 import qualified Data.Text.Lazy             as TextL
 import qualified Data.Text.Lazy.Encoding    as TextL
 import           Development.Shake          hiding (shakeOptions)
@@ -66,7 +70,7 @@ writeFile name x = liftIO $ do
 
 data Route
   = Dynamic (FilePath -> FilePath) FilePattern
-  -- | DynamicM (FilePath -> Action FilePath) FilePattern
+  -- | DynamicM (FilePath -> Action FilePath) FilePattern FilePattern
   | Static Bool (Maybe FilePath) FilePath
 
 instance IsString Route where
@@ -77,12 +81,11 @@ getOutputRules file = do
   buildDir <- shakeFiles <$> getShakeOptionsRules
   pure $ buildDir </> file
 
-route :: Route -> (FilePath -> FilePath -> Action ()) -> Rules [FilePath]
+route :: Route -> (FilePath -> FilePath -> Action ()) -> Rules ()
 route (Static isPat input output) f = do
   output <- getOutputRules output
   unless isPat $ want [output]
   output %> \x -> f (fromMaybe x input) x
-  pure [output]
 route (Dynamic g pat) f = do
   buildDir <- shakeFiles <$> getShakeOptionsRules
   let getOut x = buildDir </> g x
@@ -90,47 +93,48 @@ route (Dynamic g pat) f = do
   -- split into 2 steps to avoid indirect recursion
   action $ getDirectoryFiles "" [pat] >>= need . fmap getOut
 
-  -- convert an Action r to a Rules (Action r)
-  outputMap <- fmap ($ ()) $ newCache \() ->
+  outputMap <- liftAction $
     Map.fromList <$> fmap (\x -> (getOut x, x)) <$> getDirectoryFiles "" [pat]
 
   getOut pat %> \output -> do
     input <- (Map.! output) <$> outputMap
     need [input]
     f input output
-  pure []
--- route (DynamicM g pat) f = do
+
+-- route (DynamicM g outputs inputs) f = do
 --   buildDir <- shakeFiles <$> getShakeOptionsRules
 --   let getOut x = (buildDir </>) <$> g x
 
 --   -- split into 2 steps to avoid indirect recursion
---   action $ getDirectoryFiles "" [pat]
+--   action $ getDirectoryFiles "" [inputs]
 --     >>= flip forP getOut
 --     >>= need
 
 --   -- convert an Action r to a Rules (Action r)
---   outputMap <- fmap ($ ()) $ newCache \() ->
---     Map.fromList <$> fmap (\x -> (getOut x, x)) <$> getDirectoryFiles "" [pat]
+--   outputMap <- fmap ($ ()) $ newCache \() -> do
+--     files <- getDirectoryFiles "" [inputs]
 
---   action $ void outputMap
---   getOut pat %> \output -> do
+--     Map.fromList <$> forP files \input -> do
+--       output <- getOut input
+--       pure (output, input)
+
+--   outputs %> \output -> do
 --     input <- (Map.! output) <$> outputMap
 --     f input output
 --   pure []
 
-route_ :: Route -> (FilePath -> FilePath -> Action ()) -> Rules ()
-route_ r k = void $ route r k
-
 routeStatic :: FilePattern -> Rules ()
-routeStatic = flip route_ copyFileChanged . Dynamic id
+routeStatic = flip route copyFileChanged . Dynamic id
 
 routePage :: FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
-routePage = route_ . Dynamic (\input -> FP.takeBaseName input <.> "html")
+routePage = route . Dynamic (\input -> FP.takeBaseName input <.> "html")
 
--- root :: String -> (FilePath -> Bool) -> (FilePath -> Action ()) -> Rules ()
--- root help test act = addUserRule $ FileRule help $ \x -> if not $ test x then Nothing else Just $ ModeDirect $ do
---   Dir.createDirectoryIfMissing True (FP.takeDirectory x)
---   act x
+postListPage :: Blog.Page
+postListPage = [md|---
+title: Posts
+---
+{{> post-list.html }}
+|]
 
 newtype GitHash = GitHash String
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
@@ -144,7 +148,7 @@ gitHashOracle = fmap (. GitHash) . addOracle $ \(GitHash branch) -> Text.strip .
 newtype BuildPost = BuildPost String
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
 
-type instance RuleResult BuildPost = (Post, TextL.Text, FilePath)
+type instance RuleResult BuildPost = (Post, TextL.Text)
 
 run :: Options -> Command -> IO ()
 run o (Build _) = do
@@ -172,16 +176,14 @@ run o (Build _) = do
     -- renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
     --   Just t <- template "post.html"
     --   site <- getSite
-    --   (post, page) <- Blog.renderMarkdownIO input >>= Blog.renderPost site t
-    --   pure (post, page, Text.unpack $ Blog.titleSlug post.title)
+    --   Blog.renderMarkdownIO input >>= Blog.renderPost site t
 
     renderPost <- newCache \input -> do
       Just t <- template "post.html"
       site <- getSite
-      (post, page) <- Blog.renderMarkdownIO input >>= Blog.renderPost site t
-      pure (post, page, Text.unpack $ Blog.titleSlug post.title)
+      Blog.renderMarkdownIO input >>= Blog.renderPost site t
 
-    let postSlug = fmap (\(_, _, x) -> x) . renderPost
+    let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
 
     routeStatic "css/*.css"
     routeStatic "fonts//*"
@@ -196,11 +198,31 @@ run o (Build _) = do
     routePage "pages/index.md" \input output -> do
       Just t <- template "page.html"
       site <- getSite
-      input & (Blog.preprocess site
+      input & (Blog.preprocessFile site t
         >=> Blog.renderMarkdown input
         >=> Blog.renderPage site t
         >=> (writeFile output . TextL.encodeUtf8))
 
+    route "posts/index.html" \_ output -> do
+      files <- getDirectoryFiles "" ["posts/*.md"]
+      postList <- makePostList <$> forP files (fmap fst . renderPost)
+
+      Just t <- template "post-list.md"
+      -- site <- getSite
+
+      -- raw <- Blog.preprocessFile (Aeson.toJSON postList) "templates/post-list.md.mustache"
+      raw <- Blog.preprocess (Aeson.toJSON postList) t "{{> post-list.md }}"
+      -- liftIO $ print (Aeson.toJSON postList)
+      -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
+      liftIO $ Text.writeFile output raw
+
+      -- content <- Blog.renderMarkdown "" page
+      -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
+      pure ()
+      --   >=> Blog.renderPage site t
+      --   >=> (writeFile output . TextL.encodeUtf8))
+
+    -- build posts
     action $ do
       files <- getDirectoryFiles "" ["posts/*.md"]
       forP files \file -> do
@@ -208,34 +230,21 @@ run o (Build _) = do
         need [buildDir </> "posts" </> slug </> "index.html"]
 
     -- convert an Action r to a Rules (Action r)
-    !outputMap <- fmap ($ ()) $ newCache \() -> do
+    postInput <- liftAction do
       files <- getDirectoryFiles "" ["posts/*.md"]
-      m <- Map.fromList <$> forP files \file -> do
-        slug <- postSlug file
-        pure (buildDir </> "posts" </> slug </> "index.html", file)
-      liftIO $ print m
-      pure m
+      Map.fromList <$> forP files \file -> do
+        (post, content) <- renderPost file
+        let slug = Text.unpack $ titleSlug post.title
+        pure (buildDir </> "posts" </> slug </> "index.html", (file, content))
 
     buildDir </> "posts/*/index.html" %> \output -> do
-      input <- (Map.! output) <$> outputMap
+      (input, content) <- (Map.! output) <$> postInput
       need [input]
-      (_, content, _) <- renderPost input
       writeFile output (TextL.encodeUtf8 content)
 
     pure ()
-    -- renderPost <- curry <$> newCache \(input, output) -> do
-    --   Just t <- template "post.html"
-    --   (post, page) <- Blog.renderMarkdownIO input >>= Blog.renderPost t
-    --   writeFile output (TextL.encodeUtf8 page)
-    --   pure post
 
-    -- posturl <- newCache (pure . Blog.titleSlug)
-
-  where
-    -- _3 :: (a, b, c) -> c
-    -- _3 (_, _, c) = c
-
-    author = "Emeka Nkurumeh"
+  where author = "Emeka Nkurumeh"
 
 run o Clean = do
   options <- shakeOptions o

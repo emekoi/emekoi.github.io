@@ -42,8 +42,8 @@ executable blog
     other-modules:
       Blog.MMark
       Blog.Shake
-      Blog.Slug
       Blog.Template
+      Blog.Util
     if !flag(ci)
       cpp-options: -DPREVIEW_SERVER
     build-depends:
@@ -70,7 +70,7 @@ executable blog
       , text                   ^>= 2.1
       , text-icu               ^>= 0.8
       , time                   ^>= 1.12
-
+      , template-haskell
       -- , http-types ^>= 0.12
       -- , wai ^>= 3.2
       -- , wai-app-static ^>= 3.1

@@ -6,7 +6,7 @@ module Blog.Shake
   , Site (..)
   , Tag (..)
   , Time (..)
-  , posts
+  , makePostList
   ) where
 
 import           Data.Aeson                (FromJSON (..), ToJSON (..))
@@ -108,6 +108,12 @@ data Posts = Posts
   { posts :: [Post]
   , tags  :: Set Tag
   }
+  deriving (Generic)
 
-posts :: [Post] -> Posts
-posts x = Posts (List.sortOn (.published) x) (foldMap (.tags) x)
+makePostList :: [Post] -> Posts
+makePostList x = Posts (List.sortOn (.published) x) (foldMap (.tags) x)
+
+instance ToJSON Posts where
+  toJSON     = Aeson.genericToJSON aesonOptions
+  toEncoding = Aeson.genericToEncoding aesonOptions
+

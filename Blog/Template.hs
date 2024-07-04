@@ -1,12 +1,14 @@
 module Blog.Template
   ( compileTemplates
   , preprocess
+  , preprocessFile
   , renderPage
   , renderPost
   ) where
 
 import           Blog.MMark                 (Page (..))
 import           Blog.Shake
+import           Blog.Util
 import           Control.Exception
 import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
@@ -26,37 +28,48 @@ import qualified Text.Mustache.Parser       as Stache
 import           Text.Mustache.Type         (Node (..), Template (..))
 
 compileTemplates :: FilePath -> Rules (Text -> Action (Maybe Template))
-compileTemplates dir = newCache $ \(Stache.PName -> pname) -> do
-  putInfo "Compiling Templates"
-  files <- Stache.getMustacheFilesInDir dir
-  case files of
-    []     ->  pure Nothing
-    x : xs -> do
-      t  <- Stache.compileMustacheFile x
-      ts <- forP xs Stache.compileMustacheFile
-      let
-        cache = Stache.templateCache $ sconcat (t :| ts)
-        names = Set.singleton $ Text.unpack $ Stache.unPName pname
-      needTemplates . Set.toList $ getPartials cache names (cache Map.! pname)
-      pure . Just $ Template pname cache
+compileTemplates dir = do
+  getCache <- liftAction do
+    putInfo "Compiling Templates"
+    files <- Stache.getMustacheFilesInDir dir
+    case files of
+      []     -> pure Map.empty
+      x : xs -> do
+        t  <- Stache.compileMustacheFile x
+        ts <- forP xs Stache.compileMustacheFile
+        pure . Stache.templateCache $ sconcat (t :| ts)
+
+  pure $ \(Stache.PName -> pname) -> do
+    cache <- getCache
+    let
+      names = Set.singleton pname
+      deps = getPartials cache names (cache Map.! pname)
+    needTemplates ((Text.unpack . Stache.unPName) <$> Set.toList deps)
+    pure . Just $ Template pname (Map.restrictKeys cache deps)
+
   where
     getPartials cache !r (Partial n _ : xs) =
-      let r' = Set.insert (Text.unpack $ Stache.unPName n) r
+      let r' = Set.insert n r
         in getPartials cache (getPartials cache r' (cache Map.! n)) xs
     getPartials cache !r (_ : xs) = getPartials cache r xs
     getPartials _ !r [] = r
 
     needTemplates = need . fmap (\x -> dir </> x <.> ".mustache")
 
-preprocess :: Aeson.Value -> FilePath -> Action Text
-preprocess site file = do
+preprocess :: Aeson.Value -> Template -> Text -> Action Text
+preprocess site (Template _ tc) input = do
+  either (liftIO . throwIO . Stache.MustacheParserException) return do
+    nodes <- Stache.parseMustache "<input>" input
+    pure . TextL.toStrict $ Stache.renderMustache
+      (Template pname (Map.insert pname nodes tc))
+      (Object $ "site" .= site)
+  where pname = Stache.PName $ Text.pack "<input>"
+
+preprocessFile :: Aeson.Value -> Template -> FilePath -> Action Text
+preprocessFile site t file = do
   need [file]
   input <- liftIO $ Text.readFile file
-  either (liftIO . throwIO . Stache.MustacheParserException) return do
-    nodes <- Stache.parseMustache file input
-    pure . TextL.toStrict $
-      Stache.renderMustache (Template pname [(pname, nodes)]) (Object $ "site" .= site)
-  where pname = Stache.PName $ Text.pack file
+  preprocess site t input
 
 renderPage :: Aeson.Value -> Template -> Page -> Action TextL.Text
 renderPage site t (Page meta body) = do

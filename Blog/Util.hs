@@ -1,5 +1,6 @@
-module Blog.Slug
-  ( titleSlug
+module Blog.Util
+  ( liftAction
+  , titleSlug
   ) where
 
 import qualified Data.Char          as Char
@@ -7,6 +8,7 @@ import           Data.Text          (Text)
 import qualified Data.Text          as T
 import qualified Data.Text.ICU      as I
 import qualified Data.Text.ICU.Char as I
+import           Development.Shake
 
 latin1Replace :: Char -> Maybe Text
 latin1Replace '\x0c6' = Just "ae"
@@ -37,3 +39,7 @@ titleSlug = f . I.nfd
     f = T.intercalate "-"
       . T.words
       . T.concatMap g
+
+-- | convert an Action r to a Rules (Action r) with sharing
+liftAction :: Action a -> Rules (Action a)
+liftAction m = fmap ($ ()) $ newCache (`seq` m)
