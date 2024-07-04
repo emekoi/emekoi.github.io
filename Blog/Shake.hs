@@ -68,7 +68,7 @@ data Post = Post
   , title           :: Text
   , updated         :: Maybe Time
   , updatedIso8601  :: Maybe Time
-  , url             :: Maybe Text
+  , slug            :: Maybe Text
   }
   deriving (Generic, Show, Typeable, Eq)
 

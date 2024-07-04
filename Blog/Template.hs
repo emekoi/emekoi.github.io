@@ -9,6 +9,7 @@ module Blog.Template
 import           Blog.MMark                 (Page (..))
 import           Blog.Shake
 import           Blog.Util
+import           Control.Applicative
 import           Control.Exception
 import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
@@ -90,10 +91,19 @@ renderPost site t p@(Page meta body) = do
     , title           = mempty
     , updated         = Nothing
     , updatedIso8601  = Nothing
-    , url             = Nothing
+    , slug            = Nothing
     }
 
   case Aeson.fromJSON (Object $ meta <> fallback) of
     Aeson.Error err                     -> fail err
     Aeson.Success v | Text.null v.title -> fail "missing metadata field: title"
-    Aeson.Success v                     -> (v, ) <$> renderPage site t p
+    Aeson.Success Post{..}              ->
+      let
+        post = Post
+          { publishedIs8601 = Nothing
+          , updated         = updated <|> published
+          , updatedIso8601  = Nothing
+          , slug            = slug <|> Just (titleSlug title)
+          , ..
+          }
+      in (post, ) <$> renderPage site t p

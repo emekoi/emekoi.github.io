@@ -5,7 +5,6 @@
 
 module Blog (main) where
 
-import           Blog.MMark                 (md)
 import qualified Blog.MMark                 as Blog
 import           Blog.Shake
 import qualified Blog.Template              as Blog
@@ -13,17 +12,15 @@ import           Blog.Util
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Data.Aeson                 (Value (..), (.=))
+-- import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString.Lazy       as LBS
 import           Data.Function              ((&))
 import qualified Data.Map.Strict            as Map
-import           Data.Maybe                 (fromMaybe)
 import           Data.String                (IsString (..))
 import           Data.Text                  (Text)
 import qualified Data.Text                  as Text
 import qualified Data.Text.Encoding         as Text
-import qualified Data.Text.IO               as Text
 import qualified Data.Text.Lazy             as TextL
 import qualified Data.Text.Lazy.Encoding    as TextL
 import           Development.Shake          hiding (shakeOptions)
@@ -85,7 +82,9 @@ route :: Route -> (FilePath -> FilePath -> Action ()) -> Rules ()
 route (Static isPat input output) f = do
   output <- getOutputRules output
   unless isPat $ want [output]
-  output %> \x -> f (fromMaybe x input) x
+  output %> \x -> case input of
+    Just input | not isPat -> need [input] *> f input x
+    _ -> f x x
 route (Dynamic g pat) f = do
   buildDir <- shakeFiles <$> getShakeOptionsRules
   let getOut x = buildDir </> g x
@@ -129,12 +128,8 @@ routeStatic = flip route copyFileChanged . Dynamic id
 routePage :: FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
 routePage = route . Dynamic (\input -> FP.takeBaseName input <.> "html")
 
-postListPage :: Blog.Page
-postListPage = [md|---
-title: Posts
----
-{{> post-list.html }}
-|]
+routePage' :: FilePath -> FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
+routePage' input output = route (Static False (Just input) output)
 
 newtype GitHash = GitHash String
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
@@ -203,24 +198,38 @@ run o (Build _) = do
         >=> Blog.renderPage site t
         >=> (writeFile output . TextL.encodeUtf8))
 
-    route "posts/index.html" \_ output -> do
+    routePage' "pages/posts.md" "posts/index.html" \input output -> do
       files <- getDirectoryFiles "" ["posts/*.md"]
       postList <- makePostList <$> forP files (fmap fst . renderPost)
 
-      Just t <- template "post-list.md"
-      -- site <- getSite
+      Just tPostList <- template "post-list.md"
+      Just tPage <- template "page.html"
+      site <- getSite
 
-      -- raw <- Blog.preprocessFile (Aeson.toJSON postList) "templates/post-list.md.mustache"
-      raw <- Blog.preprocess (Aeson.toJSON postList) t "{{> post-list.md }}"
-      -- liftIO $ print (Aeson.toJSON postList)
-      -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
-      liftIO $ Text.writeFile output raw
+      input & (Blog.preprocessFile (Aeson.toJSON postList) tPostList
+        >=> Blog.renderMarkdown input
+        >=> Blog.renderPage site tPage
+        >=> (writeFile output . TextL.encodeUtf8))
 
-      -- content <- Blog.renderMarkdown "" page
-      -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
-      pure ()
-      --   >=> Blog.renderPage site t
-      --   >=> (writeFile output . TextL.encodeUtf8))
+    -- routePage' "pages/posts.md" "posts/index.html" \input output -> do
+    --   files <- getDirectoryFiles "" ["posts/*.md"]
+    --   postList <- makePostList <$> forP files (fmap fst . renderPost)
+
+    --   Just t <- template "post-list.md"
+    --   -- site <- getSite
+
+    --   -- raw <- Blog.preprocessFile (Aeson.toJSON postList) "templates/post-list.md.mustache"
+    --   body <- Blog.preprocess (Aeson.toJSON postList) t "{{> post-list.md }}"
+    --   let page = "---\ntitle: Posts\n---\n" <> body
+    --   -- liftIO $ print (Aeson.toJSON postList)
+    --   -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
+    --   liftIO $ Text.writeFile output body
+
+    --   -- content <- Blog.renderMarkdown "" page
+    --   -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
+    --   pure ()
+    --   --   >=> Blog.renderPage site t
+    --   --   >=> (writeFile output . TextL.encodeUtf8))
 
     -- build posts
     action $ do
