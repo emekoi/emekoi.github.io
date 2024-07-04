@@ -1,7 +1,7 @@
 <div class="post-list">
   <ul>
   {{# posts }}
-    <li><span class="date">$date(published, "%Y-%m-%d")$</span><a href="{{ url }}"><span class="title">{{ title }}</span></a></li>
+    <li><span class="date">{{ published }}</span><a href="{{ url }}"><span class="title">{{ title }}</span></a></li>
   {{/ posts }}
   </ul>
 </div>

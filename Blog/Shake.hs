@@ -1,48 +1,39 @@
-{-# LANGUAGE DeriveGeneric  #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TypeFamilies   #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Blog.Shake
-  ( module Blog.Shake
+  ( Post (..)
+  , Posts (..)
+  , Site (..)
+  , Tag (..)
+  , Time (..)
+  , posts
   ) where
 
-import           Control.Monad
-import           Data.Aeson
+import           Data.Aeson                (FromJSON (..), ToJSON (..))
+import qualified Data.Aeson                as Aeson
 import qualified Data.Char                 as Char
 import qualified Data.List                 as List
 import           Data.List.NonEmpty        (NonEmpty (..))
 import           Data.Set                  (Set)
 import           Data.Text                 (Text)
-import qualified Data.Text                 as Text
-import qualified Data.Text.Encoding        as Text
 import qualified Data.Text.Lazy            as TextL
-import           Data.Time.Clock
-import           Development.Shake
+import           Data.Time
+import           Data.Time.Format.ISO8601
 import           Development.Shake.Classes
 import           GHC.Generics
 import           Lucid
 import qualified Text.URI                  as URI
 
-aesonOptions :: Options
-aesonOptions = defaultOptions
-  { fieldLabelModifier =
+aesonOptions :: Aeson.Options
+aesonOptions = Aeson.defaultOptions
+  { Aeson.fieldLabelModifier =
     List.intercalate "-"
       . map (map Char.toLower)
-      . List.groupBy (const Char.isLower)
+      . List.groupBy (\_ y -> Char.isLower y || not (Char.isAlpha y))
   }
 
-newtype GitHash = GitHash String
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
-
-type instance RuleResult GitHash = Text
-
-gitHashOracle :: Rules ()
-gitHashOracle =
-  void . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
-    cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
-
 newtype Tag = Tag Text
-  deriving (Eq, Ord, ToJSON, FromJSON)
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Ord, ToJSON, FromJSON)
 
 tagLink :: Tag ->  URI.URI
 tagLink (Tag t) = URI.URI
@@ -59,25 +50,40 @@ instance ToHtml Tag where
   toHtml t@(Tag x) = li_ $ a_ [href_ (URI.render $ tagLink t)] ("#" <> toHtml x)
   toHtmlRaw t@(Tag x) = li_ $ a_ [href_ (URI.render $ tagLink t)] ("#" <> toHtmlRaw x)
 
+newtype Time = Time Day
+  deriving (Generic, Show, Typeable, Eq, Hashable, NFData, Ord, ToJSON, FromJSON)
+
+instance Binary Time where
+  put (Time t) = put (iso8601Show t)
+  get = Time <$> (get >>= iso8601ParseM)
+
 data Post = Post
-  { body      :: TextL.Text
-  , direction :: Maybe Text
-  , hideTitle :: Bool
-  , published :: Maybe UTCTime
-  , subtitle  :: Maybe Text
-  , tags      :: Set Tag
-  , title     :: Text
-  , updated   :: Maybe UTCTime
-  , url       :: Maybe Text
+  { body            :: TextL.Text
+  , direction       :: Maybe Text
+  , hideTitle       :: Bool
+  , published       :: Maybe Time
+  , publishedIs8601 :: Maybe Time
+  , subtitle        :: Maybe Text
+  , tags            :: Set Tag
+  , title           :: Text
+  , updated         :: Maybe Time
+  , updatedIso8601  :: Maybe Time
+  , url             :: Maybe Text
   }
-  deriving (Generic)
+  deriving (Generic, Show, Typeable, Eq)
+
+instance Hashable Post where
+
+instance Binary Post where
+
+instance NFData Post where
 
 instance ToJSON Post where
-  toJSON     = genericToJSON aesonOptions
-  toEncoding = genericToEncoding aesonOptions
+  toJSON     = Aeson.genericToJSON aesonOptions
+  toEncoding = Aeson.genericToEncoding aesonOptions
 
 instance FromJSON Post where
-  parseJSON = genericParseJSON aesonOptions
+  parseJSON = Aeson.genericParseJSON aesonOptions
 
 data Site = Site
   { author :: Text
@@ -92,26 +98,11 @@ data Site = Site
   deriving (Generic)
 
 instance ToJSON Site where
-  toJSON     = genericToJSON aesonOptions
-  toEncoding = genericToEncoding aesonOptions
+  toJSON     = Aeson.genericToJSON aesonOptions
+  toEncoding = Aeson.genericToEncoding aesonOptions
 
 instance FromJSON Site where
-  parseJSON = genericParseJSON aesonOptions
-
-defaultSite :: Action Site
-defaultSite = do
-  hash <- askOracle (GitHash "master")
-  pure Site
-    { author
-    , email = "e.nk@caltech.edu"
-    , github = "https://github.com/emekoi"
-    , hash
-    , lang = "en"
-    , source = "https://github.com/emekoi/emekoi.github.io"
-    , title = author <> "'s Blog"
-    , url = "https://emekoi.github.io"
-    }
-  where author = "Emeka Nkurumeh"
+  parseJSON = Aeson.genericParseJSON aesonOptions
 
 data Posts = Posts
   { posts :: [Post]

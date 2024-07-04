@@ -202,7 +202,7 @@ descriptionList = blockRenderM \old -> \case
   where
     pairUp = reverse . fst . foldl go ([], Nothing)
 
-    go (acc, Nothing) fst = (acc, Just fst)
+    go (acc, Nothing) fst  = (acc, Just fst)
     go (acc, Just fst) snd = ((fst, snd) : acc, Nothing)
 
 -- emit blocks with language 'raw' as raw HTML
