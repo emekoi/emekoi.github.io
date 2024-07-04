@@ -111,7 +111,7 @@ data Posts = Posts
   deriving (Generic)
 
 makePostList :: [Post] -> Posts
-makePostList x = Posts (List.sortOn (.published) x) (foldMap (.tags) x)
+makePostList x = Posts (List.reverse $ List.sortOn (.published) x) (foldMap (.tags) x)
 
 instance ToJSON Posts where
   toJSON     = Aeson.genericToJSON aesonOptions

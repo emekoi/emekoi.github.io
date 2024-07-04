@@ -2070,10 +2070,10 @@ spec = parallel $ do
                 ]
         it "returns the YAML section (1)" $ do
           doc <- mkDoc "---\nx: 100\ny: 200\n---\nHere we go."
-          MMark.projectYaml doc `shouldBe` Just r
+          (Object <$> MMark.projectYaml doc) `shouldBe` Just r
         it "returns the YAML section (2)" $ do
           doc <- mkDoc "---\nx: 100\ny: 200\n---\n\n"
-          MMark.projectYaml doc `shouldBe` Just r
+          (Object <$> MMark.projectYaml doc) `shouldBe` Just r
       context "when it is invalid" $ do
         let mappingErr =
               fancy . ErrorCustom . YamlParseError $

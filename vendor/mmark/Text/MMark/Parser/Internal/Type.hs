@@ -30,7 +30,6 @@ module Text.MMark.Parser.Internal.Type
     istAllowLinks,
     istAllowImages,
     istDefs,
-    istAllowSpans,
     Isp (..),
     CharType (..),
 
@@ -104,9 +103,7 @@ data InlineState = InlineState
     -- | Whether to allow parsing of images
     _istAllowImages :: Bool,
     -- | Reference link definitions
-    _istDefs        :: Defs,
-    -- | Whether to allow parsing of spans
-    _istAllowSpans  :: Bool
+    _istDefs        :: Defs
   }
 
 -- | Initial value for 'InlineState'.
@@ -117,8 +114,7 @@ initialInlineState =
       _istAllowEmpty = True,
       _istAllowLinks = True,
       _istAllowImages = True,
-      _istDefs = emptyDefs,
-      _istAllowSpans = True
+      _istDefs = emptyDefs
     }
 
 -- | 'Inline' source pending parsing.

@@ -162,7 +162,7 @@ pAttributes = between (char '{') (char '}') $ do
   mconcat <$> some ((pClass <|> pId <|> pPair) <* sc)
   where
     isTokenChar c = not $ or
-      [ isAsciiPunctuation c
+      [ isAsciiPunctuation c && c /= '-'
       , isSpaceN c
       , elem c ['#', '.', '"']
       ]
@@ -653,12 +653,9 @@ pInlines = do
         '`' -> pCodeSpan
         '[' -> do
           allowsLinks <- isLinksAllowed
-          allowsSpans <- isSpansAllowed
-          case (allowsLinks, allowsSpans) of
-            (False, False) -> unexpEic (Tokens $ nes '[')
-            (True, True)   -> (try pLink) <|> pSpan
-            (False, True)  -> pSpan
-            (True, False)  -> pLink
+          if allowsLinks
+            then try pLink <|> try pSpan <|> unexpEic (Tokens $ nes '[')
+            else try pSpan <|> unexpEic (Tokens $ nes '[')
         '!' -> do
           gotImage <- (succeeds . void . lookAhead . string) "!["
           allowsImages <- isImagesAllowed
@@ -845,7 +842,7 @@ pMath = do
 pSpan :: IParser Inline
 pSpan = do
   void (char '[')
-  txt <- disallowSpans $ disallowEmpty pInlines
+  txt <- disallowEmpty pInlines
   void (char ']')
   attr <- pAttributes <* sc
   Span attr txt <$ lastChar OtherChar
