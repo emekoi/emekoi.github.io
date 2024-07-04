@@ -2,10 +2,11 @@ module Blog.Template
     ( module Blog.Template
     ) where
 
-import qualified Blog.Config           as C
-import           Blog.MMark            (Document (..))
+import           Blog.MMark            (Page (..))
+import           Blog.Shake
 import           Control.Exception
 import           Data.Aeson            (Value (..), (.=))
+import qualified Data.Aeson            as Aeson
 import           Data.List.NonEmpty    (NonEmpty (..))
 import qualified Data.Map.Strict       as Map
 import           Data.Semigroup
@@ -45,17 +46,33 @@ preprocess :: FilePath -> Action Text
 preprocess file = do
   need [file]
   input <- liftIO $ Text.readFile file
-  meta <- C.baseMetadata
+  siteMeta <- Aeson.toJSON <$> defaultSite
   either (liftIO . throwIO . MustacheParserException) return do
     nodes <- Stache.parseMustache file input
     pure . TextL.toStrict $
-      Stache.renderMustache (Template pname [(pname, nodes)]) (Object meta)
+      Stache.renderMustache (Template pname [(pname, nodes)]) (Object $ "site" .= siteMeta)
   where pname = Stache.PName $ Text.pack file
 
-render :: Template -> Document -> Action Document
-render t doc@(Doc meta body) = do
-  base <- C.baseMetadata
-  pure doc
-    { meta = base <> meta <> ("body" .= TextL.toStrict body)
-    , body = Stache.renderMustache t (Object mempty)
+renderPage :: Template -> Page -> Action TextL.Text
+renderPage t (Page meta body) = do
+  siteMeta <- Aeson.toJSON <$> defaultSite
+  pure . Stache.renderMustache t . Object $ meta
+    <> ("site" .= siteMeta)
+    <> ("body" .= TextL.toStrict body)
+
+renderPost :: Template -> Page -> Action (Post, TextL.Text)
+renderPost t p@(Page meta body) = do
+  (Object fallback) <- pure . Aeson.toJSON $ Post
+    { body      = body
+    , hideTitle = False
+    , published = Nothing
+    , subtitle  = Nothing
+    , tags      = mempty
+    , title     = error $ "missing metadata field: title"
+    , updated   = Nothing
+    , url       = Nothing
     }
+
+  case Aeson.fromJSON (Object $ meta <> fallback) of
+    Aeson.Error err -> fail err
+    Aeson.Success v -> (v, ) <$> renderPage t p

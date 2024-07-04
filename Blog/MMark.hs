@@ -1,8 +1,8 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 module Blog.MMark
-    ( Document (..)
-    , Blog.MMark.parse
+    ( Page (..)
+    , Blog.MMark.render
     ) where
 
 import           Blog.Slug
@@ -148,8 +148,8 @@ baseInlineRender inlineRender = \case
   Span attrs inner ->
     span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
 
-render :: forall m. Monad m => [ExtensionT m] -> MMarkT m -> HtmlT m ()
-render exts (MMark.useExtensionsM exts -> MMark {..}) =
+renderHTML :: forall m. Monad m => [ExtensionT m] -> MMarkT m -> HtmlT m ()
+renderHTML exts (MMark.useExtensionsM exts -> MMark {..}) =
   mapM_ rBlock mmarkBlocks
   where
     Extension {..} = mmarkExtension
@@ -165,19 +165,19 @@ render exts (MMark.useExtensionsM exts -> MMark {..}) =
       x1 <- traverse (applyInlineTrans extInlineTrans) x0
       pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
 
-data Document = Doc
-  { meta :: Object
-  , body :: TextL.Text
+data Page = Page
+  { meta    :: Object
+  , content :: TextL.Text
   }
   deriving (Show)
 
-parse :: MonadFail m => Text -> Text -> m Document
-parse (Text.unpack -> input) source = do
+render :: MonadFail m => Text -> Text -> m Page
+render (Text.unpack -> input) source = do
   case MMark.parseM input source of
     Left errs -> fail $ Mega.errorBundlePretty errs
     Right r -> do
       let meta = fromMaybe mempty $ MMark.projectYaml r
-      body <- renderTextT $ render extensions r
-      pure Doc {..}
+      content <- renderTextT $ renderHTML extensions r
+      pure Page {..}
   where
     extensions = []

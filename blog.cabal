@@ -30,6 +30,7 @@ common base
     OverloadedStrings
     RecordWildCards
     ScopedTypeVariables
+    TupleSections
     TypeApplications
     TypeOperators
     ViewPatterns
@@ -40,7 +41,7 @@ executable blog
     main-is:     Blog.hs
     other-modules:
       Blog.MMark
-      Blog.Config
+      Blog.Shake
       Blog.Slug
       Blog.Template
     if !flag(ci)
@@ -67,10 +68,13 @@ executable blog
       , raw-strings-qq         ^>= 1.1
       , shake                  ^>= 0.19
       , stache                 ^>= 2.3
-      , store                  ^>= 0.7
       , text                   ^>= 2.1
       , text-icu               ^>= 0.8
-      , time                   ^>= 1.12
+      , time                   ^>= 1.14
+      , microlens-platform
+      , microlens-aeson
+      , microlens
+
       -- , http-types ^>= 0.12
       -- , wai ^>= 3.2
       -- , wai-app-static ^>= 3.1

@@ -1,10 +1,7 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Blog where
 
-#if 1
-
-import qualified Blog.MMark          as M
 import           Control.Applicative
 import           Development.Shake
 import           GHC.Conc            (numCapabilities)
@@ -27,6 +24,12 @@ data WatchOptions = WatchOptions
 data Command
   = Watch WatchOptions
   | Build BuildOptions
+
+-- copyStaticFiles :: Action ()
+-- copyStaticFiles = do
+--     filepaths <- getDirectoryFiles "./site/" ["images//*", "css//*", "js//*"]
+--     void $ forP filepaths $ \filepath ->
+--         copyFileChanged ("site" </> filepath) (outputFolder </> filepath)
 
 run :: Command -> Options -> IO ()
 run (Build _) Options{..} = shake options do
@@ -70,7 +73,7 @@ main = do
   options <- A.execParser (A.info (parseOptions A.<**> A.helper) mempty)
   run options.command options
 
-#else
+{-
 
 import           Blog.MMark
 import           Blog.Ninja
@@ -208,4 +211,4 @@ main = do
   options <- execParser (info options idm)
   run options.command options
 
-#endif
+-}
