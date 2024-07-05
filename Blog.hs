@@ -1,7 +1,6 @@
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE NoOverloadedLists #-}
-{-# LANGUAGE QuasiQuotes       #-}
-{-# LANGUAGE TypeFamilies      #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE QuasiQuotes    #-}
+{-# LANGUAGE TypeFamilies   #-}
 
 module Blog (main) where
 
@@ -10,13 +9,15 @@ import           Blog.Shake
 import qualified Blog.Template              as Blog
 import           Blog.Util
 import           Control.Applicative
+import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.IO.Class
--- import           Data.Aeson                 (Value (..), (.=))
+import           Data.Aeson                 ((.=))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString.Lazy       as LBS
-import           Data.Function              ((&))
+import qualified Data.List                  as List
 import qualified Data.Map.Strict            as Map
+import qualified Data.Set                   as Set
 import           Data.String                (IsString (..))
 import           Data.Text                  (Text)
 import qualified Data.Text                  as Text
@@ -65,9 +66,13 @@ writeFile name x = liftIO $ do
   Dir.createDirectoryIfMissing True (FP.takeDirectory name)
   LBS.writeFile name x
 
+writePage :: (MonadIO m, HasCallStack) => Aeson.Value -> Blog.Template -> FilePath -> Blog.Page -> m ()
+writePage meta template output = writeFile output
+  . TextL.encodeUtf8
+  . Blog.renderPage meta template
+
 data Route
   = Dynamic (FilePath -> FilePath) FilePattern
-  -- | DynamicM (FilePath -> Action FilePath) FilePattern FilePattern
   | Static Bool (Maybe FilePath) FilePath
 
 instance IsString Route where
@@ -84,7 +89,7 @@ route (Static isPat input output) f = do
   unless isPat $ want [output]
   output %> \x -> case input of
     Just input | not isPat -> need [input] *> f input x
-    _ -> f x x
+    _                      -> f x x
 route (Dynamic g pat) f = do
   buildDir <- shakeFiles <$> getShakeOptionsRules
   let getOut x = buildDir </> g x
@@ -100,28 +105,6 @@ route (Dynamic g pat) f = do
     need [input]
     f input output
 
--- route (DynamicM g outputs inputs) f = do
---   buildDir <- shakeFiles <$> getShakeOptionsRules
---   let getOut x = (buildDir </>) <$> g x
-
---   -- split into 2 steps to avoid indirect recursion
---   action $ getDirectoryFiles "" [inputs]
---     >>= flip forP getOut
---     >>= need
-
---   -- convert an Action r to a Rules (Action r)
---   outputMap <- fmap ($ ()) $ newCache \() -> do
---     files <- getDirectoryFiles "" [inputs]
-
---     Map.fromList <$> forP files \input -> do
---       output <- getOut input
---       pure (output, input)
-
---   outputs %> \output -> do
---     input <- (Map.! output) <$> outputMap
---     f input output
---   pure []
-
 routeStatic :: FilePattern -> Rules ()
 routeStatic = flip route copyFileChanged . Dynamic id
 
@@ -130,6 +113,15 @@ routePage = route . Dynamic (\input -> FP.takeBaseName input <.> "html")
 
 routePage' :: FilePath -> FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
 routePage' input output = route (Static False (Just input) output)
+
+tagsMeta :: Site -> Aeson.Value
+tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
+  where
+    f k v = (Aeson.object ["tag" .= k, "site" .= Aeson.Object ("posts" .= v)] :)
+    tagMap Site{..} =
+      foldr (\p posts -> Set.foldl' (\posts t -> Map.adjust (p:) t posts) posts p.tags)
+        (Map.fromAscList . map (\x -> (x, [])) $ Set.toAscList tags)
+        posts
 
 newtype GitHash = GitHash String
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
@@ -153,30 +145,34 @@ run o (Build _) = do
 
     gitHash <- gitHashOracle
 
-    getSite <- fmap ($ ()) $ newCache \() -> do
+    getSite <- newCache \posts -> do
       hash <- gitHash "master"
-      pure $ Aeson.toJSON  Site
+      pure $ Site
         { author
         , email = "e.nk@caltech.edu"
         , github = "https://github.com/emekoi"
         , hash
         , lang = "en"
+        , posts = List.reverse $ List.sortOn (.published) posts
         , source = "https://github.com/emekoi/emekoi.github.io"
+        , tags = foldMap (.tags) posts
         , title = author <> "'s Blog"
         , url = "https://emekoi.github.io"
         }
+
+    getSiteMeta <- liftAction $ (Aeson.toJSON <$> getSite [])
 
     template <- Blog.compileTemplates "templates"
 
     -- renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
     --   Just t <- template "post.html"
-    --   site <- getSite
+    --   site <- getSite mempty
     --   Blog.renderMarkdownIO input >>= Blog.renderPost site t
 
     renderPost <- newCache \input -> do
       Just t <- template "post.html"
-      site <- getSite
-      Blog.renderMarkdownIO input >>= Blog.renderPost site t
+      siteMeta <- getSiteMeta
+      Blog.renderMarkdownIO input >>= Blog.renderPost siteMeta t
 
     let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
 
@@ -185,62 +181,58 @@ run o (Build _) = do
 
     routePage "pages/404.md" \input output -> do
       Just t <- template "page.html"
-      site <- getSite
-      input & (Blog.renderMarkdownIO
-        >=> Blog.renderPage site t
-        >=> (writeFile output . TextL.encodeUtf8))
+      siteMeta <- getSiteMeta
+      Blog.renderMarkdownIO input
+        >>= writePage siteMeta t output
 
+    -- TODO: recent post list
     routePage "pages/index.md" \input output -> do
       Just t <- template "page.html"
-      site <- getSite
-      input & (Blog.preprocessFile site t
-        >=> Blog.renderMarkdown input
-        >=> Blog.renderPage site t
-        >=> (writeFile output . TextL.encodeUtf8))
+      siteMeta <- getSiteMeta
 
+      Blog.preprocessFile siteMeta t input
+        >>= Blog.renderMarkdown input
+        >>= writePage siteMeta t output
+
+    -- TODO: filter drafts
     routePage' "pages/posts.md" "posts/index.html" \input output -> do
-      files <- getDirectoryFiles "" ["posts/*.md"]
-      postList <- makePostList <$> forP files (fmap fst . renderPost)
+      files <- getDirectoryFiles "" postsPattern
+      posts <- forP files (fmap fst . renderPost)
 
       Just tPostList <- template "post-list.md"
       Just tPage <- template "page.html"
-      site <- getSite
 
-      input & (Blog.preprocessFile (Aeson.toJSON postList) tPostList
-        >=> Blog.renderMarkdown input
-        >=> Blog.renderPage site tPage
-        >=> (writeFile output . TextL.encodeUtf8))
+      siteMeta <- Aeson.toJSON <$> getSite posts
 
-    -- routePage' "pages/posts.md" "posts/index.html" \input output -> do
-    --   files <- getDirectoryFiles "" ["posts/*.md"]
-    --   postList <- makePostList <$> forP files (fmap fst . renderPost)
+      Blog.preprocessFile siteMeta tPostList input
+        >>= Blog.renderMarkdown input
+        >>= writePage siteMeta tPage output
 
-    --   Just t <- template "post-list.md"
-    --   -- site <- getSite
+    -- TODO: filter drafts
+    routePage' "pages/tags.md" "tags.html" \input output -> do
+      files <- getDirectoryFiles "" postsPattern
+      posts <- forP files (fmap fst . renderPost)
 
-    --   -- raw <- Blog.preprocessFile (Aeson.toJSON postList) "templates/post-list.md.mustache"
-    --   body <- Blog.preprocess (Aeson.toJSON postList) t "{{> post-list.md }}"
-    --   let page = "---\ntitle: Posts\n---\n" <> body
-    --   -- liftIO $ print (Aeson.toJSON postList)
-    --   -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
-    --   liftIO $ Text.writeFile output body
+      Just tPostList <- template "post-list.md"
+      Just tPage <- template "page.html"
 
-    --   -- content <- Blog.renderMarkdown "" page
-    --   -- Blog.renderPage site t content >>= (writeFile output . TextL.encodeUtf8)
-    --   pure ()
-    --   --   >=> Blog.renderPage site t
-    --   --   >=> (writeFile output . TextL.encodeUtf8))
+      (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
+
+      Blog.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
+        >>= (\x -> liftIO (putStrLn $ Text.unpack x) *> pure x)
+        >>= Blog.renderMarkdown input
+        >>= writePage siteMeta tPage output
 
     -- build posts
+    -- TODO: filter drafts
     action $ do
-      files <- getDirectoryFiles "" ["posts/*.md"]
+      files <- getDirectoryFiles "" postsPattern
       forP files \file -> do
         slug <- postSlug file
         need [buildDir </> "posts" </> slug </> "index.html"]
 
-    -- convert an Action r to a Rules (Action r)
     postInput <- liftAction do
-      files <- getDirectoryFiles "" ["posts/*.md"]
+      files <- getDirectoryFiles "" postsPattern
       Map.fromList <$> forP files \file -> do
         (post, content) <- renderPost file
         let slug = Text.unpack $ titleSlug post.title
@@ -253,7 +245,9 @@ run o (Build _) = do
 
     pure ()
 
-  where author = "Emeka Nkurumeh"
+  where
+    author = "Emeka Nkurumeh"
+    postsPattern = ["posts/*.md", "posts/*/index.md"]
 
 run o Clean = do
   options <- shakeOptions o

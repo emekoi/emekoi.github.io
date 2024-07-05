@@ -37,7 +37,7 @@
         <ul>
           <li>{{ published }}</li>
           {{# updated }}<li>Updated: {{.}}</li>{{/ updated }}
-          {{# tags }}{{.}}{{/ tags }}
+          {{# tags }}<li>{{.}}</li>{{/ tags }}
         </ul>
       </div>
       <article>{{& body }}</article>

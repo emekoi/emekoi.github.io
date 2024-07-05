@@ -202,6 +202,7 @@ renderMarkdown input source = do
     extensions =
       [ descriptionList
       , rawBlocks
+      , demoteHeaders
       ]
 
 renderMarkdownIO :: (MonadFail m, MonadIO m) => FilePath -> m Page
@@ -229,3 +230,14 @@ rawBlocks :: MonadFail m => ExtensionT m
 rawBlocks = blockRenderM \old -> \case
   CodeBlock (Just "{=raw}") txt -> toHtmlRaw txt
   x -> old x
+
+-- demote headers by 1 (h1 -> h2, ..., h6 -> p)
+demoteHeaders :: MonadFail m => ExtensionT m
+demoteHeaders = blockTransM \case
+  Heading1 x -> pure $ Heading2 x
+  Heading2 x -> pure $ Heading3 x
+  Heading3 x -> pure $ Heading4 x
+  Heading4 x -> pure $ Heading5 x
+  Heading5 x -> pure $ Heading6 x
+  Heading6 x -> pure $ Paragraph x
+  x -> pure x

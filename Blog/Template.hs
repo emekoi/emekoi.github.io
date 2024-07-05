@@ -1,5 +1,6 @@
 module Blog.Template
-  ( compileTemplates
+  ( Template
+  , compileTemplates
   , preprocess
   , preprocessFile
   , renderPage
@@ -11,6 +12,7 @@ import           Blog.Shake
 import           Blog.Util
 import           Control.Applicative
 import           Control.Exception
+import           Control.Monad.IO.Class
 import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
 import           Data.List.NonEmpty         (NonEmpty (..))
@@ -57,7 +59,7 @@ compileTemplates dir = do
 
     needTemplates = need . fmap (\x -> dir </> x <.> ".mustache")
 
-preprocess :: Aeson.Value -> Template -> Text -> Action Text
+preprocess :: (MonadFail m, MonadIO m) => Aeson.Value -> Template -> Text -> m Text
 preprocess site (Template _ tc) input = do
   either (liftIO . throwIO . Stache.MustacheParserException) return do
     nodes <- Stache.parseMustache "<input>" input
@@ -72,27 +74,15 @@ preprocessFile site t file = do
   input <- liftIO $ Text.readFile file
   preprocess site t input
 
-renderPage :: Aeson.Value -> Template -> Page -> Action TextL.Text
+renderPage :: Aeson.Value -> Template -> Page -> TextL.Text
 renderPage site t (Page meta body) = do
-  pure . Stache.renderMustache t . Object $ meta
+  Stache.renderMustache t . Object $ meta
     <> ("site" .= site)
     <> ("body" .= TextL.toStrict body)
 
-renderPost :: Aeson.Value -> Template -> Page -> Action (Post, TextL.Text)
+renderPost :: (MonadFail m) => Aeson.Value -> Template -> Page -> m (Post, TextL.Text)
 renderPost site t p@(Page meta body) = do
-  (Object fallback) <- pure . Aeson.toJSON $ Post
-    { body            = body
-    , direction       = Nothing
-    , hideTitle       = False
-    , published       = Nothing
-    , publishedIs8601 = Nothing
-    , subtitle        = Nothing
-    , tags            = mempty
-    , title           = mempty
-    , updated         = Nothing
-    , updatedIso8601  = Nothing
-    , slug            = Nothing
-    }
+  (Object fallback) <- pure . Aeson.toJSON $ emptyPost { body = body }
 
   case Aeson.fromJSON (Object $ meta <> fallback) of
     Aeson.Error err                     -> fail err
@@ -106,4 +96,4 @@ renderPost site t p@(Page meta body) = do
           , slug            = slug <|> Just (titleSlug title)
           , ..
           }
-      in (post, ) <$> renderPage site t p
+      in pure (post, renderPage site t p)

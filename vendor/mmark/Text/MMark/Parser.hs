@@ -604,6 +604,8 @@ pFencedDiv :: BParser (Block Isp)
 pFencedDiv = do
   void $ count 3 (char ch)
   n <- (+ 3) . length <$> many (char ch)
+  -- TODO: we have weird whitespace requurements and the divs can't be empty
+  -- all of that is wrong
   attrs <- sc *> ((pAttributes <?> "div attributes") <|> pure mempty) <* eol
   xs <- catMaybes <$> manyTill pBlock (pClosingFence ch n)
   Div attrs xs <$ sc

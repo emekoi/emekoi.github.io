@@ -2,11 +2,12 @@
 
 module Blog.Shake
   ( Post (..)
-  , Posts (..)
   , Site (..)
   , Tag (..)
   , Time (..)
-  , makePostList
+  , emptyPost
+  , prettfyTags
+  , tagLink
   ) where
 
 import           Data.Aeson                (FromJSON (..), ToJSON (..))
@@ -15,6 +16,7 @@ import qualified Data.Char                 as Char
 import qualified Data.List                 as List
 import           Data.List.NonEmpty        (NonEmpty (..))
 import           Data.Set                  (Set)
+import qualified Data.Set                  as Set
 import           Data.Text                 (Text)
 import qualified Data.Text.Lazy            as TextL
 import           Data.Time
@@ -72,6 +74,21 @@ data Post = Post
   }
   deriving (Generic, Show, Typeable, Eq)
 
+emptyPost :: Post
+emptyPost = Post
+  { body            = mempty
+  , direction       = Nothing
+  , hideTitle       = False
+  , published       = Nothing
+  , publishedIs8601 = Nothing
+  , subtitle        = Nothing
+  , tags            = mempty
+  , title           = mempty
+  , updated         = Nothing
+  , updatedIso8601  = Nothing
+  , slug            = Nothing
+  }
+
 instance Hashable Post where
 
 instance Binary Post where
@@ -91,7 +108,9 @@ data Site = Site
   , github :: Text
   , hash   :: Text
   , lang   :: Text
+  , posts  :: [Post]
   , source :: Text
+  , tags   :: Set Tag
   , title  :: Text
   , url    :: Text
   }
@@ -104,16 +123,6 @@ instance ToJSON Site where
 instance FromJSON Site where
   parseJSON = Aeson.genericParseJSON aesonOptions
 
-data Posts = Posts
-  { posts :: [Post]
-  , tags  :: Set Tag
-  }
-  deriving (Generic)
-
-makePostList :: [Post] -> Posts
-makePostList x = Posts (List.reverse $ List.sortOn (.published) x) (foldMap (.tags) x)
-
-instance ToJSON Posts where
-  toJSON     = Aeson.genericToJSON aesonOptions
-  toEncoding = Aeson.genericToEncoding aesonOptions
-
+prettfyTags :: Set Tag -> Set Tag
+-- prettfyTags Site{..} = Site{ tags = Set.map (\t -> Tag (TextL.toStrict $ renderText t)) tags, ..}
+prettfyTags = Set.map (Tag . TextL.toStrict . renderText . toHtml)
