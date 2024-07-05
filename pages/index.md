@@ -23,7 +23,7 @@ Github
 :::
 
 # Recent Posts
-`$partial("templates/post-list.html")$`
+{{> post-list.md }}
 
 # Bibliography
 You can find a list of all the works I have cited (or hope to cite) [here](/bibliography).

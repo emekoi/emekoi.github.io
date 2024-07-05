@@ -1,12 +1,14 @@
+{-# LANGUAGE CPP            #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE QuasiQuotes    #-}
 {-# LANGUAGE TypeFamilies   #-}
 
 module Blog (main) where
 
-import qualified Blog.MMark                 as Blog
+import           Blog.MMark                 (Page)
+import qualified Blog.MMark                 as MMark
 import           Blog.Shake
-import qualified Blog.Template              as Blog
+import           Blog.Template              (Template)
+import qualified Blog.Template              as Template
 import           Blog.Util
 import           Control.Applicative
 import           Control.Arrow
@@ -17,6 +19,7 @@ import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString.Lazy       as LBS
 import qualified Data.List                  as List
 import qualified Data.Map.Strict            as Map
+import qualified Data.Ord                   as Ord
 import qualified Data.Set                   as Set
 import           Data.String                (IsString (..))
 import           Data.Text                  (Text)
@@ -41,7 +44,7 @@ data Options = Options
   , jobs      :: Int
   }
 
-data BuildOptions = BuildOptions
+newtype BuildOptions = BuildOptions
   { _buildDrafts :: Bool
   }
 
@@ -66,10 +69,10 @@ writeFile name x = liftIO $ do
   Dir.createDirectoryIfMissing True (FP.takeDirectory name)
   LBS.writeFile name x
 
-writePage :: (MonadIO m, HasCallStack) => Aeson.Value -> Blog.Template -> FilePath -> Blog.Page -> m ()
+writePage :: (MonadIO m, HasCallStack) => Aeson.Value -> Template -> FilePath -> Page -> m ()
 writePage meta template output = writeFile output
   . TextL.encodeUtf8
-  . Blog.renderPage meta template
+  . Template.renderPage meta template
 
 data Route
   = Dynamic (FilePath -> FilePath) FilePattern
@@ -98,7 +101,7 @@ route (Dynamic g pat) f = do
   action $ getDirectoryFiles "" [pat] >>= need . fmap getOut
 
   outputMap <- liftAction $
-    Map.fromList <$> fmap (\x -> (getOut x, x)) <$> getDirectoryFiles "" [pat]
+    Map.fromList . fmap (\x -> (getOut x, x)) <$> getDirectoryFiles "" [pat]
 
   getOut pat %> \output -> do
     input <- (Map.! output) <$> outputMap
@@ -120,7 +123,8 @@ tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
     f k v = (Aeson.object ["tag" .= k, "site" .= Aeson.Object ("posts" .= v)] :)
     tagMap Site{..} =
       foldr (\p posts -> Set.foldl' (\posts t -> Map.adjust (p:) t posts) posts p.tags)
-        (Map.fromAscList . map (\x -> (x, [])) $ Set.toAscList tags)
+      -- foldr (\p posts -> Set.foldl' (flip (Map.adjust (p :))) posts p.tags)
+        (Map.fromAscList . map (, []) $ Set.toAscList tags)
         posts
 
 newtype GitHash = GitHash String
@@ -136,6 +140,26 @@ newtype BuildPost = BuildPost String
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
 
 type instance RuleResult BuildPost = (Post, TextL.Text)
+
+extensions :: [ExtensionT Action]
+extensions =
+  [ rawBlocks
+  , descriptionList
+  , demoteHeaders
+  , highlight
+  ]
+
+renderMarkdown :: FilePath -> Text -> Action Page
+renderMarkdown = MMark.renderMarkdown extensions
+
+renderMarkdownIO :: FilePath -> Action Page
+renderMarkdownIO = MMark.renderMarkdownIO extensions
+
+-- TODO: copy post static files
+-- TODO: build resume
+-- TODO: build atom feed
+-- TODO: build jsonfeed feed
+-- TODO: filter drafts based on published field
 
 run :: Options -> Command -> IO ()
 run o (Build _) = do
@@ -153,26 +177,28 @@ run o (Build _) = do
         , github = "https://github.com/emekoi"
         , hash
         , lang = "en"
-        , posts = List.reverse $ List.sortOn (.published) posts
+        , posts = List.sortOn (Ord.Down . (.published)) posts
         , source = "https://github.com/emekoi/emekoi.github.io"
         , tags = foldMap (.tags) posts
         , title = author <> "'s Blog"
         , url = "https://emekoi.github.io"
         }
 
-    getSiteMeta <- liftAction $ (Aeson.toJSON <$> getSite [])
+    getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
 
-    template <- Blog.compileTemplates "templates"
+    template <- Template.compileDir "templates"
 
-    -- renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
-    --   Just t <- template "post.html"
-    --   site <- getSite mempty
-    --   Blog.renderMarkdownIO input >>= Blog.renderPost site t
-
+#if defined(POST_CACHE)
+    renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
+      Just t <- template "post.html"
+      siteMeta <- getSiteMeta
+      Blog.renderMarkdownIO input >>= Template.renderPost siteMeta t
+#else
     renderPost <- newCache \input -> do
       Just t <- template "post.html"
       siteMeta <- getSiteMeta
-      Blog.renderMarkdownIO input >>= Blog.renderPost siteMeta t
+      renderMarkdownIO input >>= Template.renderPost siteMeta t
+#endif
 
     let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
 
@@ -182,19 +208,22 @@ run o (Build _) = do
     routePage "pages/404.md" \input output -> do
       Just t <- template "page.html"
       siteMeta <- getSiteMeta
-      Blog.renderMarkdownIO input
+      renderMarkdownIO input
         >>= writePage siteMeta t output
 
-    -- TODO: recent post list
     routePage "pages/index.md" \input output -> do
-      Just t <- template "page.html"
-      siteMeta <- getSiteMeta
+      files <- getDirectoryFiles "" postsPattern
+      posts <- take 5 <$> forP files (fmap fst . renderPost)
 
-      Blog.preprocessFile siteMeta t input
-        >>= Blog.renderMarkdown input
-        >>= writePage siteMeta t output
+      Just tPostList <- template "post-list.md"
+      Just tPage <- template "page.html"
 
-    -- TODO: filter drafts
+      siteMeta <- Aeson.toJSON <$> getSite posts
+
+      Template.preprocessFile siteMeta tPostList input
+        >>= renderMarkdown input
+        >>= writePage siteMeta tPage output
+
     routePage' "pages/posts.md" "posts/index.html" \input output -> do
       files <- getDirectoryFiles "" postsPattern
       posts <- forP files (fmap fst . renderPost)
@@ -204,11 +233,10 @@ run o (Build _) = do
 
       siteMeta <- Aeson.toJSON <$> getSite posts
 
-      Blog.preprocessFile siteMeta tPostList input
-        >>= Blog.renderMarkdown input
+      Template.preprocessFile siteMeta tPostList input
+        >>= renderMarkdown input
         >>= writePage siteMeta tPage output
 
-    -- TODO: filter drafts
     routePage' "pages/tags.md" "tags.html" \input output -> do
       files <- getDirectoryFiles "" postsPattern
       posts <- forP files (fmap fst . renderPost)
@@ -218,13 +246,11 @@ run o (Build _) = do
 
       (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
 
-      Blog.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
-        >>= (\x -> liftIO (putStrLn $ Text.unpack x) *> pure x)
-        >>= Blog.renderMarkdown input
+      Template.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
+        >>= renderMarkdown input
         >>= writePage siteMeta tPage output
 
     -- build posts
-    -- TODO: filter drafts
     action $ do
       files <- getDirectoryFiles "" postsPattern
       forP files \file -> do
@@ -242,8 +268,6 @@ run o (Build _) = do
       (input, content) <- (Map.! output) <$> postInput
       need [input]
       writeFile output (TextL.encodeUtf8 content)
-
-    pure ()
 
   where
     author = "Emeka Nkurumeh"
@@ -263,14 +287,14 @@ parseOptions = do
     , A.command "clean" (A.info (pure Clean) (A.progDesc "Remove build files"))
     ]) <|> pBuild
 
-  verbosity <- (A.option A.auto $ mconcat
+  verbosity <- A.option A.auto (mconcat
     [ A.long "verbosity"
     , A.short 'v'
     , A.metavar "VERBOSITY"
     , A.completeWith $ map show [minBound :: Verbosity .. maxBound]
     ]) <|> pure Error
 
-  jobs <- (A.option A.auto $ mconcat
+  jobs <- A.option A.auto (mconcat
     [ A.long "jobs"
     , A.short 'j'
     , A.metavar "N"

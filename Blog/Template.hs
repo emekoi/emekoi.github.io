@@ -1,6 +1,6 @@
 module Blog.Template
   ( Template
-  , compileTemplates
+  , compileDir
   , preprocess
   , preprocessFile
   , renderPage
@@ -30,8 +30,8 @@ import qualified Text.Mustache.Compile      as Stache
 import qualified Text.Mustache.Parser       as Stache
 import           Text.Mustache.Type         (Node (..), Template (..))
 
-compileTemplates :: FilePath -> Rules (Text -> Action (Maybe Template))
-compileTemplates dir = do
+compileDir :: FilePath -> Rules (Text -> Action (Maybe Template))
+compileDir dir = do
   getCache <- liftAction do
     putInfo "Compiling Templates"
     files <- Stache.getMustacheFilesInDir dir
@@ -47,7 +47,7 @@ compileTemplates dir = do
     let
       names = Set.singleton pname
       deps = getPartials cache names (cache Map.! pname)
-    needTemplates ((Text.unpack . Stache.unPName) <$> Set.toList deps)
+    needTemplates (Text.unpack . Stache.unPName <$> Set.toList deps)
     pure . Just $ Template pname (Map.restrictKeys cache deps)
 
   where
