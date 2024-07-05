@@ -47,6 +47,6 @@ asPlainText = foldMap $ \case
 lucidAttributes :: Attributes -> [Attribute]
 lucidAttributes Attributes{..} = id' ++ classes' ++ pairs'
   where
-    pairs' = Map.foldrWithKey (\k v acc -> term k v : acc) [] pairs
-    classes' = if null classes then [] else [classes_ classes]
-    id' = maybe [] (pure . id_) (getLast identifier)
+    pairs'   = Map.foldrWithKey (\k v acc -> term k v : acc) [] pairs
+    classes' = [classes_ classes | not (null classes)]
+    id'      = maybe [] (pure . id_) (getLast identifier)

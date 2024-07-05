@@ -46,8 +46,8 @@ renderM MMark {..} =
 
     rBlock :: Monad m => Bni -> HtmlT m ()
     rBlock x0 = do
-      x1 :: Block (NonEmpty Inline) <- lift $ applyBlockTrans extBlockTrans x0
-      x2 :: Block (Ois, HtmlT m ()) <- lift $ traverse (\r -> rInlines r) x1
+      x1 <- lift $ applyBlockTrans extBlockTrans x0
+      x2 <- lift $ traverse rInlines x1
       applyBlockRender extBlockRender x2
 
     rInlines :: Monad m => NonEmpty Inline -> m (Ois, HtmlT m ())

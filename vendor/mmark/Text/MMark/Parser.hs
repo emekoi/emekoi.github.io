@@ -164,13 +164,11 @@ pAttributes = between (char '{') (char '}') $ do
     isTokenChar c = not $ or
       [ isAsciiPunctuation c && c /= '-'
       , isSpaceN c
-      , elem c ['#', '.', '"']
+      , c `elem` ['#', '.', '"']
       ]
     xmlCompat c = Char.isAsciiLower c && c /= ':'
-    isValueChar c = Char.isAscii c && or
-      [ Char.isAlphaNum c
-      , elem c ['_', '-', ':']
-      ]
+    isValueChar c = Char.isAscii c &&
+      (Char.isAlphaNum c || c `elem` ['_', '-', ':'])
     pString =
       between (char '"') (char '"') $
         let f x = x /= '"' in
@@ -180,7 +178,7 @@ pAttributes = between (char '{') (char '}') $ do
       pure mempty { classes = [c] }
     pId = do
       i <- char '#' >> takeWhile1P (Just "HTML id") isTokenChar
-      pure mempty { identifier = (Last (Just i)) }
+      pure mempty { identifier = Last (Just i) }
     pPair = do
       key <- takeWhile1P (Just "HTML attribute") xmlCompat
       void $ sc *> char '=' <* sc
@@ -606,7 +604,7 @@ pFencedDiv = do
   skipCount 3 (char ':')
   n <- length <$> many (char ':')
   attrs <- (sc' *> (pAttributes <|> pure mempty) <* eol) <?> "div attributes"
-  xs <- catMaybes <$> (manyTill pBlock (pClosingDivFence n))
+  xs <- catMaybes <$> manyTill pBlock (pClosingDivFence n)
   Div attrs xs <$ sc
 
 -- | Parse the closing fence of a fenced div.
@@ -1265,7 +1263,7 @@ isEmailUri uri =
 -- | Decode the yaml block to a 'Aeson.Object'. On GHCJs, without access to
 -- libyaml we just return an empty object. It's worth using a pure haskell
 -- parser later if this is unacceptable for someone's needs.
-decodeYaml :: [T.Text] -> Int -> (Either (Int, String) Aeson.Object)
+decodeYaml :: [T.Text] -> Int -> Either (Int, String) Aeson.Object
 #ifdef ghcjs_HOST_OS
 decodeYaml _ _ = pure $ Aeson.object []
 #else
