@@ -41,7 +41,7 @@ executable blog
     main-is:     Blog.hs
     other-modules:
       Blog.MMark
-      Blog.Shake
+      Blog.Type
       Blog.Template
       Blog.Util
     if !flag(ci)

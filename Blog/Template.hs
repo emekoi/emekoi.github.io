@@ -8,9 +8,8 @@ module Blog.Template
   ) where
 
 import           Blog.MMark                 (Page (..))
-import           Blog.Shake
+import           Blog.Type
 import           Blog.Util
-import           Control.Applicative
 import           Control.Exception
 import           Control.Monad.IO.Class
 import           Data.Aeson                 (Value (..), (.=))
@@ -76,24 +75,22 @@ preprocessFile site t file = do
 
 renderPage :: Aeson.Value -> Template -> Page -> TextL.Text
 renderPage site t (Page meta body) = do
-  Stache.renderMustache t . Object $ meta
-    <> ("site" .= site)
+  Stache.renderMustache t . Object $ ("site" .= site)
     <> ("body" .= TextL.toStrict body)
+    <> meta
 
 renderPost :: (MonadFail m) => Aeson.Value -> Template -> Page -> m (Post, TextL.Text)
-renderPost site t p@(Page meta body) = do
-  (Object fallback) <- pure . Aeson.toJSON $ emptyPost { body = body }
-
-  case Aeson.fromJSON (Object $ meta <> fallback) of
+renderPost site t p = do
+  case Aeson.fromJSON (Object p.meta) of
     Aeson.Error err                     -> fail err
     Aeson.Success v | Text.null v.title -> fail "missing metadata field: title"
-    Aeson.Success Post{..}              ->
-      let
-        post = Post
-          { publishedIs8601 = Nothing
-          , updated         = updated <|> published
-          , updatedIso8601  = Nothing
-          , slug            = slug <|> Just (titleSlug title)
-          , ..
-          }
-      in pure (post, renderPage site t p)
+    Aeson.Success Post{..}              -> do
+      (Object meta) <- pure $ Aeson.toJSON Post
+        { body = p.body
+        , tags = linkifyTags tags
+        , ..
+        }
+      pure
+        ( Post { body = p.body, ..}
+        , renderPage site t (Page meta body)
+        )

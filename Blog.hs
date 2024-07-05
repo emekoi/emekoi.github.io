@@ -6,7 +6,7 @@ module Blog (main) where
 
 import           Blog.MMark                 (Page)
 import qualified Blog.MMark                 as MMark
-import           Blog.Shake
+import           Blog.Type
 import           Blog.Template              (Template)
 import qualified Blog.Template              as Template
 import           Blog.Util
@@ -120,7 +120,7 @@ routePage' input output = route (Static False (Just input) output)
 tagsMeta :: Site -> Aeson.Value
 tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
   where
-    f k v = (Aeson.object ["tag" .= k, "site" .= Aeson.Object ("posts" .= v)] :)
+    f (Tag k) v = (Aeson.object ["tag" .= ("#" <> k), "site" .= Aeson.Object ("posts" .= v)] :)
     tagMap Site{..} =
       foldr (\p posts -> Set.foldl' (\posts t -> Map.adjust (p:) t posts) posts p.tags)
       -- foldr (\p posts -> Set.foldl' (flip (Map.adjust (p :))) posts p.tags)
@@ -156,10 +156,12 @@ renderMarkdownIO :: FilePath -> Action Page
 renderMarkdownIO = MMark.renderMarkdownIO extensions
 
 -- TODO: copy post static files
+-- TODO: extended posts
 -- TODO: build resume
 -- TODO: build atom feed
 -- TODO: build jsonfeed feed
 -- TODO: filter drafts based on published field
+-- TODO: relativize urls
 
 run :: Options -> Command -> IO ()
 run o (Build _) = do

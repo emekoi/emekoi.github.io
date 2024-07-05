@@ -1,23 +1,26 @@
 {-# LANGUAGE DeriveGeneric #-}
 
-module Blog.Shake
+module Blog.Type
   ( Post (..)
   , Site (..)
   , Tag (..)
   , Time (..)
-  , emptyPost
-  , prettfyTags
+  , linkifyTags
   , tagLink
   ) where
 
+import           Blog.Util                 (titleSlug)
+import           Control.Applicative
 import           Data.Aeson                (FromJSON (..), ToJSON (..))
 import qualified Data.Aeson                as Aeson
+import qualified Data.Aeson.Key            as Aeson
 import qualified Data.Char                 as Char
 import qualified Data.List                 as List
 import           Data.List.NonEmpty        (NonEmpty (..))
 import           Data.Set                  (Set)
 import qualified Data.Set                  as Set
 import           Data.Text                 (Text)
+import qualified Data.Text                 as Text
 import qualified Data.Text.Lazy            as TextL
 import           Data.Time
 import           Data.Time.Format.ISO8601
@@ -26,12 +29,15 @@ import           GHC.Generics
 import           Lucid
 import qualified Text.URI                  as URI
 
+fieldMod :: String -> String
+fieldMod =
+  List.intercalate "-"
+    . map (map Char.toLower)
+    . List.groupBy (\_ y -> Char.isLower y || not (Char.isAlpha y))
+
 aesonOptions :: Aeson.Options
 aesonOptions = Aeson.defaultOptions
-  { Aeson.fieldLabelModifier =
-    List.intercalate "-"
-      . map (map Char.toLower)
-      . List.groupBy (\_ y -> Char.isLower y || not (Char.isAlpha y))
+  { Aeson.fieldLabelModifier = fieldMod
   }
 
 newtype Tag = Tag Text
@@ -40,24 +46,31 @@ newtype Tag = Tag Text
 tagLink :: Tag ->  URI.URI
 tagLink (Tag t) = URI.URI
   { uriScheme = Nothing
-  , uriAuthority = Left False
+  , uriAuthority = Left True
   , uriPath = do
-      p <- URI.mkPathPiece t
-      pure (False, p :| [])
+      tags <- URI.mkPathPiece "tags.html"
+      pure (False, tags :| [])
   , uriQuery = []
-  , uriFragment = Nothing
+  , uriFragment = URI.mkFragment t
   }
 
-instance ToHtml Tag where
-  toHtml t@(Tag x) = li_ $ a_ [href_ (URI.render $ tagLink t)] ("#" <> toHtml x)
-  toHtmlRaw t@(Tag x) = li_ $ a_ [href_ (URI.render $ tagLink t)] ("#" <> toHtmlRaw x)
-
-newtype Time = Time Day
-  deriving (Generic, Show, Typeable, Eq, Hashable, NFData, Ord, ToJSON, FromJSON)
+newtype Time = Time UTCTime
+  deriving (Generic, Show, Typeable, Eq, Hashable, NFData, Ord)
 
 instance Binary Time where
   put (Time t) = put (iso8601Show t)
   get = Time <$> (get >>= iso8601ParseM)
+
+instance ToJSON Time where
+  toJSON (Time (UTCTime day 0)) = toJSON day
+  toJSON (Time t)               = toJSON t
+
+  toEncoding (Time (UTCTime day 0)) = toEncoding day
+  toEncoding (Time t)               = toEncoding t
+
+instance FromJSON Time where
+  parseJSON = Aeson.withText "Time" \(Text.unpack -> o) -> do
+    Time <$> (iso8601ParseM o <|> (flip UTCTime 0 <$>iso8601ParseM o))
 
 data Post = Post
   { body            :: TextL.Text
@@ -70,24 +83,9 @@ data Post = Post
   , title           :: Text
   , updated         :: Maybe Time
   , updatedIso8601  :: Maybe Time
-  , slug            :: Maybe Text
+  , slug            :: Text
   }
   deriving (Generic, Show, Typeable, Eq)
-
-emptyPost :: Post
-emptyPost = Post
-  { body            = mempty
-  , direction       = Nothing
-  , hideTitle       = False
-  , published       = Nothing
-  , publishedIs8601 = Nothing
-  , subtitle        = Nothing
-  , tags            = mempty
-  , title           = mempty
-  , updated         = Nothing
-  , updatedIso8601  = Nothing
-  , slug            = Nothing
-  }
 
 instance Hashable Post where
 
@@ -100,7 +98,26 @@ instance ToJSON Post where
   toEncoding = Aeson.genericToEncoding aesonOptions
 
 instance FromJSON Post where
-  parseJSON = Aeson.genericParseJSON aesonOptions
+  parseJSON = Aeson.withObject "Post" \o -> do
+    direction <- o .:? "direction"
+    hideTitle <- o .:? "hideTitle" .!= False
+    published <- o .:? "published"
+    subtitle  <- o .:? "subtitle"
+    tags      <- o .:? "tags" .!= []
+    title     <- o .: "title"
+    updated   <- fmap (<|> published) (o .:? "updated")
+    slug      <- o .:? "slug" .!= titleSlug title
+    pure Post
+      { body            = mempty
+      , publishedIs8601 = Nothing
+      , updatedIso8601  = Nothing
+      , ..
+      }
+
+    where
+      (.:) x y = x Aeson..: Aeson.fromString (fieldMod y)
+      (.:?) x y = x Aeson..:? Aeson.fromString (fieldMod y)
+      (.!=) = (Aeson..!=)
 
 data Site = Site
   { author :: Text
@@ -123,6 +140,8 @@ instance ToJSON Site where
 instance FromJSON Site where
   parseJSON = Aeson.genericParseJSON aesonOptions
 
-prettfyTags :: Set Tag -> Set Tag
--- prettfyTags Site{..} = Site{ tags = Set.map (\t -> Tag (TextL.toStrict $ renderText t)) tags, ..}
-prettfyTags = Set.map (Tag . TextL.toStrict . renderText . toHtml)
+linkifyTags :: Set Tag -> Set Tag
+linkifyTags = Set.map (Tag
+  . TextL.toStrict
+  . renderText
+  . \(Tag t) -> a_ [href_ (URI.render $ tagLink (Tag t))] ("#" <> toHtmlRaw t))

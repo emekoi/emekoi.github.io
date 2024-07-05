@@ -172,8 +172,8 @@ renderHTML exts (MMark.useExtensionsM exts -> MMark {..}) =
       pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
 
 data Page = Page
-  { meta    :: Object
-  , content :: TextL.Text
+  { meta :: Object
+  , body :: TextL.Text
   }
   deriving (Show)
 
@@ -196,7 +196,7 @@ renderMarkdown exts input source = do
     Left errs -> fail $ Mega.errorBundlePretty errs
     Right r -> do
       let meta = fromMaybe mempty $ MMark.projectYaml r
-      content <- renderTextT $ renderHTML exts r
+      body <- renderTextT $ renderHTML exts r
       pure Page {..}
 
 renderMarkdownIO :: (MonadFail m, MonadIO m) => [ExtensionT m] -> FilePath -> m Page
