@@ -41,8 +41,9 @@ executable blog
     main-is:     Blog.hs
     other-modules:
       Blog.MMark
-      Blog.Type
+      Blog.Shake
       Blog.Template
+      Blog.Type
       Blog.Util
     if !flag(ci)
       cpp-options: -DPREVIEW_SERVER

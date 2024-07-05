@@ -1,3 +1,4 @@
+
 module Blog.Template
   ( Template
   , compileDir
@@ -7,10 +8,10 @@ module Blog.Template
   , renderPost
   ) where
 
-import           Blog.MMark                 (Page (..))
 import           Blog.Type
 import           Blog.Util
 import           Control.Exception
+import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
@@ -60,11 +61,14 @@ compileDir dir = do
 
 preprocess :: (MonadFail m, MonadIO m) => Aeson.Value -> Template -> Text -> m Text
 preprocess site (Template _ tc) input = do
-  either (liftIO . throwIO . Stache.MustacheParserException) return do
+  (ws, out) <- either (liftIO . throwIO . Stache.MustacheParserException) return do
     nodes <- Stache.parseMustache "<input>" input
-    pure . TextL.toStrict $ Stache.renderMustache
+    pure . fmap TextL.toStrict $ Stache.renderMustacheW
       (Template pname (Map.insert pname nodes tc))
       (Object $ "site" .= site)
+  unless (null ws) $
+    liftIO . putStrLn $ unlines (Stache.displayMustacheWarning <$> ws)
+  pure out
   where pname = Stache.PName $ Text.pack "<input>"
 
 preprocessFile :: Aeson.Value -> Template -> FilePath -> Action Text
@@ -79,18 +83,14 @@ renderPage site t (Page meta body) = do
     <> ("body" .= TextL.toStrict body)
     <> meta
 
-renderPost :: (MonadFail m) => Aeson.Value -> Template -> Page -> m (Post, TextL.Text)
-renderPost site t p = do
-  case Aeson.fromJSON (Object p.meta) of
+renderPost :: (MonadFail m, MonadIO m) => Aeson.Value -> Template -> Page -> m (Post, TextL.Text)
+renderPost site t page = do
+  case Aeson.fromJSON (Object page.meta) of
     Aeson.Error err                     -> fail err
     Aeson.Success v | Text.null v.title -> fail "missing metadata field: title"
-    Aeson.Success Post{..}              -> do
-      (Object meta) <- pure $ Aeson.toJSON Post
-        { body = p.body
-        , tags = linkifyTags tags
-        , ..
-        }
+    Aeson.Success Post{..}              ->
+      let meta = "tags" .= linkifyTags tags <> page.meta in
       pure
-        ( Post { body = p.body, ..}
-        , renderPage site t (Page meta body)
+        ( Post { body = page.body, .. }
+        , renderPage site t (Page meta page.body)
         )

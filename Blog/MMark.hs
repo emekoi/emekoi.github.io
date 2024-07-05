@@ -1,17 +1,17 @@
-{-# LANGUAGE TemplateHaskellQuotes #-}
-
 module Blog.MMark
-  ( Page (..)
+  ( demoteHeaders
+  , descriptionList
+  , md
+  , rawBlocks
   , renderMarkdown
   , renderMarkdownIO
-  , md
   ) where
 
+import           Blog.Type                  (Page (..))
 import           Blog.Util
 import           Control.Arrow
 import           Control.Monad
 import           Control.Monad.Trans
-import           Data.Aeson.Types           (Object)
 import           Data.Function              (fix)
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.List.NonEmpty         as NE
@@ -19,8 +19,6 @@ import           Data.Maybe                 (fromMaybe)
 import           Data.Text                  (Text)
 import qualified Data.Text                  as Text
 import qualified Data.Text.IO               as Text
-import qualified Data.Text.Lazy             as TextL
-import qualified Language.Haskell.TH        as TH
 import qualified Language.Haskell.TH.Quote  as TH
 import qualified Language.Haskell.TH.Syntax as TH
 import           Lucid
@@ -171,17 +169,6 @@ renderHTML exts (MMark.useExtensionsM exts -> MMark {..}) =
       x1 <- traverse (applyInlineTrans extInlineTrans) x0
       pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
 
-data Page = Page
-  { meta :: Object
-  , body :: TextL.Text
-  }
-  deriving (Show)
-
-instance TH.Lift Page where
-  liftTyped p = TH.unsafeCodeCoerce (TH.lift p)
-  lift (Page m t) =
-    liftA2 (\m t -> TH.ConE 'Page `TH.AppE` m `TH.AppE` t) (TH.lift m) (TH.lift t)
-
 md :: TH.QuasiQuoter
 md = TH.QuasiQuoter
   { quoteExp  = \x -> renderMarkdown [] "<quasiquote>" (Text.pack x) >>= TH.lift
@@ -203,3 +190,35 @@ renderMarkdownIO :: (MonadFail m, MonadIO m) => [ExtensionT m] -> FilePath -> m 
 renderMarkdownIO exts file = do
   input <- liftIO $ Text.readFile file
   renderMarkdown exts file input
+
+-- scuffed implementation of description lists
+descriptionList :: MonadFail m => ExtensionT m
+descriptionList = blockRenderM \old -> \case
+  Div attrs blocks | elem "dl" (MMark.classes attrs) -> do
+    dl_ $ forM_ (pairUp blocks) \(x, y) -> do
+      dt_ (old x)
+      dd_ (old y)
+    "\n"
+  x -> old x
+  where
+    pairUp = reverse . fst . foldl go ([], Nothing)
+
+    go (acc, Nothing) fst  = (acc, Just fst)
+    go (acc, Just fst) snd = ((fst, snd) : acc, Nothing)
+
+-- emit blocks with language 'raw' as raw HTML
+rawBlocks :: MonadFail m => ExtensionT m
+rawBlocks = blockRenderM \old -> \case
+  CodeBlock (Just "{=raw}") txt -> toHtmlRaw txt
+  x -> old x
+
+-- demote headers by 1 (h1 -> h2, ..., h6 -> p)
+demoteHeaders :: MonadFail m => ExtensionT m
+demoteHeaders = blockTransM \case
+  Heading1 x -> pure $ Heading2 x
+  Heading2 x -> pure $ Heading3 x
+  Heading3 x -> pure $ Heading4 x
+  Heading4 x -> pure $ Heading5 x
+  Heading5 x -> pure $ Heading6 x
+  Heading6 x -> pure $ Paragraph x
+  x -> pure x
