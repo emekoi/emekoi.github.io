@@ -105,6 +105,7 @@ data InlineState = InlineState
     -- | Reference link definitions
     _istDefs        :: Defs
   }
+  deriving (Show)
 
 -- | Initial value for 'InlineState'.
 initialInlineState :: InlineState
@@ -143,6 +144,7 @@ newtype Defs = Defs
   { -- | Reference definitions containing a 'URI' and optionally title
     _referenceDefs :: HashMap DefLabel (URI, Maybe Text)
   }
+  deriving (Show)
 
 -- | Empty 'Defs'.
 emptyDefs :: Defs
@@ -153,7 +155,7 @@ emptyDefs =
 
 -- | An opaque type for definition label.
 newtype DefLabel = DefLabel (CI Text)
-  deriving (Eq, Ord, Hashable)
+  deriving (Eq, Ord, Hashable, Show)
 
 -- | Smart constructor for the 'DefLabel' type.
 mkDefLabel :: Text -> DefLabel

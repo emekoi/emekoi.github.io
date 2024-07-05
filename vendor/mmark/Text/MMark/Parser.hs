@@ -571,6 +571,7 @@ pParagraph = do
           guard (alevel < ilevel rlevel)
           unless (alevel < rlevel) . choice $
             [ void (char '>'),
+              void (char ':'),
               void pThematicBreak,
               void pAtxHeading,
               void pOpeningFence,
@@ -602,14 +603,20 @@ pParagraph = do
 -- | Parse a fenced div
 pFencedDiv :: BParser (Block Isp)
 pFencedDiv = do
-  void $ count 3 (char ch)
-  n <- (+ 3) . length <$> many (char ch)
-  -- TODO: we have weird whitespace requurements and the divs can't be empty
-  -- all of that is wrong
-  attrs <- sc *> ((pAttributes <?> "div attributes") <|> pure mempty) <* eol
-  xs <- catMaybes <$> manyTill pBlock (pClosingFence ch n)
+  skipCount 3 (char ':')
+  n <- length <$> many (char ':')
+  attrs <- (sc' *> (pAttributes <|> pure mempty) <* eol) <?> "div attributes"
+  xs <- catMaybes <$> (manyTill pBlock (pClosingDivFence n))
   Div attrs xs <$ sc
-  where ch = ':'
+
+-- | Parse the closing fence of a fenced div.
+pClosingDivFence :: Int -> BParser ()
+pClosingDivFence n = try . label "closing div fence" $ do
+  clevel <- ilevel <$> refLevel
+  void $ L.indentGuard sc' LT clevel
+  skipCount (n + 3) (char ':')
+  skipMany (char ':')
+  sc' *> (eof <|> eol)
 
 ----------------------------------------------------------------------------
 -- Auxiliary block-level parsers
@@ -779,8 +786,6 @@ pHardLineBreak = do
 pPlain :: IParser Inline
 pPlain = fmap (Plain . bakeText) . foldSome $ do
   ch <- lookAhead (anySingle <?> "inline content")
-  let newline' =
-        (('\n' :) . dropWhile isSpace) <$ eol <* sc' <* lastChar SpaceChar
   case ch of
     '\\' ->
       (:)
@@ -818,6 +823,9 @@ pPlain = fmap (Plain . bakeText) . foldSome $ do
                 if Char.isPunctuation ch
                   then char ch <* lastChar PunctChar
                   else char ch <* lastChar OtherChar
+  where
+    newline' =
+        (('\n' :) . dropWhile isSpace) <$ eol <* sc' <* lastChar SpaceChar
 
 -- | Parse a math block.
 --
@@ -1148,6 +1156,7 @@ isMarkupChar x = isFrameConstituent x || f x
       ']' -> True
       '`' -> True
       '$' -> True
+      -- ':' -> True
       _ -> False
 
 isSpecialChar :: Char -> Bool
