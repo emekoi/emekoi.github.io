@@ -3,6 +3,7 @@
 
 module Blog.Shake
   ( Route (..)
+  , extensions
   , gitHashOracle
   , renderMarkdown
   , renderMarkdownIO

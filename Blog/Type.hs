@@ -130,16 +130,17 @@ instance FromJSON Post where
       (.!=) = (Aeson..!=)
 
 data Site = Site
-  { author :: Text
-  , email  :: Text
-  , github :: Text
-  , hash   :: Text
-  , lang   :: Text
-  , posts  :: [Post]
-  , source :: Text
-  , tags   :: Set Tag
-  , title  :: Text
-  , url    :: Text
+  { author      :: Text
+  , description :: Text
+  , email       :: Text
+  , github      :: Text
+  , hash        :: Text
+  , lang        :: Text
+  , posts       :: [Post]
+  , source      :: Text
+  , tags        :: Set Tag
+  , title       :: Text
+  , url         :: Text
   }
   deriving (Generic)
 

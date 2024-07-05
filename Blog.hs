@@ -22,6 +22,7 @@ import           Development.Shake          hiding (shakeOptions)
 import qualified Development.Shake          as Shake
 import           Development.Shake.Classes
 import           Development.Shake.FilePath ((</>))
+import qualified Development.Shake.FilePath as Shake
 import           GHC.Conc                   (numCapabilities)
 import qualified Options.Applicative        as A
 import           Prelude                    hiding (writeFile)
@@ -52,8 +53,6 @@ shakeOptions Options{..} = do
     , shakeVersion   = version
     }
 
--- TODO: copy post static files
--- TODO: extended posts
 -- TODO: build resume
 -- TODO: build atom feed
 -- TODO: build jsonfeed feed
@@ -72,15 +71,16 @@ run o (Build _) = do
       hash <- gitHash "master"
       pure $ Site
         { author
-        , email = "e.nk@caltech.edu"
-        , github = "https://github.com/emekoi"
+        , description = author <> "'s Blog"
+        , email       = "e.nk@caltech.edu"
+        , github      = "https://github.com/emekoi"
         , hash
-        , lang = "en"
-        , posts = List.sortOn (Ord.Down . (.published)) posts
-        , source = "https://github.com/emekoi/emekoi.github.io"
-        , tags = foldMap (.tags) posts
-        , title = author <> "'s Blog"
-        , url = "https://emekoi.github.io"
+        , lang        = "en"
+        , posts       = List.sortOn (Ord.Down . (.published)) posts
+        , source      = "https://github.com/emekoi/emekoi.github.io"
+        , tags        = foldMap (.tags) posts
+        , title       = author <> "'s Blog"
+        , url         = "https://emekoi.github.io"
         }
 
     getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
@@ -150,12 +150,6 @@ run o (Build _) = do
         >>= writePage siteMeta tPage output
 
     -- build posts
-    action $ do
-      files <- getDirectoryFiles "" postsPattern
-      forP files \file -> do
-        slug <- postSlug file
-        need [buildDir </> "posts" </> slug </> "index.html"]
-
     postInput <- liftAction do
       files <- getDirectoryFiles "" postsPattern
       Map.fromList <$> forP files \file -> do
@@ -165,8 +159,28 @@ run o (Build _) = do
 
     buildDir </> "posts/*/index.html" %> \output -> do
       (input, content) <- (Map.! output) <$> postInput
-      need [input]
       writeFile output (TextL.encodeUtf8 content)
+
+      let
+        outDir = Shake.takeDirectory output
+        inDir  = Shake.takeDirectory input
+
+      deps <- if length (Shake.splitPath inDir) == 1
+        then pure [input]
+        else getDirectoryFiles "" [inDir </> "*"]
+
+      forP deps \file -> do
+        copyFileChanged file (Shake.replaceDirectory file outDir)
+
+      need deps
+
+    action $ do
+      files <- getDirectoryFiles "" postsPattern
+      forP files \file -> do
+        slug <- postSlug file
+        need [buildDir </> "posts" </> slug </> "index.html"]
+
+      pure ()
 
   where
     author = "Emeka Nkurumeh"

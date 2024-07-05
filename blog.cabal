@@ -45,8 +45,10 @@ executable blog
       Blog.Template
       Blog.Type
       Blog.Util
+
     if !flag(ci)
       cpp-options: -DPREVIEW_SERVER
+
     build-depends:
       , aeson                  ^>= 2.2
       , base                   ^>= 4.19
@@ -55,6 +57,7 @@ executable blog
       , containers             ^>= 0.6
       , directory              ^>= 1.3
       , filepath               ^>= 1.4
+      , foldl                  ^>= 1.4
       , ghc-syntax-highlighter ^>= 0.0.10
       , lucid                  ^>= 2.11
       , megaparsec             ^>= 9.6
@@ -67,10 +70,13 @@ executable blog
       , raw-strings-qq         ^>= 1.1
       , shake                  ^>= 0.19
       , stache                 ^>= 2.3
+      , template-haskell       ^>= 2.21
       , text                   ^>= 2.1
       , text-icu               ^>= 0.8
       , time                   ^>= 1.12
-      , template-haskell
+
+    if !flag(ci)
+      build-depends:
       -- , http-types ^>= 0.12
       -- , wai ^>= 3.2
       -- , wai-app-static ^>= 3.1
