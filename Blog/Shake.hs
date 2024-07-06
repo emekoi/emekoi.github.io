@@ -48,12 +48,14 @@ import           Prelude                    hiding (writeFile)
 import qualified System.Directory           as Dir
 import           Text.MMark.Extension       as MMark
 
-writeFile :: (MonadIO m, HasCallStack) => FilePath -> LBS.ByteString -> m ()
-writeFile name x = liftIO $ do
-  Dir.createDirectoryIfMissing True (FP.takeDirectory name)
-  LBS.writeFile name x
+writeFile :: HasCallStack => FilePath -> LBS.ByteString -> Action ()
+writeFile output contents = do
+  putInfo ("writing " ++ output)
+  liftIO do
+    Dir.createDirectoryIfMissing True (FP.takeDirectory output)
+    LBS.writeFile output contents
 
-writePage :: (MonadIO m, HasCallStack) => Aeson.Value -> Template -> FilePath -> Page -> m ()
+writePage :: HasCallStack => Aeson.Value -> Template -> FilePath -> Page -> Action ()
 writePage meta template output = writeFile output
   . TextL.encodeUtf8
   . Template.renderPage meta template

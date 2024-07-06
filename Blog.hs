@@ -27,16 +27,24 @@ import           GHC.Conc                       (numCapabilities)
 import qualified Options.Applicative            as A
 import           Prelude                        hiding (writeFile)
 
-#if defined(PREVIEW_SERVER)
+#if defined(ENABLE_WATCH)
+import qualified Control.Concurrent.MVar        as MVar
+import           Control.Exception
 import qualified Data.ByteString.Lazy.Char8     as BS
+import           Data.Function                  (fix)
+import qualified Data.Set                       as Set
 import           Data.String                    (fromString)
+import qualified Development.Shake.Database     as Shake
 import           Development.Shake.FilePath     ((<.>))
+import           GHC.Clock
 import qualified Network.HTTP.Types.Status      as Status
 import qualified Network.Wai                    as Wai
 import qualified Network.Wai.Application.Static as Wai
 import qualified Network.Wai.Handler.Warp       as Warp
 import qualified System.Directory               as Dir
+import           System.FSNotify
 import qualified WaiAppStatic.Types             as Wai
+import           GHC.Conc                       (threadDelay)
 #endif
 
 data Options = Options
@@ -45,11 +53,12 @@ data Options = Options
   , jobs      :: Int
   }
 
-newtype BuildOptions = BuildOptions
-  { _buildDrafts :: Bool
+data BuildOptions = BuildOptions
+  { drafts :: Bool
+  , watch  :: Bool
   }
 
-data WatchOptions = WatchOptions
+data PreviewOptions = PreviewOptions
   { server :: Bool
   , host   :: String
   , port   :: Int
@@ -58,7 +67,7 @@ data WatchOptions = WatchOptions
 data Command
   = Build BuildOptions
   | Clean
-  | Watch WatchOptions
+  | Preview PreviewOptions
 
 shakeOptions :: Options -> IO ShakeOptions
 shakeOptions Options{..} = do
@@ -72,7 +81,7 @@ shakeOptions Options{..} = do
     , shakeVersion   = version
     }
 
-#if defined(PREVIEW_SERVER)
+#if defined(ENABLE_WATCH)
 staticSettings :: FilePath -> Wai.StaticSettings
 staticSettings path = let s = Wai.defaultFileServerSettings path in s
   { Wai.ss404Handler = Just \_ respond ->
@@ -102,143 +111,198 @@ staticSettings path = let s = Wai.defaultFileServerSettings path in s
 -- TODO: filter drafts based on published field
 -- TODO: relativize urls
 
-run :: Options -> Command -> IO ()
-run o (Build _) = do
-  options <- shakeOptions o
-  shake options $ do
-    buildDir <- shakeFiles <$> getShakeOptionsRules
+build ::  BuildOptions -> Rules ()
+build _ = do
+  buildDir <- shakeFiles <$> getShakeOptionsRules
 
-    gitHash <- gitHashOracle
+  gitHash <- gitHashOracle
 
-    getSite <- newCache \posts -> do
-      hash <- gitHash "master"
-      pure $ Site
-        { author
-        , description = author <> "'s Blog"
-        , email       = "e.nk@caltech.edu"
-        , github      = "https://github.com/emekoi"
-        , hash
-        , lang        = "en"
-        , posts       = List.sortOn (Ord.Down . (.published)) posts
-        , source      = "https://github.com/emekoi/emekoi.github.io"
-        , tags        = foldMap (.tags) posts
-        , title       = author <> "'s Blog"
-        , url         = "https://emekoi.github.io"
-        }
+  getSite <- newCache \posts -> do
+    hash <- gitHash "master"
+    pure $ Site
+      { author
+      , description = author <> "'s Blog"
+      , email       = "e.nk@caltech.edu"
+      , github      = "https://github.com/emekoi"
+      , hash
+      , lang        = "en"
+      , posts       = List.sortOn (Ord.Down . (.published)) posts
+      , source      = "https://github.com/emekoi/emekoi.github.io"
+      , tags        = foldMap (.tags) posts
+      , title       = author <> "'s Blog"
+      , url         = "https://emekoi.github.io"
+      }
 
-    getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
+  getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
 
-    template <- Template.compileDir "templates"
+  template <- Template.compileDir "templates"
 
 #if defined(POST_CACHE)
-    renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
-      Just t <- template "post.html"
-      siteMeta <- getSiteMeta
-      Blog.renderMarkdownIO input >>= Template.renderPost siteMeta t
+  renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
+    Just t <- template "post.html"
+    siteMeta <- getSiteMeta
+    Blog.renderMarkdownIO input >>= Template.renderPost siteMeta t
 #else
-    renderPost <- newCache \input -> do
-      Just t <- template "post.html"
-      siteMeta <- getSiteMeta
-      renderMarkdownIO input >>= Template.renderPost siteMeta t
+  renderPost <- newCache \input -> do
+    Just t <- template "post.html"
+    siteMeta <- getSiteMeta
+    renderMarkdownIO input >>= Template.renderPost siteMeta t
 #endif
 
-    let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
+  let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
 
-    routeStatic "css/*.css"
-    routeStatic "fonts//*"
+  routeStatic "css/*.css"
+  routeStatic "fonts//*"
 
-    routePage "pages/404.md" \input output -> do
-      Just t <- template "page.html"
-      siteMeta <- getSiteMeta
-      renderMarkdownIO input
-        >>= writePage siteMeta t output
+  routePage "pages/404.md" \input output -> do
+    Just t <- template "page.html"
+    siteMeta <- getSiteMeta
+    renderMarkdownIO input
+      >>= writePage siteMeta t output
 
-    routePage "pages/index.md" \input output -> do
-      files <- getDirectoryFiles "" postsPattern
-      posts <- take 5 <$> forP files (fmap fst . renderPost)
+  routePage "pages/index.md" \input output -> do
+    files <- getDirectoryFiles "" postsPattern
+    posts <- take 5 <$> forP files (fmap fst . renderPost)
 
-      Just tPostList <- template "post-list.md"
-      Just tPage <- template "page.html"
+    Just tPostList <- template "post-list.md"
+    Just tPage <- template "page.html"
 
-      siteMeta <- Aeson.toJSON <$> getSite posts
+    siteMeta <- Aeson.toJSON <$> getSite posts
 
-      Template.preprocessFile siteMeta tPostList input
-        >>= renderMarkdown input
-        >>= writePage siteMeta tPage output
+    Template.preprocessFile siteMeta tPostList input
+      >>= renderMarkdown input
+      >>= writePage siteMeta tPage output
 
-    routePage' "pages/posts.md" "posts/index.html" \input output -> do
-      files <- getDirectoryFiles "" postsPattern
-      posts <- forP files (fmap fst . renderPost)
+  routePage' "pages/posts.md" "posts/index.html" \input output -> do
+    files <- getDirectoryFiles "" postsPattern
+    posts <- forP files (fmap fst . renderPost)
 
-      Just tPostList <- template "post-list.md"
-      Just tPage <- template "page.html"
+    Just tPostList <- template "post-list.md"
+    Just tPage <- template "page.html"
 
-      siteMeta <- Aeson.toJSON <$> getSite posts
+    siteMeta <- Aeson.toJSON <$> getSite posts
 
-      Template.preprocessFile siteMeta tPostList input
-        >>= renderMarkdown input
-        >>= writePage siteMeta tPage output
+    Template.preprocessFile siteMeta tPostList input
+      >>= renderMarkdown input
+      >>= writePage siteMeta tPage output
 
-    routePage' "pages/tags.md" "tags.html" \input output -> do
-      files <- getDirectoryFiles "" postsPattern
-      posts <- forP files (fmap fst . renderPost)
+  routePage' "pages/tags.md" "tags.html" \input output -> do
+    files <- getDirectoryFiles "" postsPattern
+    posts <- forP files (fmap fst . renderPost)
 
-      Just tPostList <- template "post-list.md"
-      Just tPage <- template "page.html"
+    Just tPostList <- template "post-list.md"
+    Just tPage <- template "page.html"
 
-      (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
+    (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
 
-      Template.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
-        >>= renderMarkdown input
-        >>= writePage siteMeta tPage output
+    Template.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
+      >>= renderMarkdown input
+      >>= writePage siteMeta tPage output
 
-    -- build posts
-    postInput <- liftAction do
-      files <- getDirectoryFiles "" postsPattern
-      Map.fromList <$> forP files \file -> do
-        (post, content) <- renderPost file
-        let slug = Text.unpack $ titleSlug post.title
-        pure (buildDir </> "posts" </> slug </> "index.html", (file, content))
+  -- build posts
+  postInput <- liftAction do
+    files <- getDirectoryFiles "" postsPattern
+    Map.fromList <$> forP files \file -> do
+      (post, content) <- renderPost file
+      let slug = Text.unpack $ titleSlug post.title
+      pure (buildDir </> "posts" </> slug </> "index.html", (file, content))
 
-    buildDir </> "posts/*/index.html" %> \output -> do
-      (input, content) <- (Map.! output) <$> postInput
-      writeFile output (TextL.encodeUtf8 content)
+  buildDir </> "posts/*/index.html" %> \output -> do
+    (input, content) <- (Map.! output) <$> postInput
+    writeFile output (TextL.encodeUtf8 content)
 
-      let
-        outDir = Shake.takeDirectory output
-        inDir  = Shake.takeDirectory input
+    let
+      outDir = Shake.takeDirectory output
+      inDir  = Shake.takeDirectory input
 
-      deps <- if length (Shake.splitPath inDir) == 1
-        then pure [input]
-        else do
-          fmap (inDir </>) <$> getDirectoryContents inDir
+    deps <- if length (Shake.splitPath inDir) == 1
+      then pure [input]
+      else do
+        fmap (inDir </>) <$> getDirectoryContents inDir
 
-      forP deps \file -> do
-        copyFileChanged file (Shake.replaceDirectory file outDir)
+    forP deps \file -> do
+      copyFileChanged file (Shake.replaceDirectory file outDir)
 
-      need deps
+    need deps
 
-    action $ do
-      files <- getDirectoryFiles "" postsPattern
-      forP files \file -> do
-        slug <- postSlug file
-        need [buildDir </> "posts" </> slug </> "index.html"]
+  action $ do
+    files <- getDirectoryFiles "" postsPattern
+    forP files \file -> do
+      slug <- postSlug file
+      need [buildDir </> "posts" </> slug </> "index.html"]
 
-      pure ()
+    pure ()
 
   where
     author = "Emeka Nkurumeh"
     postsPattern = ["posts/*.md", "posts/*/index.md"]
 
-#if defined(PREVIEW_SERVER)
-run _ (Watch w) = do
+timerStart :: IO (IO Double)
+timerStart = do
+  start <- getMonotonicTime
+  pure $ do
+    end <- getMonotonicTime
+    pure (end - start)
+
+watch :: ShakeOptions -> Rules () -> IO ()
+watch shakeOpts rules = do
+  Shake.shakeWithDatabase shakeOpts rules \db -> withManager \mgr -> do
+    fix \loop -> do
+      timeElapsed <- timerStart
+      res <- try @SomeException $ do
+        (_, after) <- Shake.shakeRunDatabase db []
+        Shake.shakeRunAfter shakeOpts after
+      elapsed <- timeElapsed
+
+      case res of
+        Right () -> putStrLn $ unwords ["Build completed in", show elapsed]
+        Left err -> print err
+
+      threadDelay 100000
+
+      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
+      if null liveFiles then putStrLn "No live files" else do
+        sema <- MVar.newEmptyMVar
+        let
+          semaUp   = MVar.putMVar sema ()
+          semaDown = MVar.takeMVar sema
+          liveDirs = Map.fromListWith Set.union $
+            map (\abs -> (Shake.takeDirectory abs, Set.singleton abs)) liveFiles
+
+          startWatchers = forM (Map.toList liveDirs) $ \(dir, liveFilesInDir) -> do
+            let isChangeToLiveFile (Modified path _ _) = path `Set.member` liveFilesInDir
+                isChangeToLiveFile _                   = False
+            watchDir mgr dir isChangeToLiveFile $ \_ -> semaUp
+
+        bracket startWatchers sequence $ const do
+          putStrLn "Watching live files for changes..."
+          semaDown
+
+        loop
+
+timedShake :: ShakeOptions -> Rules () -> IO ()
+timedShake shakeOpts rules = do
+  timeElapsed <- timerStart
+  shake shakeOpts rules
+  elapsed <- timeElapsed
+  putStrLn $ unwords ["Build completed in", show elapsed]
+
+run :: Options -> Command -> IO ()
+run o (Build b) = do
+  options <- shakeOptions o
+  (if b.watch then watch else timedShake)
+    options
+    (build b)
+
+#if defined(ENABLE_WATCH)
+run _ (Preview w) = do
   let app = Wai.staticApp (staticSettings "_build")
   Warp.runSettings warpSettings app
   where
     warpSettings = Warp.setHost (fromString w.host)
       $ Warp.setPort w.port Warp.defaultSettings
 #else
-run _ (Watch w) = error "watch disabled"
+run _ (Preview e) = error "watch disabled"
 #endif
 
 run o Clean = do
@@ -253,7 +317,7 @@ parseOptions = do
   command <- A.hsubparser (mconcat
     [ A.command "build" (A.info pBuild (A.progDesc "Build the site"))
     , A.command "clean" (A.info (pure Clean) (A.progDesc "Remove build files"))
-    , A.command "watch" (A.info pWatch (A.progDesc "Watch for changed and rebuild automatically"))
+    , A.command "preview" (A.info pPreview (A.progDesc "Run a preview server"))
     ]) <|> pBuild
 
   verbosity <- A.option A.auto (mconcat
@@ -272,9 +336,12 @@ parseOptions = do
   pure Options{..}
 
   where
-    pBuild = fmap Build $ BuildOptions
-      <$> A.switch (A.long "drafts" <> A.short 'd' <> A.help "Include drafts")
-    pWatch = Watch <$> do
+    pBuild = Build <$> do
+      drafts <- A.switch (A.long "drafts" <> A.short 'd' <> A.help "Include drafts")
+      watch <- A.switch (A.long "watch" <> A.short 'w' <> A.help "Watch for changes and rebuild automatically")
+      pure BuildOptions {..}
+
+    pPreview = Preview <$> do
       server <- A.switch (A.long "server" <> A.short 's' <> A.help "Run a preview server")
       host <- A.option A.auto (mconcat
         [ A.long "host"
@@ -290,7 +357,7 @@ parseOptions = do
         , A.value 8000
         , A.showDefault
         ])
-      pure WatchOptions {..}
+      pure PreviewOptions {..}
 
 main :: IO ()
 main = do

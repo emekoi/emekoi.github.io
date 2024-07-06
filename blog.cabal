@@ -47,7 +47,7 @@ executable blog
       Blog.Util
 
     if !flag(ci)
-      cpp-options: -DPREVIEW_SERVER
+      cpp-options: -DENABLE_WATCH
 
     build-depends:
       , aeson                  ^>= 2.2
@@ -77,6 +77,7 @@ executable blog
 
     if !flag(ci)
       build-depends:
+        , fsnotify       ^>= 0.4
         , http-types     ^>= 0.12
         , wai            ^>= 3.2
         , wai-app-static ^>= 3.1
