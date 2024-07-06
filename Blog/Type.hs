@@ -3,11 +3,12 @@
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
 module Blog.Type
-  ( Post (..)
+  ( FileError (..)
+  , Page (..)
+  , Post (..)
   , Site (..)
   , Tag (..)
   , Time (..)
-  , Page (..)
   , pattern Time
   , linkifyTags
   , tagLink
@@ -15,6 +16,7 @@ module Blog.Type
 
 import           Blog.Util                  (titleSlug)
 import           Control.Applicative
+import           Control.Exception          (Exception (..))
 import           Data.Aeson                 (FromJSON (..), ToJSON (..))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.Aeson.Key             as Aeson
@@ -157,7 +159,6 @@ linkifyTags = Set.map (Tag
   . renderText
   . \(Tag t) -> a_ [href_ (URI.render $ tagLink (Tag t))] ("#" <> toHtmlRaw t))
 
-
 data Page = Page
   { meta :: Aeson.Object
   , body :: TextL.Text
@@ -168,3 +169,12 @@ instance TH.Lift Page where
   liftTyped p = TH.unsafeCodeCoerce (TH.lift p)
   lift (Page m t) =
     liftA2 (\m t -> TH.ConE 'Page `TH.AppE` m `TH.AppE` t) (TH.lift m) (TH.lift t)
+
+data FileError = FileError
+  { path :: Maybe FilePath
+  , msg  :: String
+  }
+  deriving (Show, Typeable, Generic)
+
+instance Exception FileError where
+  displayException p = p.msg

@@ -32,11 +32,13 @@ import qualified Control.Concurrent.MVar        as MVar
 import           Control.Exception
 import qualified Data.ByteString.Lazy.Char8     as BS
 import           Data.Function                  (fix)
+import           Data.Functor
 import qualified Data.Set                       as Set
 import           Data.String                    (fromString)
 import qualified Development.Shake.Database     as Shake
 import           Development.Shake.FilePath     ((<.>))
 import           GHC.Clock
+import           GHC.Conc                       (forkIO, threadDelay)
 import qualified Network.HTTP.Types.Status      as Status
 import qualified Network.Wai                    as Wai
 import qualified Network.Wai.Application.Static as Wai
@@ -44,7 +46,6 @@ import qualified Network.Wai.Handler.Warp       as Warp
 import qualified System.Directory               as Dir
 import           System.FSNotify
 import qualified WaiAppStatic.Types             as Wai
-import           GHC.Conc                       (threadDelay)
 #endif
 
 data Options = Options
@@ -74,10 +75,11 @@ shakeOptions Options{..} = do
   version <- getHashedShakeVersion ["Blog.hs"]
 
   pure $ Shake.shakeOptions
-    { shakeVerbosity = verbosity
-    , shakeThreads   = jobs
-    , shakeColor     = True
+    { shakeColor     = True
     , shakeFiles     = "_build"
+    , shakeStaunch   = False
+    , shakeThreads   = jobs
+    , shakeVerbosity = verbosity
     , shakeVersion   = version
     }
 
@@ -133,7 +135,8 @@ build _ = do
       , url         = "https://emekoi.github.io"
       }
 
-  getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
+  let getSiteMeta = Aeson.toJSON <$> getSite []
+  -- getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
 
   template <- Template.compileDir "templates"
 
@@ -143,7 +146,8 @@ build _ = do
     siteMeta <- getSiteMeta
     Blog.renderMarkdownIO input >>= Template.renderPost siteMeta t
 #else
-  renderPost <- newCache \input -> do
+  renderPost <- pure \input -> do
+    putInfo ("reading " ++ input)
     Just t <- template "post.html"
     siteMeta <- getSiteMeta
     renderMarkdownIO input >>= Template.renderPost siteMeta t
@@ -162,16 +166,20 @@ build _ = do
 
   routePage "pages/index.md" \input output -> do
     files <- getDirectoryFiles "" postsPattern
-    posts <- take 5 <$> forP files (fmap fst . renderPost)
+    posts <- forP files (fmap fst . renderPost)
 
     Just tPostList <- template "post-list.md"
     Just tPage <- template "page.html"
 
-    siteMeta <- Aeson.toJSON <$> getSite posts
+    siteMeta <- Aeson.toJSON <$> getSite (take 5 posts)
 
     Template.preprocessFile siteMeta tPostList input
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
+
+    forP_ files \file -> do
+      slug <- postSlug file
+      need [buildDir </> "posts" </> slug </> "index.html"]
 
   routePage' "pages/posts.md" "posts/index.html" \input output -> do
     files <- getDirectoryFiles "" postsPattern
@@ -208,7 +216,9 @@ build _ = do
       pure (buildDir </> "posts" </> slug </> "index.html", (file, content))
 
   buildDir </> "posts/*/index.html" %> \output -> do
-    (input, content) <- (Map.! output) <$> postInput
+    (input, _) <- (Map.! output) <$> postInput
+    (post, content) <- renderPost input
+
     writeFile output (TextL.encodeUtf8 content)
 
     let
@@ -225,13 +235,13 @@ build _ = do
 
     need deps
 
-  action $ do
-    files <- getDirectoryFiles "" postsPattern
-    forP files \file -> do
-      slug <- postSlug file
-      need [buildDir </> "posts" </> slug </> "index.html"]
+  -- action $ do
+  --   files <- getDirectoryFiles "" postsPattern
+  --   forP files \file -> do
+  --     slug <- postSlug file
+  --     need [buildDir </> "posts" </> slug </> "index.html"]
 
-    pure ()
+  --   pure ()
 
   where
     author = "Emeka Nkurumeh"
@@ -244,39 +254,64 @@ timerStart = do
     end <- getMonotonicTime
     pure (end - start)
 
+{- CURRENT ISSUES
+- using caching means that we end up using stale results when running the rules multiple times in watch mode
+- since we need all the files through a top level rule, if any of the files are bad, then we end up failing
+  super early so we don't have a record of real targets that failed
+- when we fail the target isn't in the list of live files so we can't wait for it to be updated again
+-}
+
 watch :: ShakeOptions -> Rules () -> IO ()
 watch shakeOpts rules = do
   Shake.shakeWithDatabase shakeOpts rules \db -> withManager \mgr -> do
     fix \loop -> do
+      -- oldLiveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
+
       timeElapsed <- timerStart
-      res <- try @SomeException $ do
+      res <- try @ShakeException $ do
         (_, after) <- Shake.shakeRunDatabase db []
         Shake.shakeRunAfter shakeOpts after
       elapsed <- timeElapsed
 
-      case res of
-        Right () -> putStrLn $ unwords ["Build completed in", show elapsed]
-        Left err -> print err
-
       threadDelay 100000
 
-      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
-      if null liveFiles then putStrLn "No live files" else do
-        sema <- MVar.newEmptyMVar
-        let
-          semaUp   = MVar.putMVar sema ()
-          semaDown = MVar.takeMVar sema
-          liveDirs = Map.fromListWith Set.union $
-            map (\abs -> (Shake.takeDirectory abs, Set.singleton abs)) liveFiles
+      errFile <- case res of
+        Right () ->
+          putStrLn (unwords ["Build completed in", show elapsed]) $> Nothing
+        Left shakeErr -> do
+          print shakeErr
 
-          startWatchers = forM (Map.toList liveDirs) $ \(dir, liveFilesInDir) -> do
+          sequence do
+            FileError{..} <- fromException shakeErr.shakeExceptionInner
+            Dir.makeAbsolute <$> path
+
+      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
+      failedFiles <- do
+        -- TODO: collect FileErrors from these as well
+        allErrors <- Shake.shakeErrorsDatabase db >>= mapM (Dir.makeAbsolute . fst)
+        pure $ maybe allErrors (: allErrors) errFile
+
+      if null liveFiles then
+        putStrLn "No live files"
+      else do
+        sema <- MVar.newEmptyMVar
+
+        let
+          files = failedFiles ++ liveFiles
+          liveDirs = Map.fromListWith Set.union $
+            map (\file -> (Shake.takeDirectory file, Set.singleton file)) files
+
+          startWatchers = forM (Map.toList liveDirs) \(dir, liveFilesInDir) -> do
             let isChangeToLiveFile (Modified path _ _) = path `Set.member` liveFilesInDir
                 isChangeToLiveFile _                   = False
-            watchDir mgr dir isChangeToLiveFile $ \_ -> semaUp
+            watchDir mgr dir isChangeToLiveFile \e -> do
+              putStrLn $ unwords ["Change in", e.eventPath]
+              MVar.putMVar sema ()
 
         bracket startWatchers sequence $ const do
-          putStrLn "Watching live files for changes..."
-          semaDown
+          putStrLn "Watching for changes..."
+          MVar.takeMVar sema
+          putChar '\n'
 
         loop
 
@@ -289,20 +324,22 @@ timedShake shakeOpts rules = do
 
 run :: Options -> Command -> IO ()
 run o (Build b) = do
-  options <- shakeOptions o
+  shakeOpts <- shakeOptions o
   (if b.watch then watch else timedShake)
-    options
+    shakeOpts
     (build b)
 
 #if defined(ENABLE_WATCH)
-run _ (Preview w) = do
-  let app = Wai.staticApp (staticSettings "_build")
+run o (Preview w) = do
+  shakeOpts <- shakeOptions o
+  _ <- forkIO (watch shakeOpts (build BuildOptions{ drafts = True, watch = True }))
+  let app = Wai.staticApp (staticSettings shakeOpts.shakeFiles)
   Warp.runSettings warpSettings app
   where
     warpSettings = Warp.setHost (fromString w.host)
       $ Warp.setPort w.port Warp.defaultSettings
 #else
-run _ (Preview e) = error "watch disabled"
+run _ (Preview e) = error "preview disabled"
 #endif
 
 run o Clean = do

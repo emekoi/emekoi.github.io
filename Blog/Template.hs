@@ -17,6 +17,7 @@ import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.Map.Strict            as Map
+import           Data.Maybe
 import           Data.Semigroup
 import qualified Data.Set                   as Set
 import           Data.Text                  (Text)
@@ -25,6 +26,7 @@ import qualified Data.Text.IO               as Text
 import qualified Data.Text.Lazy             as TextL
 import           Development.Shake
 import           Development.Shake.FilePath ((<.>), (</>))
+import qualified Text.Megaparsec.Error      as Mega
 import qualified Text.Mustache              as Stache
 import qualified Text.Mustache.Compile      as Stache
 import qualified Text.Mustache.Parser       as Stache
@@ -59,9 +61,9 @@ compileDir dir = do
 
     needTemplates = need . fmap (\x -> dir </> x <.> ".mustache")
 
-preprocess :: (MonadFail m, MonadIO m) => Aeson.Value -> Template -> Text -> m Text
-preprocess site (Template _ tc) input = do
-  (ws, out) <- either (liftIO . throwIO . Stache.MustacheParserException) return do
+preprocess :: Aeson.Value -> Template -> Maybe FilePath -> Text -> Action Text
+preprocess site (Template _ tc) file input = do
+  (ws, out) <- either throw return do
     nodes <- Stache.parseMustache "<input>" input
     pure . fmap TextL.toStrict $ Stache.renderMustacheW
       (Template pname (Map.insert pname nodes tc))
@@ -69,13 +71,16 @@ preprocess site (Template _ tc) input = do
   unless (null ws) $
     liftIO . putStrLn $ unlines (Stache.displayMustacheWarning <$> ws)
   pure out
-  where pname = Stache.PName $ Text.pack "<input>"
+  where
+    throw = liftIO . throwIO . FileError file . Mega.errorBundlePretty
+    pname = Stache.PName $ Text.pack fname
+    fname = fromMaybe "<input>" file
 
 preprocessFile :: Aeson.Value -> Template -> FilePath -> Action Text
 preprocessFile site t file = do
   need [file]
   input <- liftIO $ Text.readFile file
-  preprocess site t input
+  preprocess site t (Just file) input
 
 renderPage :: Aeson.Value -> Template -> Page -> TextL.Text
 renderPage site t (Page meta body) = do

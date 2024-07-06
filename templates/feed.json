@@ -1,20 +1,12 @@
-{
-    "version": "https://www.jsonfeed.org/version/1.1",
-    "title": "$title$",
-    "home_page_url": "$root$",
-    "feed_url": "$root$$url$",
-    $if(description)$
-    "description": "$description$",
-    $endif$
-    $if(authorName)$
-    "authors": [
-        {
-            "name": "$authorName$"
-            $if(authorEmail)$
-            , "url": "mailto:$authorEmail$"
-            $endif$
-        }
-    ],
-    $endif$
-    "items": [ $body$ ]
+{ "version"       : "https://www.jsonfeed.org/version/1.1"
+, "title"         : "{{ site.tile }}"
+, "home_page_url" : "{{ site.url }}"
+, "feed_url"      : "{{ site.url }}/{{ url }}"
+, "description"   : "{{ site.description }}"
+, "authors"       :
+  [ { "name" : "{{ site.author }}"
+    , "url"  : "mailto:{{ site.email }}"
+    }
+  ]
+  , "items": [ {{ body }} ]
 }

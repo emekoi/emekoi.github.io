@@ -7,9 +7,10 @@ module Blog.MMark
   , renderMarkdownIO
   ) where
 
-import           Blog.Type                  (Page (..))
+import           Blog.Type                  (FileError (..), Page (..))
 import           Blog.Util
 import           Control.Arrow
+import           Control.Exception          (throwIO)
 import           Control.Monad
 import           Control.Monad.Trans
 import           Data.Function              (fix)
@@ -177,10 +178,10 @@ md = TH.QuasiQuoter
   , quoteDec  = \_ -> fail "illegal Page QuasiQuote"
   }
 
-renderMarkdown :: MonadFail m => [ExtensionT m] -> FilePath -> Text -> m Page
+renderMarkdown :: (MonadFail m, MonadIO m) => [ExtensionT m] -> FilePath -> Text -> m Page
 renderMarkdown exts input source = do
   case MMark.parseM input source of
-    Left errs -> fail $ Mega.errorBundlePretty errs
+    Left errs -> liftIO $ throwIO  FileError { path = Just input , msg = Mega.errorBundlePretty errs }
     Right r -> do
       let meta = fromMaybe mempty $ MMark.projectYaml r
       body <- renderTextT $ renderHTML exts r

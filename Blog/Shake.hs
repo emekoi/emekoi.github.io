@@ -4,6 +4,7 @@
 module Blog.Shake
   ( Route (..)
   , extensions
+  , forP_
   , gitHashOracle
   , renderMarkdown
   , renderMarkdownIO
@@ -29,6 +30,7 @@ import           Data.Aeson                 ((.=))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString            as BS
 import qualified Data.ByteString.Lazy       as LBS
+import           Data.Foldable              (toList)
 import qualified Data.Map.Strict            as Map
 import qualified Data.Set                   as Set
 import           Data.String                (IsString (..))
@@ -47,6 +49,9 @@ import           Lucid
 import           Prelude                    hiding (writeFile)
 import qualified System.Directory           as Dir
 import           Text.MMark.Extension       as MMark
+
+forP_ :: Foldable t => t a -> (a -> Action b) -> Action ()
+forP_ t f = void $ forP (toList t) f
 
 writeFile :: HasCallStack => FilePath -> LBS.ByteString -> Action ()
 writeFile output contents = do
