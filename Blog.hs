@@ -5,27 +5,39 @@
 module Blog (main) where
 
 import           Blog.Shake
-import qualified Blog.Template              as Template
+import qualified Blog.Template                  as Template
 import           Blog.Type
 import           Blog.Util
 import           Control.Applicative
 import           Control.Arrow
 import           Control.Monad
-import           Data.Aeson                 ((.=))
-import qualified Data.Aeson                 as Aeson
-import qualified Data.List                  as List
-import qualified Data.Map.Strict            as Map
-import qualified Data.Ord                   as Ord
-import qualified Data.Text                  as Text
-import qualified Data.Text.Lazy.Encoding    as TextL
-import           Development.Shake          hiding (shakeOptions)
-import qualified Development.Shake          as Shake
+import           Data.Aeson                     ((.=))
+import qualified Data.Aeson                     as Aeson
+import qualified Data.List                      as List
+import qualified Data.Map.Strict                as Map
+import qualified Data.Ord                       as Ord
+import qualified Data.Text                      as Text
+import qualified Data.Text.Lazy.Encoding        as TextL
+import           Development.Shake              hiding (shakeOptions)
+import qualified Development.Shake              as Shake
 import           Development.Shake.Classes
-import           Development.Shake.FilePath ((</>))
-import qualified Development.Shake.FilePath as Shake
-import           GHC.Conc                   (numCapabilities)
-import qualified Options.Applicative        as A
-import           Prelude                    hiding (writeFile)
+import           Development.Shake.FilePath     ((</>))
+import qualified Development.Shake.FilePath     as Shake
+import           GHC.Conc                       (numCapabilities)
+import qualified Options.Applicative            as A
+import           Prelude                        hiding (writeFile)
+
+#if defined(PREVIEW_SERVER)
+import qualified Data.ByteString.Lazy.Char8     as BS
+import           Data.String                    (fromString)
+import           Development.Shake.FilePath     ((<.>))
+import qualified Network.HTTP.Types.Status      as Status
+import qualified Network.Wai                    as Wai
+import qualified Network.Wai.Application.Static as Wai
+import qualified Network.Wai.Handler.Warp       as Warp
+import qualified System.Directory               as Dir
+import qualified WaiAppStatic.Types             as Wai
+#endif
 
 data Options = Options
   { command   :: Command
@@ -37,9 +49,16 @@ newtype BuildOptions = BuildOptions
   { _buildDrafts :: Bool
   }
 
+data WatchOptions = WatchOptions
+  { server :: Bool
+  , host   :: String
+  , port   :: Int
+  }
+
 data Command
   = Build BuildOptions
   | Clean
+  | Watch WatchOptions
 
 shakeOptions :: Options -> IO ShakeOptions
 shakeOptions Options{..} = do
@@ -52,6 +71,30 @@ shakeOptions Options{..} = do
     , shakeFiles     = "_build"
     , shakeVersion   = version
     }
+
+#if defined(PREVIEW_SERVER)
+staticSettings :: FilePath -> Wai.StaticSettings
+staticSettings path = let s = Wai.defaultFileServerSettings path in s
+  { Wai.ss404Handler = Just \_ respond ->
+    BS.readFile (path </> "404.html")
+      >>= respond . Wai.responseLBS Status.status404 []
+  , Wai.ssLookupFile = \pieces ->
+    case splitAt (length pieces - 1) pieces of
+      (prefix, [Wai.fromPiece -> fileName])
+        | nullExtension (Text.unpack fileName) ->
+          s.ssLookupFile $ prefix <> [Wai.unsafeToPiece $ fileName <> ".html"]
+      _ -> s.ssLookupFile pieces
+  , Wai.ssGetMimeType = \file ->
+    let fileName = Text.unpack $ Wai.fromPiece file.fileName in
+    if nullExtension fileName then do
+      htmlExists <- Dir.doesFileExist $ path </> fileName <.> "html"
+      if htmlExists then pure "text/html" else s.ssGetMimeType file
+    else s.ssGetMimeType file
+  }
+  where
+    nullExtension :: FilePath -> Bool
+    nullExtension = not . Shake.hasExtension
+#endif
 
 -- TODO: build resume
 -- TODO: build atom feed
@@ -167,7 +210,8 @@ run o (Build _) = do
 
       deps <- if length (Shake.splitPath inDir) == 1
         then pure [input]
-        else getDirectoryFiles "" [inDir </> "*"]
+        else do
+          fmap (inDir </>) <$> getDirectoryContents inDir
 
       forP deps \file -> do
         copyFileChanged file (Shake.replaceDirectory file outDir)
@@ -186,6 +230,17 @@ run o (Build _) = do
     author = "Emeka Nkurumeh"
     postsPattern = ["posts/*.md", "posts/*/index.md"]
 
+#if defined(PREVIEW_SERVER)
+run _ (Watch w) = do
+  let app = Wai.staticApp (staticSettings "_build")
+  Warp.runSettings warpSettings app
+  where
+    warpSettings = Warp.setHost (fromString w.host)
+      $ Warp.setPort w.port Warp.defaultSettings
+#else
+run _ (Watch w) = error "watch disabled"
+#endif
+
 run o Clean = do
   options <- shakeOptions o
   shake options . action $ do
@@ -198,6 +253,7 @@ parseOptions = do
   command <- A.hsubparser (mconcat
     [ A.command "build" (A.info pBuild (A.progDesc "Build the site"))
     , A.command "clean" (A.info (pure Clean) (A.progDesc "Remove build files"))
+    , A.command "watch" (A.info pWatch (A.progDesc "Watch for changed and rebuild automatically"))
     ]) <|> pBuild
 
   verbosity <- A.option A.auto (mconcat
@@ -217,10 +273,26 @@ parseOptions = do
 
   where
     pBuild = fmap Build $ BuildOptions
-      <$> A.switch (A.long "drafts" <> A.short 'd')
+      <$> A.switch (A.long "drafts" <> A.short 'd' <> A.help "Include drafts")
+    pWatch = Watch <$> do
+      server <- A.switch (A.long "server" <> A.short 's' <> A.help "Run a preview server")
+      host <- A.option A.auto (mconcat
+        [ A.long "host"
+        , A.short 'h'
+        , A.metavar "HOST"
+        , A.value "127.0.0.1"
+        , A.showDefault
+        ])
+      port <- A.option A.auto (mconcat
+        [ A.long "port"
+        , A.short 'p'
+        , A.metavar "PORT"
+        , A.value 8000
+        , A.showDefault
+        ])
+      pure WatchOptions {..}
 
 main :: IO ()
 main = do
   options <- A.execParser (A.info (parseOptions A.<**> A.helper) mempty)
   run options options.command
-

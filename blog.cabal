@@ -77,6 +77,7 @@ executable blog
 
     if !flag(ci)
       build-depends:
-      -- , http-types ^>= 0.12
-      -- , wai ^>= 3.2
-      -- , wai-app-static ^>= 3.1
+        , http-types     ^>= 0.12
+        , wai            ^>= 3.2
+        , wai-app-static ^>= 3.1
+        , warp           ^>= 3.3

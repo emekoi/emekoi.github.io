@@ -49,12 +49,12 @@ aesonOptions = Aeson.defaultOptions
 newtype Tag = Tag Text
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Ord, ToJSON, FromJSON)
 
-tagLink :: Tag ->  URI.URI
+tagLink :: Tag -> URI.URI
 tagLink (Tag t) = URI.URI
   { uriScheme = Nothing
   , uriAuthority = Left True
   , uriPath = do
-      tags <- URI.mkPathPiece "tags.html"
+      tags <- URI.mkPathPiece "tags"
       pure (False, tags :| [])
   , uriQuery = []
   , uriFragment = URI.mkFragment t
