@@ -2,7 +2,9 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module Blog.Shake
-  ( Route (..)
+  ( BuildPost (..)
+  , GitHash (..)
+  , Route (..)
   , extensions
   , forP_
   , gitHashOracle

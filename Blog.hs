@@ -32,7 +32,7 @@ import qualified Control.Concurrent.MVar        as MVar
 import           Control.Exception
 import qualified Data.ByteString.Lazy.Char8     as BS
 import           Data.Function                  (fix)
-import           Data.Functor
+import           Data.Maybe                     (catMaybes)
 import qualified Data.Set                       as Set
 import           Data.String                    (fromString)
 import qualified Development.Shake.Database     as Shake
@@ -142,16 +142,14 @@ build _ = do
 
 #if defined(POST_CACHE)
   renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
-    Just t <- template "post.html"
-    siteMeta <- getSiteMeta
-    Blog.renderMarkdownIO input >>= Template.renderPost siteMeta t
 #else
   renderPost <- pure \input -> do
+#endif
     putInfo ("reading " ++ input)
     Just t <- template "post.html"
     siteMeta <- getSiteMeta
-    renderMarkdownIO input >>= Template.renderPost siteMeta t
-#endif
+    renderMarkdownIO input
+      >>= Template.renderPost siteMeta t
 
   let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
 
@@ -217,7 +215,7 @@ build _ = do
 
   buildDir </> "posts/*/index.html" %> \output -> do
     (input, _) <- (Map.! output) <$> postInput
-    (post, content) <- renderPost input
+    (_, content) <- renderPost input
 
     writeFile output (TextL.encodeUtf8 content)
 
@@ -235,13 +233,7 @@ build _ = do
 
     need deps
 
-  -- action $ do
-  --   files <- getDirectoryFiles "" postsPattern
-  --   forP files \file -> do
-  --     slug <- postSlug file
-  --     need [buildDir </> "posts" </> slug </> "index.html"]
-
-  --   pure ()
+  pure ()
 
   where
     author = "Emeka Nkurumeh"
@@ -265,8 +257,6 @@ watch :: ShakeOptions -> Rules () -> IO ()
 watch shakeOpts rules = do
   Shake.shakeWithDatabase shakeOpts rules \db -> withManager \mgr -> do
     fix \loop -> do
-      -- oldLiveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
-
       timeElapsed <- timerStart
       res <- try @ShakeException $ do
         (_, after) <- Shake.shakeRunDatabase db []
@@ -275,33 +265,29 @@ watch shakeOpts rules = do
 
       threadDelay 100000
 
-      errFile <- case res of
-        Right () ->
-          putStrLn (unwords ["Build completed in", show elapsed]) $> Nothing
+      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
+
+      files <- case res of
+        Right ()      -> do
+          putStrLn (unwords ["Build completed in", show elapsed])
+          pure liveFiles
         Left shakeErr -> do
           print shakeErr
+          errs <- Shake.shakeErrorsDatabase db
+          failedTargets <- mapM (Dir.makeAbsolute . fst) errs
+          failedDeps <- catMaybes <$> mapM (errFile . snd) errs
+          pure $ failedTargets ++ failedDeps ++ liveFiles
 
-          sequence do
-            FileError{..} <- fromException shakeErr.shakeExceptionInner
-            Dir.makeAbsolute <$> path
-
-      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
-      failedFiles <- do
-        -- TODO: collect FileErrors from these as well
-        allErrors <- Shake.shakeErrorsDatabase db >>= mapM (Dir.makeAbsolute . fst)
-        pure $ maybe allErrors (: allErrors) errFile
-
-      if null liveFiles then
-        putStrLn "No live files"
+      if null files then
+        putStrLn "No files to watch"
       else do
         sema <- MVar.newEmptyMVar
 
         let
-          files = failedFiles ++ liveFiles
-          liveDirs = Map.fromListWith Set.union $
+          watchDirs = Map.fromListWith Set.union $
             map (\file -> (Shake.takeDirectory file, Set.singleton file)) files
 
-          startWatchers = forM (Map.toList liveDirs) \(dir, liveFilesInDir) -> do
+          startWatchers = forM (Map.toList watchDirs) \(dir, liveFilesInDir) -> do
             let isChangeToLiveFile (Modified path _ _) = path `Set.member` liveFilesInDir
                 isChangeToLiveFile _                   = False
             watchDir mgr dir isChangeToLiveFile \e -> do
@@ -314,6 +300,68 @@ watch shakeOpts rules = do
           putChar '\n'
 
         loop
+  where
+    errFile :: SomeException -> IO (Maybe FilePath)
+    errFile err = sequence do
+      shakeErr <- fromException @ShakeException err
+      FileError{..} <- fromException shakeErr.shakeExceptionInner
+      Dir.makeAbsolute <$> path
+
+watchOneshot :: ShakeOptions -> Rules () -> IO ()
+watchOneshot shakeOpts rules = do
+  withManager \mgr -> fix \loop -> do
+    files <- Shake.shakeWithDatabase shakeOpts rules \db -> do
+      timeElapsed <- timerStart
+      res <- try @ShakeException $ do
+        Shake.shakeOneShotDatabase db
+        (_, after) <- Shake.shakeRunDatabase db []
+        Shake.shakeRunAfter shakeOpts after
+      elapsed <- timeElapsed
+
+      threadDelay 100000
+
+      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
+
+      case res of
+        Right ()      -> do
+          putStrLn (unwords ["Build completed in", show elapsed])
+          pure liveFiles
+        Left shakeErr -> do
+          print shakeErr
+          errs <- Shake.shakeErrorsDatabase db
+          failedTargets <- mapM (Dir.makeAbsolute . fst) errs
+          failedDeps <- catMaybes <$> mapM (errFile . snd) errs
+          pure $ failedTargets ++ failedDeps ++ liveFiles
+
+    if null files then do
+      putStrLn "No files to watch"
+    else do
+      sema <- MVar.newEmptyMVar
+
+      let
+        liveDirs = Map.fromListWith Set.union $
+          map (\file -> (Shake.takeDirectory file, Set.singleton file)) files
+
+        startWatchers = forM (Map.toList liveDirs) \(dir, liveFilesInDir) -> do
+          let isChangeToLiveFile (Modified path _ _) = path `Set.member` liveFilesInDir
+              isChangeToLiveFile _                   = False
+          watchDir mgr dir isChangeToLiveFile \e -> do
+            putStrLn $ unwords ["Change in", e.eventPath]
+            MVar.putMVar sema ()
+
+      bracket startWatchers sequence $ const do
+        putStrLn "Watching for changes..."
+        MVar.takeMVar sema
+        putChar '\n'
+
+      loop
+
+  where
+    errFile :: SomeException -> IO (Maybe FilePath)
+    errFile err = sequence do
+      shakeErr <- fromException @ShakeException err
+      FileError{..} <- fromException shakeErr.shakeExceptionInner
+      Dir.makeAbsolute <$> path
 
 timedShake :: ShakeOptions -> Rules () -> IO ()
 timedShake shakeOpts rules = do

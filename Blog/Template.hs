@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 
 module Blog.Template
   ( Template
@@ -34,9 +35,10 @@ import           Text.Mustache.Type         (Node (..), Template (..))
 
 compileDir :: FilePath -> Rules (Text -> Action (Maybe Template))
 compileDir dir = do
+  action $ putInfo "Compiling Templates"
+  files <- Stache.getMustacheFilesInDir dir
+#if defined(TEMPLATE_CACHE)
   getCache <- liftAction do
-    putInfo "Compiling Templates"
-    files <- Stache.getMustacheFilesInDir dir
     case files of
       []     -> pure Map.empty
       x : xs -> do
@@ -46,18 +48,30 @@ compileDir dir = do
 
   pure $ \(Stache.PName -> pname) -> do
     cache <- getCache
-    let
-      names = Set.singleton pname
-      deps = getPartials cache names (cache Map.! pname)
-    needTemplates (Text.unpack . Stache.unPName <$> Set.toList deps)
-    pure . Just $ Template pname (Map.restrictKeys cache deps)
+#else
+  cache <- do
+    case files of
+      []     -> pure Map.empty
+      x : xs -> do
+        t  <- Stache.compileMustacheFile x
+        ts <- forM xs Stache.compileMustacheFile
+        pure . Stache.templateCache $ sconcat (t :| ts)
 
+  pure $ \(Stache.PName -> pname) -> do
+#endif
+    let
+      deps = cache Map.!? pname
+        >>= getPartials cache (Set.singleton pname)
+    forM deps \deps -> do
+      needTemplates (Text.unpack . Stache.unPName <$> Set.toList deps)
+      pure $ Template pname (Map.restrictKeys cache deps)
   where
-    getPartials cache !r (Partial n _ : xs) =
-      let r' = Set.insert n r
-        in getPartials cache (getPartials cache r' (cache Map.! n)) xs
+    getPartials cache !r (Partial n _ : xs) = do
+      r' <- cache Map.!? n
+        >>= getPartials cache (Set.insert n r)
+      getPartials cache r' xs
     getPartials cache !r (_ : xs) = getPartials cache r xs
-    getPartials _ !r [] = r
+    getPartials _ !r [] = pure r
 
     needTemplates = need . fmap (\x -> dir </> x <.> ".mustache")
 
