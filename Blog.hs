@@ -10,6 +10,8 @@ import           Blog.Type
 import           Blog.Util
 import           Control.Applicative
 import           Control.Arrow
+import qualified Control.Concurrent.MVar        as MVar
+import           Control.Exception
 import           Control.Monad
 import           Data.Aeson                     ((.=))
 import qualified Data.Aeson                     as Aeson
@@ -22,14 +24,13 @@ import qualified Development.Shake              as Shake
 import           Development.Shake.Classes
 import           Development.Shake.FilePath     ((</>))
 import qualified Development.Shake.FilePath     as Shake
+import           GHC.Clock
 import           GHC.Conc                       (numCapabilities)
+import           Numeric                        (showFFloat)
 import qualified Options.Applicative            as A
 import           Prelude                        hiding (writeFile)
 
 #if defined(ENABLE_WATCH)
-import Numeric (showFFloat)
-import qualified Control.Concurrent.MVar        as MVar
-import           Control.Exception
 import qualified Data.ByteString.Lazy.Char8     as BS
 import           Data.Function                  (fix)
 import           Data.Maybe                     (catMaybes)
@@ -37,7 +38,6 @@ import qualified Data.Set                       as Set
 import           Data.String                    (fromString)
 import qualified Development.Shake.Database     as Shake
 import           Development.Shake.FilePath     ((<.>))
-import           GHC.Clock
 import           GHC.Conc                       (forkIO, threadDelay)
 import qualified Network.HTTP.Types.Status      as Status
 import qualified Network.Wai                    as Wai
@@ -268,6 +268,7 @@ timerStart = do
       show ms ++ m ++ ['0' | ss < 10] ++ show ss ++ s
 
 watch :: ShakeOptions -> Rules () -> IO ()
+#if defined(ENABLE_WATCH)
 watch shakeOpts rules = do
   Shake.shakeWithDatabase shakeOpts rules \db -> withManager \mgr -> do
     fix \loop -> do
@@ -321,6 +322,9 @@ watch shakeOpts rules = do
       shakeErr <- fromException @ShakeException err
       FileError{..} <- fromException shakeErr.shakeExceptionInner
       Dir.makeAbsolute <$> path
+#else
+watch _ _ = error "watch disabled"
+#endif
 
 timedShake :: ShakeOptions -> Rules () -> IO ()
 timedShake shakeOpts rules = do
@@ -346,7 +350,7 @@ run o (Preview w) = do
     warpSettings = Warp.setHost (fromString w.host)
       $ Warp.setPort w.port Warp.defaultSettings
 #else
-run _ (Preview e) = error "preview disabled"
+run _ (Preview _) = error "preview disabled"
 #endif
 
 run o Clean = do
