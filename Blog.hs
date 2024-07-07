@@ -209,23 +209,22 @@ build _ = do
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
-  -- build posts
+  postsMap <- liftIO MVar.newEmptyMVar
+
   action $ do
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files fetchPost
-    need [buildDir </> postURL p | (p, _) <- posts]
-
-  postInput <- liftAction do
-    files <- getDirectoryFiles "" postsPattern
-    Map.fromList <$> forP files \file -> do
-      post <- fst <$> fetchPost file
-      pure (buildDir </> postURL post, file)
+    map <- Map.fromList <$> forP files \input -> do
+      (post, page) <- fetchPost input
+      pure (buildDir </> postURL post, (input, page))
+    liftIO $ MVar.putMVar postsMap map
+    runAfter . void $ MVar.takeMVar postsMap
+    need $ Map.keys map
 
   buildDir </> "posts/*/index.html" %> \output -> do
-    input <- (Map.! output) <$> postInput
+    (input, page) <- (Map.! output) <$> liftIO (MVar.readMVar postsMap)
+
     putInfo $ unwords ["POST", input]
 
-    (_, page) <- fetchPost input
     t <- template "post.html"
     siteMeta <- getSiteMeta
 
