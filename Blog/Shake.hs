@@ -194,33 +194,6 @@ newtype BuildPost = BuildPost FilePath
 
 type instance RuleResult BuildPost = (Post, FilePath, TextL.Text)
 
--- newtype TemplateQ = TemplateQ FilePath
---   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
-
--- newtype TemplateA = TemplateA Template
---   deriving (Show, Typeable, Eq, NFData)
-
--- type instance RuleResult TemplateQ = TemplateA
-
--- needTemplates :: [FilePath] -> Action [TemplateA]
--- needTemplates = apply . fmap TemplateQ
-
--- addBuiltinTemplateRule :: Rules ()
--- addBuiltinTemplateRule = addBuiltinRule noLint noIdentity run
---   where
---     run :: BuiltinRun TemplateQ TemplateA
---     run (TemplateQ input) old mode = do
---       undefined
--- --       now <- liftIO $ fileContents key
--- --       if mode == RunDependenciesSame && old == Just now then
--- --           pure $ RunResult ChangedNothing now ()
--- --       else do
--- --           (_, act) <- getUserRuleOne key (const Nothing) $ \(FileRule k act) -> if k == key then Just act else Nothing
--- --           act
--- --           now <- liftIO $ fileContents key
--- --           pure $ RunResult ChangedRecomputeDiff now ()
-
-
 #if 0
 newtype PostQ = PostQ FilePath
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)

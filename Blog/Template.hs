@@ -12,12 +12,15 @@ module Blog.Template
   ) where
 
 import           Blog.Type
-import           Blog.Util
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Aeson                 (Value (..), (.=))
 import qualified Data.Aeson                 as Aeson
+import qualified Data.Binary                as Binary
+import qualified Data.ByteString            as BS
+import           Data.Foldable
+import           Data.Function              (fix)
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.Map.Strict            as Map
 import           Data.Maybe
@@ -32,15 +35,10 @@ import           Development.Shake.Classes
 import           Development.Shake.FilePath ((<.>), (</>))
 import           Development.Shake.Rule
 import qualified Text.Megaparsec.Error      as Mega
-import qualified Text.Megaparsec.Pos      as Mega
+import qualified Text.Megaparsec.Pos        as Mega
 import qualified Text.Mustache              as Stache
-import qualified Text.Mustache.Compile      as Stache
 import qualified Text.Mustache.Parser       as Stache
-import           Text.Mustache.Type         (Node(..), Template(..))
-import Data.Foldable
-import qualified Data.Binary as Binary
-import qualified Data.ByteString as BS
-import Data.Function (fix)
+import           Text.Mustache.Type         (Node (..), Template (..))
 
 instance NFData Node
 instance NFData Template
@@ -112,10 +110,12 @@ _addBuiltinTemplateRule dir = do
               pure undefined
 
 compileDir :: FilePath -> Rules (FilePath -> Action Template)
-compileDir dir = fmap (\x -> fmap templateAnswer . x . TemplateQ) . addOracle $ fix \loop (TemplateQ tName) -> do
+compileDir dir = fmap wrap . addOracle $ fix \loop (TemplateQ tName) -> do
   let
     mInputFile = dir </> tName <.> "mustache"
     pName = Stache.PName (Text.pack tName)
+
+  putInfo $ unwords ["TEMPLATE", tName]
 
   need [mInputFile]
   mInput <- liftIO $ Text.readFile mInputFile
@@ -125,58 +125,14 @@ compileDir dir = fmap (\x -> fmap templateAnswer . x . TemplateQ) . addOracle $ 
       Mega.errorBundlePretty err
     Right nodes -> do
       -- template [Text.unpack $ Stache.unPName p | Partial p _ <- nodes]
-      let partials = (snd $ foldl' getPartials (mempty, []) nodes)
-      ts <- forP partials (fmap templateAnswer . loop . TemplateQ)
-
-      -- liftIO $ print (sconcat (Template pName (Map.singleton pName nodes) :| ts))
-
-      pure . TemplateA $ sconcat (Template pName (Map.singleton pName nodes) :| ts)
+      ts <- forP (snd $ foldl' getPartials (mempty, []) nodes) (wrap loop)
+      pure . TemplateA $
+        sconcat (Template pName (Map.singleton pName nodes) :| ts)
   where
+    wrap x = fmap templateAnswer . x . TemplateQ
     getPartials (c, r) (Partial p _)
       | p `Set.notMember` c = (Set.insert p c, Text.unpack (Stache.unPName p) : r)
     getPartials acc _ = acc
-
--- compileDir :: FilePath -> Rules (Text -> Action (Maybe Template))
--- compileDir dir = do
---   action $ putInfo "Compiling Templates"
---   files <- Stache.getMustacheFilesInDir dir
--- #if defined(TEMPLATE_CACHE)
---   getCache <- liftAction do
---     case files of
---       []     -> pure Map.empty
---       x : xs -> do
---         t  <- Stache.compileMustacheFile x
---         ts <- forP xs Stache.compileMustacheFile
---         pure . Stache.templateCache $ sconcat (t :| ts)
-
---   pure $ \(Stache.PName -> pname) -> do
---     cache <- getCache
--- #else
---   cache <- do
---     case files of
---       []     -> pure Map.empty
---       x : xs -> do
---         t  <- Stache.compileMustacheFile x
---         ts <- forM xs Stache.compileMustacheFile
---         pure . Stache.templateCache $ sconcat (t :| ts)
-
---   pure $ \(Stache.PName -> pname) -> do
--- #endif
---     let
---       deps = cache Map.!? pname
---         >>= getPartials cache (Set.singleton pname)
---     forM deps \deps -> do
---       needTemplates (Text.unpack . Stache.unPName <$> Set.toList deps)
---       pure $ Template pname (Map.restrictKeys cache deps)
---   where
---     getPartials cache !r (Partial n _ : xs) = do
---       r' <- cache Map.!? n
---         >>= getPartials cache (Set.insert n r)
---       getPartials cache r' xs
---     getPartials cache !r (_ : xs) = getPartials cache r xs
---     getPartials _ !r [] = pure r
-
---     needTemplates = need . fmap (\x -> dir </> x <.> ".mustache")
 
 preprocess :: Aeson.Value -> Template -> Maybe FilePath -> Text -> Action Text
 preprocess site (Template _ tc) file input = do

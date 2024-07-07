@@ -149,13 +149,7 @@ build _ = do
 
   template <- Template.compileDir "templates"
 
-#if !defined(POST_CACHE)
-  -- renderPost <- newCache \input -> do
   renderPost <- fmap (. BuildPost) . addOracle $ \(BuildPost input) -> do
-#else
-  renderPost <- pure \input -> do
-#endif
-    putInfo ("reading " ++ input)
     t <- template "post.html"
     siteMeta <- getSiteMeta
     renderMarkdownIO input
@@ -166,12 +160,16 @@ build _ = do
   routeStatic "fonts//*"
 
   routePage "pages/404.md" \input output -> do
+    putInfo $ unwords ["PAGE", input]
+
     t <- template "page.html"
     siteMeta <- getSiteMeta
     renderMarkdownIO input
       >>= writePage siteMeta t output
 
   routePage "pages/index.md" \input output -> do
+    putInfo $ unwords ["PAGE", input]
+
     files <- getDirectoryFiles "" postsPattern
     posts <- forP files renderPost
 
@@ -188,6 +186,8 @@ build _ = do
       need [buildDir </> "posts" </> slug </> "index.html"]
 
   routePage' "pages/posts.md" "posts/index.html" \input output -> do
+    putInfo $ unwords ["PAGE", input]
+
     files <- getDirectoryFiles "" postsPattern
     posts <- forP files (fmap _1 . renderPost)
 
@@ -201,6 +201,8 @@ build _ = do
       >>= writePage siteMeta tPage output
 
   routePage' "pages/tags.md" "tags.html" \input output -> do
+    putInfo $ unwords ["PAGE", input]
+
     files <- getDirectoryFiles "" postsPattern
     posts <- forP files (fmap _1 . renderPost)
 
@@ -222,6 +224,8 @@ build _ = do
 
   buildDir </> "posts/*/index.html" %> \output -> do
     input <- (Map.! output) <$> postInput
+    putInfo $ unwords ["POST", input]
+
     (_, _, content) <- renderPost input
 
     writeFile output (TextL.encodeUtf8 content)
