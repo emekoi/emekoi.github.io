@@ -1,6 +1,5 @@
-{-# LANGUAGE CPP           #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE TypeFamilies  #-}
+{-# LANGUAGE CPP          #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Blog.Shake
   ( GitHash (..)
@@ -12,6 +11,7 @@ module Blog.Shake
   , extensions
   , forP_
   , gitHashOracle
+  , mapP
   , renderMarkdown
   , renderMarkdownIO
   , route
@@ -60,6 +60,11 @@ import           Text.MMark.Extension       as MMark
 
 forP_ :: Foldable t => t a -> (a -> Action b) -> Action ()
 forP_ t f = void $ forP (toList t) f
+{-# INLINE forP_ #-}
+
+mapP :: (a -> Action b) -> [a] -> Action [b]
+mapP = flip forP
+{-# INLINE mapP #-}
 
 writeFile :: HasCallStack => FilePath -> LBS.ByteString -> Action ()
 writeFile output contents = do

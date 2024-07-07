@@ -112,7 +112,7 @@ _addBuiltinTemplateRule dir = do
               pure undefined
 
 compileDir :: FilePath -> Rules (FilePath -> Action Template)
-compileDir dir = fmap wrap . addOracle $ fix \loop (TemplateQ tName) -> do
+compileDir dir = fmap wrap . addOracleCache $ fix \loop (TemplateQ tName) -> do
   let
     mInputFile = dir </> tName <.> "mustache"
     pName = Stache.PName (Text.pack tName)

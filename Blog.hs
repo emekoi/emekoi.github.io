@@ -139,15 +139,18 @@ build _ = do
       }
 
   let getSiteMeta = Aeson.toJSON <$> getSite []
-  -- getSiteMeta <- liftAction $ Aeson.toJSON <$> getSite []
 
   template <- Template.compileDir "templates"
 
-  fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracle $ \(PostQ input) -> do
+  fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracleCache $ \(PostQ input) -> do
+
+    need [input]
     renderMarkdownIO input >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
-        Aeson.Error err                     -> fail err
-        Aeson.Success v | Text.null v.title -> fail "missing metadata field: title"
+        Aeson.Error err ->
+          liftIO . throwIO $ FileError (Just input) err
+        Aeson.Success v | Text.null v.title ->
+          liftIO . throwIO $ FileError (Just input) "missing metadata field: title"
         Aeson.Success Post{..}              ->
           let meta = "tags" .= linkifyTags tags <> page.meta in
           pure $ PostA
@@ -163,33 +166,30 @@ build _ = do
 
     t <- template "page.html"
     siteMeta <- getSiteMeta
+
     renderMarkdownIO input
       >>= writePage siteMeta t output
 
   routePage "pages/index.md" \input output -> do
     putInfo $ unwords ["PAGE", input]
 
-    files <- getDirectoryFiles "" postsPattern
-    posts <- forP files fetchPost
+    posts <- getDirectoryFiles "" postsPattern
+      >>= mapP fetchPost
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
-
     siteMeta <- Aeson.toJSON <$> getSite (fst <$> take 5 posts)
 
     Template.preprocessFile siteMeta tPostList input
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
-    need [buildDir </> postURL p | (p, _) <- posts]
-
   routePage' "pages/posts.md" "posts/index.html" \input output -> do
     putInfo $ unwords ["PAGE", input]
 
-    files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap fst . fetchPost)
+    posts <- getDirectoryFiles "" postsPattern
+      >>= mapP (fmap fst . fetchPost)
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
-
     siteMeta <- Aeson.toJSON <$> getSite posts
 
     Template.preprocessFile siteMeta tPostList input
@@ -199,11 +199,10 @@ build _ = do
   routePage' "pages/tags.md" "tags.html" \input output -> do
     putInfo $ unwords ["PAGE", input]
 
-    files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap fst . fetchPost)
+    posts <- getDirectoryFiles "" postsPattern
+      >>= mapP (fmap fst . fetchPost)
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
-
     (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
 
     Template.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
@@ -211,6 +210,11 @@ build _ = do
       >>= writePage siteMeta tPage output
 
   -- build posts
+  action $ do
+    files <- getDirectoryFiles "" postsPattern
+    posts <- forP files fetchPost
+    need [buildDir </> postURL p | (p, _) <- posts]
+
   postInput <- liftAction do
     files <- getDirectoryFiles "" postsPattern
     Map.fromList <$> forP files \file -> do
@@ -222,7 +226,7 @@ build _ = do
     putInfo $ unwords ["POST", input]
 
     (_, page) <- fetchPost input
-    t <- template "page.html"
+    t <- template "post.html"
     siteMeta <- getSiteMeta
 
     writePage siteMeta t output page
@@ -254,13 +258,6 @@ timerStart = do
     end <- getMonotonicTime
     pure (end - start)
 
-{- CURRENT ISSUES
-- using caching means that we end up using stale results when running the rules multiple times in watch mode
-- since we need all the files through a top level rule, if any of the files are bad, then we end up failing
-  super early so we don't have a record of real targets that failed
-- when we fail the target isn't in the list of live files so we can't wait for it to be updated again
--}
-
 watch :: ShakeOptions -> Rules () -> IO ()
 watch shakeOpts rules = do
   Shake.shakeWithDatabase shakeOpts rules \db -> withManager \mgr -> do
@@ -281,10 +278,11 @@ watch shakeOpts rules = do
           pure liveFiles
         Left shakeErr -> do
           print shakeErr
+          -- NOTE: we ignore the files shake reports since they might be be
+          -- something of the form 'OracleQ "file"' instead of a file path.
           errs <- Shake.shakeErrorsDatabase db
-          failedTargets <- mapM (Dir.makeAbsolute . fst) errs
           failedDeps <- catMaybes <$> mapM (errFile . snd) errs
-          pure $ failedTargets ++ failedDeps ++ liveFiles
+          pure $ failedDeps ++ liveFiles
 
       if null files then
         putStrLn "No files to watch"
