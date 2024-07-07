@@ -27,6 +27,7 @@ import qualified Options.Applicative            as A
 import           Prelude                        hiding (writeFile)
 
 #if defined(ENABLE_WATCH)
+import Numeric (showFFloat)
 import qualified Control.Concurrent.MVar        as MVar
 import           Control.Exception
 import qualified Data.ByteString.Lazy.Char8     as BS
@@ -250,12 +251,21 @@ build _ = do
     author = "Emeka Nkurumeh"
     postsPattern = ["posts/*.md", "posts/*/index.md"]
 
-timerStart :: IO (IO Double)
+timerStart :: IO (IO String)
 timerStart = do
   start <- getMonotonicTime
   pure $ do
     end <- getMonotonicTime
-    pure (end - start)
+    pure . duration $ end - start
+  where
+    duration :: Double -> String
+    duration x
+        | x >= 3600 = f (x / 60) "h" "m"
+        | x >= 60   = f x "m" "s"
+        | otherwise = showFFloat (Just 2) x "s"
+
+    f ((`divMod` (60 :: Int)) . round -> (ms, ss)) m s =
+      show ms ++ m ++ ['0' | ss < 10] ++ show ss ++ s
 
 watch :: ShakeOptions -> Rules () -> IO ()
 watch shakeOpts rules = do
@@ -273,7 +283,7 @@ watch shakeOpts rules = do
 
       files <- case res of
         Right ()      -> do
-          putStrLn (unwords ["Build completed in", show elapsed])
+          putStrLn (unwords ["Build completed in", elapsed])
           pure liveFiles
         Left shakeErr -> do
           print shakeErr
@@ -312,68 +322,12 @@ watch shakeOpts rules = do
       FileError{..} <- fromException shakeErr.shakeExceptionInner
       Dir.makeAbsolute <$> path
 
-_watchOneshot :: ShakeOptions -> Rules () -> IO ()
-_watchOneshot shakeOpts rules = do
-  withManager \mgr -> fix \loop -> do
-    files <- Shake.shakeWithDatabase shakeOpts rules \db -> do
-      timeElapsed <- timerStart
-      res <- try @ShakeException $ do
-        Shake.shakeOneShotDatabase db
-        (_, after) <- Shake.shakeRunDatabase db []
-        Shake.shakeRunAfter shakeOpts after
-      elapsed <- timeElapsed
-
-      threadDelay 100000
-
-      liveFiles <- Shake.shakeLiveFilesDatabase db >>= mapM Dir.makeAbsolute
-
-      case res of
-        Right ()      -> do
-          putStrLn (unwords ["Build completed in", show elapsed])
-          pure liveFiles
-        Left shakeErr -> do
-          print shakeErr
-          errs <- Shake.shakeErrorsDatabase db
-          failedTargets <- mapM (Dir.makeAbsolute . fst) errs
-          failedDeps <- catMaybes <$> mapM (errFile . snd) errs
-          pure $ failedTargets ++ failedDeps ++ liveFiles
-
-    if null files then do
-      putStrLn "No files to watch"
-    else do
-      sema <- MVar.newEmptyMVar
-
-      let
-        liveDirs = Map.fromListWith Set.union $
-          map (\file -> (Shake.takeDirectory file, Set.singleton file)) files
-
-        startWatchers = forM (Map.toList liveDirs) \(dir, liveFilesInDir) -> do
-          let isChangeToLiveFile (Modified path _ _) = path `Set.member` liveFilesInDir
-              isChangeToLiveFile _                   = False
-          watchDir mgr dir isChangeToLiveFile \e -> do
-            putStrLn $ unwords ["Change in", e.eventPath]
-            MVar.putMVar sema ()
-
-      bracket startWatchers sequence $ const do
-        putStrLn "Watching for changes..."
-        MVar.takeMVar sema
-        putChar '\n'
-
-      loop
-
-  where
-    errFile :: SomeException -> IO (Maybe FilePath)
-    errFile err = sequence do
-      shakeErr <- fromException @ShakeException err
-      FileError{..} <- fromException shakeErr.shakeExceptionInner
-      Dir.makeAbsolute <$> path
-
 timedShake :: ShakeOptions -> Rules () -> IO ()
 timedShake shakeOpts rules = do
   timeElapsed <- timerStart
   shake shakeOpts rules
   elapsed <- timeElapsed
-  putStrLn $ unwords ["Build completed in", show elapsed]
+  putStrLn $ unwords ["Build completed in", elapsed]
 
 run :: Options -> Command -> IO ()
 run o (Build b) = do
