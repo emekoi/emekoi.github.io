@@ -17,7 +17,6 @@ import qualified Data.List                      as List
 import qualified Data.Map.Strict                as Map
 import qualified Data.Ord                       as Ord
 import qualified Data.Text                      as Text
-import qualified Data.Text.Lazy.Encoding        as TextL
 import           Development.Shake              hiding (shakeOptions)
 import qualified Development.Shake              as Shake
 import           Development.Shake.Classes
@@ -113,14 +112,9 @@ staticSettings path = let s = Wai.defaultFileServerSettings path in s
 -- TODO: filter drafts based on published field
 -- TODO: relativize urls
 
-_1 :: (a, b, c) -> a
-_1 (a, _, _) = a
-
-_2 :: (a, b, c) -> b
-_2 (_, b, _) = b
-
-_3 :: (a, b, c) -> c
-_3 (_, _, c) = c
+postURL :: Post -> String
+postURL Post{..} = "posts" </> slug </> "index.html"
+  where slug = Text.unpack $ titleSlug title
 
 build ::  BuildOptions -> Rules ()
 build _ = do
@@ -149,12 +143,17 @@ build _ = do
 
   template <- Template.compileDir "templates"
 
-  renderPost <- fmap (. BuildPost) . addOracle $ \(BuildPost input) -> do
-    t <- template "post.html"
-    siteMeta <- getSiteMeta
-    renderMarkdownIO input
-      >>= Template.renderPost siteMeta t
-      >>= \(p, o) -> pure (p, Text.unpack . titleSlug $ p.title, o)
+  fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracle $ \(PostQ input) -> do
+    renderMarkdownIO input >>= \page ->
+      case Aeson.fromJSON (Aeson.Object page.meta) of
+        Aeson.Error err                     -> fail err
+        Aeson.Success v | Text.null v.title -> fail "missing metadata field: title"
+        Aeson.Success Post{..}              ->
+          let meta = "tags" .= linkifyTags tags <> page.meta in
+          pure $ PostA
+            ( Post { body = page.body, .. }
+            , Page meta page.body
+            )
 
   routeStatic "css/*.css"
   routeStatic "fonts//*"
@@ -171,28 +170,25 @@ build _ = do
     putInfo $ unwords ["PAGE", input]
 
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files renderPost
+    posts <- forP files fetchPost
 
-    tPostList <- template "post-list.md"
-    tPage <- template "page.html"
+    [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
 
-    siteMeta <- Aeson.toJSON <$> getSite (_1 <$> take 5 posts)
+    siteMeta <- Aeson.toJSON <$> getSite (fst <$> take 5 posts)
 
     Template.preprocessFile siteMeta tPostList input
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
-    forP_ posts \(_, slug, _) -> do
-      need [buildDir </> "posts" </> slug </> "index.html"]
+    need [buildDir </> postURL p | (p, _) <- posts]
 
   routePage' "pages/posts.md" "posts/index.html" \input output -> do
     putInfo $ unwords ["PAGE", input]
 
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap _1 . renderPost)
+    posts <- forP files (fmap fst . fetchPost)
 
-    tPostList <- template "post-list.md"
-    tPage <- template "page.html"
+    [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
 
     siteMeta <- Aeson.toJSON <$> getSite posts
 
@@ -204,10 +200,9 @@ build _ = do
     putInfo $ unwords ["PAGE", input]
 
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap _1 . renderPost)
+    posts <- forP files (fmap fst . fetchPost)
 
-    tPostList <- template "post-list.md"
-    tPage <- template "page.html"
+    [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
 
     (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
 
@@ -219,16 +214,18 @@ build _ = do
   postInput <- liftAction do
     files <- getDirectoryFiles "" postsPattern
     Map.fromList <$> forP files \file -> do
-      slug <- _2 <$> renderPost file
-      pure (buildDir </> "posts" </> slug </> "index.html", file)
+      post <- fst <$> fetchPost file
+      pure (buildDir </> postURL post, file)
 
   buildDir </> "posts/*/index.html" %> \output -> do
     input <- (Map.! output) <$> postInput
     putInfo $ unwords ["POST", input]
 
-    (_, _, content) <- renderPost input
+    (_, page) <- fetchPost input
+    t <- template "page.html"
+    siteMeta <- getSiteMeta
 
-    writeFile output (TextL.encodeUtf8 content)
+    writePage siteMeta t output page
 
     let
       outDir = Shake.takeDirectory output
@@ -318,8 +315,8 @@ watch shakeOpts rules = do
       FileError{..} <- fromException shakeErr.shakeExceptionInner
       Dir.makeAbsolute <$> path
 
-watchOneshot :: ShakeOptions -> Rules () -> IO ()
-watchOneshot shakeOpts rules = do
+_watchOneshot :: ShakeOptions -> Rules () -> IO ()
+_watchOneshot shakeOpts rules = do
   withManager \mgr -> fix \loop -> do
     files <- Shake.shakeWithDatabase shakeOpts rules \db -> do
       timeElapsed <- timerStart

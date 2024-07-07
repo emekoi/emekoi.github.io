@@ -8,7 +8,6 @@ module Blog.Template
   , preprocess
   , preprocessFile
   , renderPage
-  , renderPost
   ) where
 
 import           Blog.Type
@@ -59,7 +58,10 @@ newtype TemplateQ = TemplateQ FilePath
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
 
 newtype TemplateA = TemplateA Template
-  deriving (Show, Typeable, Eq, Hashable, NFData, Binary)
+  deriving (Typeable, Eq, Hashable, NFData, Binary)
+
+instance Show TemplateA where
+  show = const "Template{..}"
 
 type instance RuleResult TemplateQ = TemplateA
 
@@ -160,15 +162,3 @@ renderPage site t (Page meta body) = do
   Stache.renderMustache t . Object $ ("site" .= site)
     <> ("body" .= TextL.toStrict body)
     <> meta
-
-renderPost :: (MonadFail m, MonadIO m) => Aeson.Value -> Template -> Page -> m (Post, TextL.Text)
-renderPost site t page = do
-  case Aeson.fromJSON (Object page.meta) of
-    Aeson.Error err                     -> fail err
-    Aeson.Success v | Text.null v.title -> fail "missing metadata field: title"
-    Aeson.Success Post{..}              ->
-      let meta = "tags" .= linkifyTags tags <> page.meta in
-      pure
-        ( Post { body = page.body, .. }
-        , renderPage site t (Page meta page.body)
-        )

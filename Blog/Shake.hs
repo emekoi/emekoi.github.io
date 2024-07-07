@@ -3,8 +3,11 @@
 {-# LANGUAGE TypeFamilies  #-}
 
 module Blog.Shake
-  ( BuildPost (..)
-  , GitHash (..)
+  ( GitHash (..)
+  , PostQ (..)
+  , PostA (..)
+  , PostsA (..)
+  , PostsQ (..)
   , Route (..)
   , extensions
   , forP_
@@ -31,6 +34,7 @@ import           Control.Monad.IO.Class
 import           Control.Monad.Trans
 import           Data.Aeson                 ((.=))
 import qualified Data.Aeson                 as Aeson
+import qualified Data.Binary                as Binary
 import qualified Data.ByteString            as BS
 import qualified Data.ByteString.Lazy       as LBS
 import           Data.Foldable              (toList)
@@ -47,7 +51,6 @@ import           Development.Shake.Classes
 import           Development.Shake.FilePath ((<.>), (</>))
 import qualified Development.Shake.FilePath as FP
 import           Development.Shake.Rule
-import           GHC.Generics
 import           GHC.Stack
 import           GHC.SyntaxHighlighter      (Token (..), tokenizeHaskell)
 import           Lucid
@@ -60,7 +63,6 @@ forP_ t f = void $ forP (toList t) f
 
 writeFile :: HasCallStack => FilePath -> LBS.ByteString -> Action ()
 writeFile output contents = do
-  putInfo ("writing " ++ output)
   liftIO do
     Dir.createDirectoryIfMissing True (FP.takeDirectory output)
     LBS.writeFile output contents
@@ -189,45 +191,84 @@ gitHashOracle :: Rules (String -> Action Text)
 gitHashOracle = fmap (. GitHash) . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
   cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
 
-newtype BuildPost = BuildPost FilePath
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
-
-type instance RuleResult BuildPost = (Post, FilePath, TextL.Text)
-
-#if 0
 newtype PostQ = PostQ FilePath
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+  deriving (Typeable, Eq, Hashable, Binary, NFData)
 
-newtype PostA = PostA (Post, FilePath, TextL.Text)
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+instance Show PostQ where
+  show (PostQ p) = show p
+
+newtype PostA = PostA { unPostA :: (Post, Page) }
+  deriving (Typeable, Eq, Hashable, Binary, NFData)
+
+instance Show PostA where
+  show (PostA (p, _)) = show p
 
 type instance RuleResult PostQ = PostA
 
-data PostRule = PostRule PostQ (Action ())
+newtype PostsQ = PostsQ ()
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
 
-postRule :: FilePath -> Action () -> Rules ()
-postRule file act = addUserRule $ PostRule (PostQ file) act
+newtype PostsA = PostsA (Map.Map FilePath (Post, FilePath, TextL.Text))
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
 
-needPost :: FilePath -> Action PostA
-needPost = apply1 . PostQ
+type instance RuleResult PostsQ = PostsA
 
-needPosts :: [FilePath] -> Action [PostA]
-needPosts = apply . fmap PostQ
+-- data PostRule = PostRule PostQ (Action ())
 
-addBuiltinPostRule :: Rules ()
-addBuiltinPostRule = addBuiltinRule noLint noIdentity run
+-- postRule :: FilePath -> Action () -> Rules ()
+-- postRule file act = addUserRule $ PostRule (PostQ file) act
+
+-- needPosts :: [FilePath] -> Action [PostA]
+-- needPosts = apply . fmap PostQ
+
+_addBuiltinPostRule :: Action Template -> Rules ()
+_addBuiltinPostRule _tPost = addBuiltinRule noLint noIdentity run
   where
---     fileContents (File x) = do b <- Dir.doesFileExist x; if b then BS.readFile x else pure ""
+    -- encode' :: Binary a => a -> BS.ByteString
+    -- encode' = BS.fromLazy . Binary.encode
+
+    decode' :: Binary a => BS.ByteString -> a
+    decode' = Binary.decode . BS.fromStrict
 
     run :: BuiltinRun PostQ PostA
-    run (PostQ input) old mode = do
-      undefined
---       now <- liftIO $ fileContents key
---       if mode == RunDependenciesSame && old == Just now then
---           pure $ RunResult ChangedNothing now ()
---       else do
---           (_, act) <- getUserRuleOne key (const Nothing) $ \(FileRule k act) -> if k == key then Just act else Nothing
---           act
---           now <- liftIO $ fileContents key
---           pure $ RunResult ChangedRecomputeDiff now ()
-#endif
+    run (PostQ pName) oldStore mode = do
+      case mode of
+        RunDependenciesSame | Just old <- oldStore ->
+          pure $ RunResult ChangedNothing old (decode' old)
+        _ -> do
+          need [pName]
+          undefined
+
+-- _addBuiltinTemplateRule :: FilePath -> Rules ()
+-- _addBuiltinTemplateRule dir = do
+--   addBuiltinRule noLint noIdentity run
+
+--     getPartials (c, r) (Partial p _)
+--       | p `Set.notMember` c = (Set.insert p c, Text.unpack (Stache.unPName p) : r)
+--     getPartials acc _ = acc
+
+--     run :: BuiltinRun TemplateQ TemplateA
+--     -- run (TemplateQ input) old RunDependenciesSame =
+--     run (TemplateQ tName) oldStore mode = do
+--       case mode of
+--         RunDependenciesSame | Just old <- oldStore ->
+--           pure $ RunResult ChangedNothing old (decode' old)
+--         _ -> do
+--           let
+--             mInputFile = dir </> tName <.> "mustache"
+--             pName = Stache.PName (Text.pack tName)
+
+--           need [mInputFile]
+--           mInput <- liftIO $ Text.readFile mInputFile
+
+--           case Stache.parseMustache tName mInput of
+--             Left err -> liftIO . throwIO . FileError (Just mInputFile) $
+--               Mega.errorBundlePretty err
+--             Right nodes -> do
+--               -- template [Text.unpack $ Stache.unPName p | Partial p _ <- nodes]
+--               ts <- _template . snd $ foldl' getPartials (mempty, []) nodes
+--               let
+--                 _t = sconcat (Template pName (Map.singleton pName nodes) :| ts)
+--               --   _a = TemplateA t
+
+--               pure undefined

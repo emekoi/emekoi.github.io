@@ -96,7 +96,10 @@ data Post = Post
   , updatedIso8601  :: Maybe Time
   , slug            :: Text
   }
-  deriving (Generic, Show, Typeable, Eq)
+  deriving (Generic, Typeable, Eq)
+
+instance Show Post where
+  show Post{..} = "Post{" ++ show title ++ "}"
 
 instance Hashable Post
 instance Binary Post
@@ -123,7 +126,6 @@ instance FromJSON Post where
       , updatedIso8601  = Nothing
       , ..
       }
-
     where
       (.:) x y = x Aeson..: Aeson.fromString (fieldMod y)
       (.:?) x y = x Aeson..:? Aeson.fromString (fieldMod y)
@@ -161,7 +163,23 @@ data Page = Page
   { meta :: Aeson.Object
   , body :: TextL.Text
   }
-  deriving (Show)
+  deriving (Show, Typeable, Eq, Generic)
+
+instance Hashable Page
+instance NFData Page
+
+instance ToJSON Page where
+  toJSON     = Aeson.genericToJSON aesonOptions
+  toEncoding = Aeson.genericToEncoding aesonOptions
+
+instance FromJSON Page where
+  parseJSON = Aeson.genericParseJSON aesonOptions
+
+instance Binary Page where
+  put = put . Aeson.encode
+  get = do
+    Just x <- Aeson.decode <$> get
+    pure x
 
 instance TH.Lift Page where
   liftTyped p = TH.unsafeCodeCoerce (TH.lift p)
