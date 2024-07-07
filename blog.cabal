@@ -10,7 +10,7 @@ name:               blog
 version:            0.1.0.0
 
 flag ci
-  description: are we on a ci runner?
+  description: Are we on a ci runner?
   default:     False
 
 common base
@@ -24,6 +24,7 @@ common base
     GADTs
     GeneralizedNewtypeDeriving
     LambdaCase
+    NamedFieldPuns
     NoFieldSelectors
     OverloadedLists
     OverloadedRecordDot
@@ -40,6 +41,7 @@ executable blog
     ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is Blog
     main-is:     Blog.hs
     other-modules:
+      Blog.Config
       Blog.MMark
       Blog.Shake
       Blog.Template

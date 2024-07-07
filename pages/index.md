@@ -18,7 +18,7 @@ Email
 
 Github
 
-[@emekoi]({{site.github}})
+[@emekoi]({{site.git}})
 
 :::
 

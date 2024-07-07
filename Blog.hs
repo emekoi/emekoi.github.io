@@ -1,9 +1,9 @@
-{-# LANGUAGE CPP            #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TypeFamilies   #-}
+{-# LANGUAGE CPP          #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Blog (main) where
 
+import           Blog.Config
 import           Blog.Shake
 import qualified Blog.Template                  as Template
 import           Blog.Type
@@ -15,9 +15,7 @@ import           Control.Exception
 import           Control.Monad
 import           Data.Aeson                     ((.=))
 import qualified Data.Aeson                     as Aeson
-import qualified Data.List                      as List
 import qualified Data.Map.Strict                as Map
-import qualified Data.Ord                       as Ord
 import qualified Data.Text                      as Text
 import           Development.Shake              hiding (shakeOptions)
 import qualified Development.Shake              as Shake
@@ -44,7 +42,8 @@ import qualified Network.Wai                    as Wai
 import qualified Network.Wai.Application.Static as Wai
 import qualified Network.Wai.Handler.Warp       as Warp
 import qualified System.Directory               as Dir
-import           System.FSNotify
+import qualified System.FSNotify                as FS
+import           System.FSNotify                (Event (..))
 import qualified WaiAppStatic.Types             as Wai
 #endif
 
@@ -59,6 +58,10 @@ data BuildOptions = BuildOptions
   , watch  :: Bool
   }
 
+data CleanOptions = CleanOptions
+  { cache :: Bool
+  }
+
 data PreviewOptions = PreviewOptions
   { server :: Bool
   , host   :: String
@@ -67,7 +70,7 @@ data PreviewOptions = PreviewOptions
 
 data Command
   = Build BuildOptions
-  | Clean
+  | Clean CleanOptions
   | Preview PreviewOptions
 
 shakeOptions :: Options -> IO ShakeOptions
@@ -76,38 +79,12 @@ shakeOptions Options{..} = do
 
   pure $ Shake.shakeOptions
     { shakeColor     = True
-    , shakeFiles     = "_build"
     , shakeStaunch   = False
     , shakeThreads   = jobs
     , shakeVerbosity = verbosity
     , shakeVersion   = version
     }
 
-#if defined(ENABLE_WATCH)
-staticSettings :: FilePath -> Wai.StaticSettings
-staticSettings path = let s = Wai.defaultFileServerSettings path in s
-  { Wai.ss404Handler = Just \_ respond ->
-    BS.readFile (path </> "404.html")
-      >>= respond . Wai.responseLBS Status.status404 []
-  , Wai.ssLookupFile = \pieces ->
-    case splitAt (length pieces - 1) pieces of
-      (prefix, [Wai.fromPiece -> fileName])
-        | nullExtension (Text.unpack fileName) ->
-          s.ssLookupFile $ prefix <> [Wai.unsafeToPiece $ fileName <> ".html"]
-      _ -> s.ssLookupFile pieces
-  , Wai.ssGetMimeType = \file ->
-    let fileName = Text.unpack $ Wai.fromPiece file.fileName in
-    if nullExtension fileName then do
-      htmlExists <- Dir.doesFileExist $ path </> fileName <.> "html"
-      if htmlExists then pure "text/html" else s.ssGetMimeType file
-    else s.ssGetMimeType file
-  }
-  where
-    nullExtension :: FilePath -> Bool
-    nullExtension = not . Shake.hasExtension
-#endif
-
--- TODO: build resume
 -- TODO: build atom feed
 -- TODO: build jsonfeed feed
 -- TODO: filter drafts based on published field
@@ -119,32 +96,17 @@ postURL Post{..} = "posts" </> slug </> "index.html"
 
 build ::  BuildOptions -> Rules ()
 build _ = do
-  buildDir <- shakeFiles <$> getShakeOptionsRules
-
   gitHash <- gitHashOracle
 
   getSite <- newCache \posts -> do
     hash <- gitHash "master"
-    pure $ Site
-      { author
-      , description = author <> "'s Blog"
-      , email       = "e.nk@caltech.edu"
-      , github      = "https://github.com/emekoi"
-      , hash
-      , lang        = "en"
-      , posts       = List.sortOn (Ord.Down . (.published)) posts
-      , source      = "https://github.com/emekoi/emekoi.github.io"
-      , tags        = foldMap (.tags) posts
-      , title       = author <> "'s Blog"
-      , url         = "https://emekoi.github.io"
-      }
+    pure $ siteBuild hash posts
 
   let getSiteMeta = Aeson.toJSON <$> getSite []
 
   template <- Template.compileDir "templates"
 
   fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracleCache $ \(PostQ input) -> do
-
     need [input]
     renderMarkdownIO input >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
@@ -161,6 +123,16 @@ build _ = do
 
   routeStatic "css/*.css"
   routeStatic "fonts//*"
+
+  routePage' "resume/resume.tex" "static/resume.pdf" \input output -> do
+    putInfo $ unwords ["RESUME", input]
+    need ["resume/resume.sty", "resume/latexmkrc"]
+    buildDir <- shakeFiles <$> getShakeOptions
+    cmd_ @(String -> [String] -> _)
+      "latexmk -r resume/latexmkrc -quiet"
+      [ "-outdir=" ++ Shake.takeDirectory output
+      , "-auxdir=" ++ buildDir
+      ]
 
   routePage "pages/404.md" \input output -> do
     putInfo $ unwords ["PAGE", input]
@@ -216,12 +188,12 @@ build _ = do
     files <- getDirectoryFiles "" postsPattern
     map <- Map.fromList <$> forP files \input -> do
       (post, page) <- fetchPost input
-      pure (buildDir </> postURL post, (input, page))
+      pure (siteOutput </> postURL post, (input, page))
     liftIO $ MVar.putMVar postsMap map
     runAfter . void $ MVar.takeMVar postsMap
     need $ Map.keys map
 
-  buildDir </> "posts/*/index.html" %> \output -> do
+  siteOutput </> "posts/*/index.html" %> \output -> do
     (input, page) <- (Map.! output) <$> liftIO (MVar.readMVar postsMap)
 
     putInfo $ unwords ["POST", input]
@@ -248,7 +220,6 @@ build _ = do
   pure ()
 
   where
-    author = "Emeka Nkurumeh"
     postsPattern = ["posts/*.md", "posts/*/index.md"]
 
 timerStart :: IO (IO String)
@@ -267,10 +238,10 @@ timerStart = do
     f ((`divMod` (60 :: Int)) . round -> (ms, ss)) m s =
       show ms ++ m ++ ['0' | ss < 10] ++ show ss ++ s
 
-watch :: ShakeOptions -> Rules () -> IO ()
 #if defined(ENABLE_WATCH)
+watch :: ShakeOptions -> Rules () -> IO ()
 watch shakeOpts rules = do
-  Shake.shakeWithDatabase shakeOpts rules \db -> withManager \mgr -> do
+  Shake.shakeWithDatabase shakeOpts rules \db -> FS.withManager \mgr -> do
     fix \loop -> do
       timeElapsed <- timerStart
       res <- try @ShakeException $ do
@@ -306,7 +277,7 @@ watch shakeOpts rules = do
           startWatchers = forM (Map.toList watchDirs) \(dir, liveFilesInDir) -> do
             let isChangeToLiveFile (Modified path _ _) = path `Set.member` liveFilesInDir
                 isChangeToLiveFile _                   = False
-            watchDir mgr dir isChangeToLiveFile \e -> do
+            FS.watchDir mgr dir isChangeToLiveFile \e -> do
               putStrLn $ unwords ["Change in", e.eventPath]
               MVar.putMVar sema ()
 
@@ -322,8 +293,6 @@ watch shakeOpts rules = do
       shakeErr <- fromException @ShakeException err
       FileError{..} <- fromException shakeErr.shakeExceptionInner
       Dir.makeAbsolute <$> path
-#else
-watch _ _ = error "watch disabled"
 #endif
 
 timedShake :: ShakeOptions -> Rules () -> IO ()
@@ -334,37 +303,62 @@ timedShake shakeOpts rules = do
   putStrLn $ unwords ["Build completed in", elapsed]
 
 run :: Options -> Command -> IO ()
+run o (Clean CleanOptions{..}) = do
+  options <- shakeOptions o
+  shake options . action $ do
+    putInfo $ unwords ["Removing", siteOutput]
+    removeFilesAfter siteOutput ["//*"]
+    when cache $ do
+      buildDir <- shakeFiles <$> getShakeOptions
+      putInfo $ unwords ["Removing", buildDir]
+      removeFilesAfter buildDir ["//*"]
+
+#if defined(ENABLE_WATCH)
 run o (Build b) = do
   shakeOpts <- shakeOptions o
   (if b.watch then watch else timedShake)
     shakeOpts
     (build b)
-
-#if defined(ENABLE_WATCH)
 run o (Preview w) = do
   shakeOpts <- shakeOptions o
   _ <- forkIO (watch shakeOpts (build BuildOptions{ drafts = True, watch = True }))
-  let app = Wai.staticApp (staticSettings shakeOpts.shakeFiles)
+  let app = Wai.staticApp (staticSettings siteOutput)
   Warp.runSettings warpSettings app
   where
     warpSettings = Warp.setHost (fromString w.host)
       $ Warp.setPort w.port Warp.defaultSettings
-#else
-run _ (Preview _) = error "preview disabled"
-#endif
 
-run o Clean = do
-  options <- shakeOptions o
-  shake options . action $ do
-    buildDir <- shakeFiles <$> getShakeOptions
-    putInfo $ unwords ["Removing", buildDir]
-    removeFilesAfter buildDir ["//*"]
+    nullExtension = not . Shake.hasExtension
+
+    staticSettings path = let s = Wai.defaultFileServerSettings path in s
+      { Wai.ss404Handler = Just \_ respond ->
+        BS.readFile (path </> "404.html")
+          >>= respond . Wai.responseLBS Status.status404 []
+      , Wai.ssLookupFile = \pieces ->
+        case splitAt (length pieces - 1) pieces of
+          (prefix, [Wai.fromPiece -> fileName])
+            | nullExtension (Text.unpack fileName) ->
+              s.ssLookupFile $ prefix <> [Wai.unsafeToPiece $ fileName <> ".html"]
+          _ -> s.ssLookupFile pieces
+      , Wai.ssGetMimeType = \file ->
+        let fileName = Text.unpack $ Wai.fromPiece file.fileName in
+        if nullExtension fileName then do
+          htmlExists <- Dir.doesFileExist $ path </> fileName <.> "html"
+          if htmlExists then pure "text/html" else s.ssGetMimeType file
+        else s.ssGetMimeType file
+      }
+#else
+run o (Build b) | not b.watch = do
+  shakeOpts <- shakeOptions o
+  timedShake shakeOpts (build b)
+run _ _ = error "watch/preview disabled"
+#endif
 
 parseOptions :: A.Parser Options
 parseOptions = do
   command <- A.hsubparser (mconcat
     [ A.command "build" (A.info pBuild (A.progDesc "Build the site"))
-    , A.command "clean" (A.info (pure Clean) (A.progDesc "Remove build files"))
+    , A.command "clean" (A.info pClean (A.progDesc "Remove build files"))
     , A.command "preview" (A.info pPreview (A.progDesc "Run a preview server"))
     ]) <|> pBuild
 
@@ -388,6 +382,10 @@ parseOptions = do
       drafts <- A.switch (A.long "drafts" <> A.short 'd' <> A.help "Include drafts")
       watch <- A.switch (A.long "watch" <> A.short 'w' <> A.help "Watch for changes and rebuild automatically")
       pure BuildOptions {..}
+
+    pClean = Clean <$> do
+      cache <- A.switch (A.long "cache" <> A.short 'c' <> A.help "Clean cache")
+      pure CleanOptions {..}
 
     pPreview = Preview <$> do
       server <- A.switch (A.long "server" <> A.short 's' <> A.help "Run a preview server")

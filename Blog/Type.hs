@@ -135,7 +135,7 @@ data Site = Site
   { author      :: Text
   , description :: Text
   , email       :: Text
-  , github      :: Text
+  , git         :: Text
   , hash        :: Text
   , lang        :: Text
   , posts       :: [Post]

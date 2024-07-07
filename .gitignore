@@ -1,2 +1,5 @@
-_build/
+.shake/
+_site/
 dist-newstyle/
+
+cabal.project.local*

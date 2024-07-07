@@ -21,6 +21,7 @@ module Blog.Shake
   , writePage
   ) where
 
+import           Blog.Config                (siteOutput)
 import qualified Blog.MMark                 as MMark
 import           Blog.Template              (Template)
 import qualified Blog.Template              as Template
@@ -79,21 +80,15 @@ data Route
 instance IsString Route where
   fromString = Static False Nothing
 
-getOutputRules :: FilePath -> Rules FilePath
-getOutputRules file = do
-  buildDir <- shakeFiles <$> getShakeOptionsRules
-  pure $ buildDir </> file
 
 route :: Route -> (FilePath -> FilePath -> Action ()) -> Rules ()
 route (Static isPat input output) f = do
-  output <- getOutputRules output
-  unless isPat $ want [output]
-  output %> \x -> case input of
+  unless isPat $ want [siteOutput </> output]
+  siteOutput </> output %> \x -> case input of
     Just input | not isPat -> need [input] *> f input x
     _                      -> f x x
 route (Dynamic g pat) f = do
-  buildDir <- shakeFiles <$> getShakeOptionsRules
-  let getOut x = buildDir </> g x
+  let getOut x = siteOutput </> g x
 
   -- split into 2 steps to avoid indirect recursion
   action $ getDirectoryFiles "" [pat] >>= need . fmap getOut
