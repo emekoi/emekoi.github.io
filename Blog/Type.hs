@@ -98,11 +98,9 @@ data Post = Post
   }
   deriving (Generic, Show, Typeable, Eq)
 
-instance Hashable Post where
-
-instance Binary Post where
-
-instance NFData Post where
+instance Hashable Post
+instance Binary Post
+instance NFData Post
 
 instance ToJSON Post where
   toJSON     = Aeson.genericToJSON aesonOptions

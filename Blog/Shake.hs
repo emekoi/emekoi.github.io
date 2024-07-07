@@ -1,5 +1,6 @@
-{-# LANGUAGE CPP          #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE CPP           #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TypeFamilies  #-}
 
 module Blog.Shake
   ( BuildPost (..)
@@ -45,6 +46,8 @@ import           Development.Shake
 import           Development.Shake.Classes
 import           Development.Shake.FilePath ((<.>), (</>))
 import qualified Development.Shake.FilePath as FP
+import           Development.Shake.Rule
+import           GHC.Generics
 import           GHC.Stack
 import           GHC.SyntaxHighlighter      (Token (..), tokenizeHaskell)
 import           Lucid
@@ -120,20 +123,6 @@ tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
         (Map.fromAscList . map (, []) $ Set.toAscList tags)
         posts
 
-newtype GitHash = GitHash String
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
-
-type instance RuleResult GitHash = Text
-
-gitHashOracle :: Rules (String -> Action Text)
-gitHashOracle = fmap (. GitHash) . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
-  cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
-
-newtype BuildPost = BuildPost String
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
-
-type instance RuleResult BuildPost = (Post, TextL.Text)
-
 ghcHighlight :: Monad m => Text -> Maybe (HtmlT m ())
 ghcHighlight (tokenizeHaskell -> Just x) = pure $
   forM_ x \(c, toHtml -> h) ->
@@ -190,3 +179,82 @@ renderMarkdown = MMark.renderMarkdown extensions
 
 renderMarkdownIO :: FilePath -> Action Page
 renderMarkdownIO = MMark.renderMarkdownIO extensions
+
+newtype GitHash = GitHash String
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+
+type instance RuleResult GitHash = Text
+
+gitHashOracle :: Rules (String -> Action Text)
+gitHashOracle = fmap (. GitHash) . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
+  cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
+
+newtype BuildPost = BuildPost FilePath
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+
+type instance RuleResult BuildPost = (Post, FilePath, TextL.Text)
+
+-- newtype TemplateQ = TemplateQ FilePath
+--   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+
+-- newtype TemplateA = TemplateA Template
+--   deriving (Show, Typeable, Eq, NFData)
+
+-- type instance RuleResult TemplateQ = TemplateA
+
+-- needTemplates :: [FilePath] -> Action [TemplateA]
+-- needTemplates = apply . fmap TemplateQ
+
+-- addBuiltinTemplateRule :: Rules ()
+-- addBuiltinTemplateRule = addBuiltinRule noLint noIdentity run
+--   where
+--     run :: BuiltinRun TemplateQ TemplateA
+--     run (TemplateQ input) old mode = do
+--       undefined
+-- --       now <- liftIO $ fileContents key
+-- --       if mode == RunDependenciesSame && old == Just now then
+-- --           pure $ RunResult ChangedNothing now ()
+-- --       else do
+-- --           (_, act) <- getUserRuleOne key (const Nothing) $ \(FileRule k act) -> if k == key then Just act else Nothing
+-- --           act
+-- --           now <- liftIO $ fileContents key
+-- --           pure $ RunResult ChangedRecomputeDiff now ()
+
+
+#if 0
+newtype PostQ = PostQ FilePath
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+
+newtype PostA = PostA (Post, FilePath, TextL.Text)
+  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+
+type instance RuleResult PostQ = PostA
+
+data PostRule = PostRule PostQ (Action ())
+
+postRule :: FilePath -> Action () -> Rules ()
+postRule file act = addUserRule $ PostRule (PostQ file) act
+
+needPost :: FilePath -> Action PostA
+needPost = apply1 . PostQ
+
+needPosts :: [FilePath] -> Action [PostA]
+needPosts = apply . fmap PostQ
+
+addBuiltinPostRule :: Rules ()
+addBuiltinPostRule = addBuiltinRule noLint noIdentity run
+  where
+--     fileContents (File x) = do b <- Dir.doesFileExist x; if b then BS.readFile x else pure ""
+
+    run :: BuiltinRun PostQ PostA
+    run (PostQ input) old mode = do
+      undefined
+--       now <- liftIO $ fileContents key
+--       if mode == RunDependenciesSame && old == Just now then
+--           pure $ RunResult ChangedNothing now ()
+--       else do
+--           (_, act) <- getUserRuleOne key (const Nothing) $ \(FileRule k act) -> if k == key then Just act else Nothing
+--           act
+--           now <- liftIO $ fileContents key
+--           pure $ RunResult ChangedRecomputeDiff now ()
+#endif

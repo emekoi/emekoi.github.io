@@ -113,6 +113,15 @@ staticSettings path = let s = Wai.defaultFileServerSettings path in s
 -- TODO: filter drafts based on published field
 -- TODO: relativize urls
 
+_1 :: (a, b, c) -> a
+_1 (a, _, _) = a
+
+_2 :: (a, b, c) -> b
+_2 (_, b, _) = b
+
+_3 :: (a, b, c) -> c
+_3 (_, _, c) = c
+
 build ::  BuildOptions -> Rules ()
 build _ = do
   buildDir <- shakeFiles <$> getShakeOptionsRules
@@ -140,51 +149,50 @@ build _ = do
 
   template <- Template.compileDir "templates"
 
-#if defined(POST_CACHE)
-  renderPost <- fmap (. BuildPost) . addOracleCache $ \(BuildPost input) -> do
+#if !defined(POST_CACHE)
+  -- renderPost <- newCache \input -> do
+  renderPost <- fmap (. BuildPost) . addOracle $ \(BuildPost input) -> do
 #else
   renderPost <- pure \input -> do
 #endif
     putInfo ("reading " ++ input)
-    Just t <- template "post.html"
+    t <- template "post.html"
     siteMeta <- getSiteMeta
     renderMarkdownIO input
       >>= Template.renderPost siteMeta t
-
-  let postSlug = fmap (Text.unpack . titleSlug . (.title) . fst) . renderPost
+      >>= \(p, o) -> pure (p, Text.unpack . titleSlug $ p.title, o)
 
   routeStatic "css/*.css"
   routeStatic "fonts//*"
 
   routePage "pages/404.md" \input output -> do
-    Just t <- template "page.html"
+    t <- template "page.html"
     siteMeta <- getSiteMeta
     renderMarkdownIO input
       >>= writePage siteMeta t output
 
   routePage "pages/index.md" \input output -> do
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap fst . renderPost)
+    posts <- forP files renderPost
 
-    Just tPostList <- template "post-list.md"
-    Just tPage <- template "page.html"
+    tPostList <- template "post-list.md"
+    tPage <- template "page.html"
 
-    siteMeta <- Aeson.toJSON <$> getSite (take 5 posts)
+    siteMeta <- Aeson.toJSON <$> getSite (_1 <$> take 5 posts)
 
     Template.preprocessFile siteMeta tPostList input
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
-    forP_ files \file -> do
-      slug <- postSlug file
+    forP_ posts \(_, slug, _) -> do
       need [buildDir </> "posts" </> slug </> "index.html"]
 
   routePage' "pages/posts.md" "posts/index.html" \input output -> do
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap fst . renderPost)
+    posts <- forP files (fmap _1 . renderPost)
 
-    Just tPostList <- template "post-list.md"
-    Just tPage <- template "page.html"
+    tPostList <- template "post-list.md"
+    tPage <- template "page.html"
 
     siteMeta <- Aeson.toJSON <$> getSite posts
 
@@ -194,10 +202,10 @@ build _ = do
 
   routePage' "pages/tags.md" "tags.html" \input output -> do
     files <- getDirectoryFiles "" postsPattern
-    posts <- forP files (fmap fst . renderPost)
+    posts <- forP files (fmap _1 . renderPost)
 
-    Just tPostList <- template "post-list.md"
-    Just tPage <- template "page.html"
+    tPostList <- template "post-list.md"
+    tPage <- template "page.html"
 
     (tagsMeta, siteMeta) <- (tagsMeta &&& Aeson.toJSON) <$> getSite posts
 
@@ -209,13 +217,12 @@ build _ = do
   postInput <- liftAction do
     files <- getDirectoryFiles "" postsPattern
     Map.fromList <$> forP files \file -> do
-      (post, content) <- renderPost file
-      let slug = Text.unpack $ titleSlug post.title
-      pure (buildDir </> "posts" </> slug </> "index.html", (file, content))
+      slug <- _2 <$> renderPost file
+      pure (buildDir </> "posts" </> slug </> "index.html", file)
 
   buildDir </> "posts/*/index.html" %> \output -> do
-    (input, _) <- (Map.! output) <$> postInput
-    (_, content) <- renderPost input
+    input <- (Map.! output) <$> postInput
+    (_, _, content) <- renderPost input
 
     writeFile output (TextL.encodeUtf8 content)
 
