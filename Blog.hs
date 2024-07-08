@@ -1,5 +1,6 @@
-{-# LANGUAGE CPP          #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE CPP               #-}
+{-# LANGUAGE NoOverloadedLists #-}
+{-# LANGUAGE TypeFamilies      #-}
 
 module Blog (main) where
 
@@ -89,14 +90,46 @@ shakeOptions Options{..} = do
     , shakeVersion   = version
     }
 
--- TODO: build atom feed
--- TODO: build jsonfeed feed
 -- TODO: filter drafts based on published field
 -- TODO: relativize urls
 
 postURL :: Post -> String
 postURL Post{..} = "posts" </> slug </> "index.html"
   where slug = Text.unpack $ titleSlug title
+
+atomFeedItem :: Post -> Post
+atomFeedItem Post{..} = Post
+  { updated = updated <> published
+  , ..
+  }
+
+jsonFeedItem :: Post -> Aeson.Value
+jsonFeedItem Post{..} = Aeson.object
+  [ "id"             .= (url <> "/" <> slug)
+  , "url"            .= (url <> "/" <> slug)
+  , "content_html"   .= body
+  , "title"          .= title
+  , "date_published" .= published.iso8601
+  , "date_modified"  .= (updated.iso8601 <|> published.iso8601)
+  , "tags"           .= tags
+  ]
+
+jsonFeed :: Site -> Aeson.Value
+jsonFeed Site{..} = Aeson.object
+  [ "version"       .= ("https://www.jsonfeed.org/version/1.1" :: String)
+  , "title"         .= title
+  , "home_page_url" .= url
+  , "feed_url"      .= (url <> "/" <> "feed.json")
+  , "description"   .= description
+  , "authors"       .=
+    [ Aeson.object
+      [ "name" .= author
+      , "url"  .= url
+      ]
+    ]
+  , "language"      .= lang
+  , "items"         .= (jsonFeedItem <$> posts)
+  ]
 
 tagsMeta :: Site -> Aeson.Value
 tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
@@ -154,6 +187,29 @@ build _ = do
       , "-auxdir=" ++ buildDir
       ]
 
+  routePage' "pages/feed.xml" "feed.xml" \input output -> do
+    putInfo $ unwords ["FEED", input]
+
+    posts <- getDirectoryFiles "" postsPattern
+      >>= mapP (fmap (atomFeedItem . fst) . fetchPost)
+
+    tItem <- template "atom-item.xml"
+
+    siteMeta <- jsonInsert "updated" (Clock.iso8601Show buildTime)
+      . Aeson.toJSON <$> getSite posts
+
+    Template.preprocessFile siteMeta tItem input
+      >>= writeFile output . LBS.fromStrict . Text.encodeUtf8
+
+  routePage' "pages/feed.json" "feed.json" \input output -> do
+    putInfo $ unwords ["FEED", input]
+
+    feed <- getDirectoryFiles "" postsPattern
+      >>= mapP (fmap fst . fetchPost)
+      >>= fmap jsonFeed . getSite
+
+    liftIO $ Aeson.encodeFile output feed
+
   routePage "pages/404.md" \input output -> do
     putInfo $ unwords ["PAGE", input]
 
@@ -201,23 +257,6 @@ build _ = do
     Template.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
-
-  routePage' "pages/feed.xml" "feed.xml" \input output -> do
-    putInfo $ unwords ["FEED", input]
-
-    let setUpdated Post{..} = Post{ updated = updated <> published, .. }
-    posts <- getDirectoryFiles "" postsPattern
-      >>= mapP (fmap (setUpdated . fst) . fetchPost)
-
-    tItem <- template "atom-item.xml"
-
-    siteMeta <- jsonInsert "updated" (fromString $ Clock.iso8601Show buildTime)
-      . Aeson.toJSON <$> getSite posts
-
-    Template.preprocessFile siteMeta tItem input
-      >>= writeFile output . LBS.fromStrict . Text.encodeUtf8
-
-    pure ()
 
   postsMap <- liftIO MVar.newEmptyMVar
 

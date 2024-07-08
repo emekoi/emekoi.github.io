@@ -5,6 +5,7 @@
 module Blog.Template
   ( Template (..)
   , compileDir
+  , empty
   , preprocess
   , preprocessFile
   , renderPage
@@ -64,6 +65,9 @@ type instance RuleResult TemplateQ = TemplateA
 
 templateAnswer :: TemplateA -> Template
 templateAnswer (TemplateA t) = t
+
+empty :: Template
+empty = Template undefined mempty
 
 compileDir :: FilePath -> Rules (FilePath -> Action Template)
 compileDir dir = fmap wrap . addOracleCache $ fix \loop (TemplateQ tName) -> do

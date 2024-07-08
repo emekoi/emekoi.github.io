@@ -5,8 +5,8 @@ module Blog.Util
   , jsonInsert
   ) where
 
-import           Data.Aeson           (Key, Value (..))
-import qualified Data.Aeson.KeyMap    as KeyMap
+import           Data.Aeson
+import qualified Data.Aeson.KeyMap    as Aeson
 import qualified Data.Char            as Char
 import           Data.Text            (Text)
 import qualified Data.Text            as Text
@@ -49,6 +49,7 @@ titleSlug = f . ICU.nfd
 liftAction :: Action a -> Rules (Action a)
 liftAction m = ($ ()) <$> newCache (`seq` m)
 
-jsonInsert :: Key -> Value -> Value -> Value
-jsonInsert key val (Object obj) = Object (KeyMap.insert key val obj)
-jsonInsert _ _ x                = x
+jsonInsert :: ToJSON v =>  Key -> v -> Value -> Value
+jsonInsert key val (Object obj) =
+  Object (Aeson.insert key (toJSON val) obj)
+jsonInsert _ _ x = x

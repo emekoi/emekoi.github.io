@@ -3,7 +3,8 @@
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
 module Blog.Type
-  ( FileError (..)
+  ( DisplayTime (..)
+  , FileError (..)
   , Page (..)
   , Post (..)
   , Site (..)
