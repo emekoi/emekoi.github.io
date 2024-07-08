@@ -15,8 +15,9 @@ module Blog.Shake
   , renderMarkdownIO
   , route
   , routePage
-  , routePage'
   , routeStatic
+  , routeStatic1
+  , staticFiles
   , writeFile
   , writePage
   ) where
@@ -78,7 +79,6 @@ data Route
 instance IsString Route where
   fromString = Static False Nothing
 
-
 route :: Route -> (FilePath -> FilePath -> Action ()) -> Rules ()
 route (Static isPat input output) f = do
   unless isPat $ want [siteOutput </> output]
@@ -99,14 +99,27 @@ route (Dynamic g pat) f = do
     need [input]
     f input output
 
-routeStatic :: FilePattern -> Rules ()
-routeStatic = flip route copyFileChanged . Dynamic id
+staticFiles :: FilePattern -> Rules ()
+staticFiles = flip route f . Dynamic id
+  where
+    f input output = do
+      putInfo $ unwords ["STATIC", output]
+      copyFileChanged input output
 
 routePage :: FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
 routePage = route . Dynamic (\input -> FP.takeBaseName input <.> "html")
 
-routePage' :: FilePath -> FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
-routePage' input output = route (Static False (Just input) output)
+routeStatic1 :: FilePattern -> (FilePath -> Action ()) -> Rules ()
+routeStatic1 output f = do
+  let outputFile = siteOutput </> output
+  outputFile %> f
+  want [outputFile]
+
+routeStatic :: FilePath -> FilePath -> (FilePath -> FilePath  -> Action ()) -> Rules ()
+routeStatic input output f = do
+  let outputFile = siteOutput </> output
+  outputFile %> \output -> need [input] *> f input output
+  want [outputFile]
 
 ghcHighlight :: Monad m => Text -> Maybe (HtmlT m ())
 ghcHighlight (tokenizeHaskell -> Just x) = pure $

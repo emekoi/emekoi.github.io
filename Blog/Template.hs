@@ -12,7 +12,6 @@ module Blog.Template
   ) where
 
 import           Blog.Type
-import           Control.Exception
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Aeson                 (Value (..), (.=))
@@ -81,7 +80,7 @@ compileDir dir = fmap wrap . addOracleCache $ fix \loop (TemplateQ tName) -> do
   mInput <- liftIO $ Text.readFile mInputFile
 
   case Stache.parseMustache tName mInput of
-    Left err -> liftIO . throwIO . FileError (Just mInputFile) $
+    Left err -> fileError (Just mInputFile) $
       Mega.errorBundlePretty err
     Right nodes -> do
       -- template [Text.unpack $ Stache.unPName p | Partial p _ <- nodes]
@@ -106,7 +105,7 @@ preprocess site (Template _ tc) file input = do
   pure out
   where
     fmtWarning x = fname <> ": " <> Stache.displayMustacheWarning x
-    throw = liftIO . throwIO . FileError file . Mega.errorBundlePretty
+    throw = fileError file . Mega.errorBundlePretty
     pname = Stache.PName $ Text.pack fname
     fname = fromMaybe "<input>" file
 

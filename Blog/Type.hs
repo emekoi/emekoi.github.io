@@ -11,13 +11,15 @@ module Blog.Type
   , Tag (..)
   , Time (..)
   , pattern Time
+  , fileError
   , linkifyTags
   , tagLink
   ) where
 
 import           Blog.Util                  (titleSlug)
 import           Control.Applicative
-import           Control.Exception          (Exception (..))
+import           Control.Exception
+import           Control.Monad.IO.Class
 import           Data.Aeson                 (FromJSON (..), ToJSON (..))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.Aeson.Key             as Aeson
@@ -233,3 +235,6 @@ data FileError = FileError
 
 instance Exception FileError where
   displayException p = p.msg
+
+fileError :: MonadIO m => Maybe FilePath -> String -> m a
+fileError path msg = liftIO . throwIO $ FileError {..}

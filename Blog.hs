@@ -59,8 +59,7 @@ data Options = Options
   }
 
 data BuildOptions = BuildOptions
-  { drafts :: Bool
-  , watch  :: Bool
+  { watch  :: Bool
   }
 
 data CleanOptions = CleanOptions
@@ -116,7 +115,7 @@ jsonFeedItem Post{..} = Aeson.object
 
 jsonFeed :: Site -> Aeson.Value
 jsonFeed Site{..} = Aeson.object
-  [ "version"       .= ("https://www.jsonfeed.org/version/1.1" :: String)
+  [ "version"       .= ("https://jsonfeed.org/version/1.1" :: String)
   , "title"         .= title
   , "home_page_url" .= url
   , "feed_url"      .= (url <> "/" <> "feed.json")
@@ -142,7 +141,7 @@ tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
         posts
 
 build ::  BuildOptions -> Rules ()
-build _ = do
+build b = do
   gitHash <- gitHashOracle
 
   buildTime <- liftIO Clock.getCurrentTime
@@ -161,9 +160,9 @@ build _ = do
     MMark.renderMarkdownIO postExtensions input >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
         Aeson.Error err ->
-          liftIO . throwIO $ FileError (Just input) err
+          fileError (Just input) err
         Aeson.Success v | Text.null v.title ->
-          liftIO . throwIO $ FileError (Just input) "missing metadata field: title"
+          fileError (Just input) "missing metadata field: title"
         Aeson.Success Post{..} -> do
           (Aeson.Object meta) <- pure . Aeson.toJSON $ Post
             { tags = linkifyTags tags
@@ -174,11 +173,12 @@ build _ = do
             , Page meta page.body
             )
 
-  routeStatic "css/*.css"
-  routeStatic "fonts//*"
+  staticFiles "css/*.css"
+  staticFiles "fonts//*"
 
-  routePage' "resume/resume.tex" "static/resume.pdf" \input output -> do
-    putInfo $ unwords ["RESUME", input]
+  routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
+    putInfo $ unwords ["RESUME", output]
+
     need ["resume/resume.sty", "resume/latexmkrc"]
     buildDir <- shakeFiles <$> getShakeOptions
     cmd_ @(String -> [String] -> _)
@@ -187,22 +187,8 @@ build _ = do
       , "-auxdir=" ++ buildDir
       ]
 
-  routePage' "pages/feed.xml" "feed.xml" \input output -> do
-    putInfo $ unwords ["FEED", input]
-
-    posts <- getDirectoryFiles "" postsPattern
-      >>= mapP (fmap (atomFeedItem . fst) . fetchPost)
-
-    tItem <- template "atom-item.xml"
-
-    siteMeta <- jsonInsert "updated" (Clock.iso8601Show buildTime)
-      . Aeson.toJSON <$> getSite posts
-
-    Template.preprocessFile siteMeta tItem input
-      >>= writeFile output . LBS.fromStrict . Text.encodeUtf8
-
-  routePage' "pages/feed.json" "feed.json" \input output -> do
-    putInfo $ unwords ["FEED", input]
+  routeStatic1 "feed.json" \output -> do
+    putInfo $ unwords ["FEED", output]
 
     feed <- getDirectoryFiles "" postsPattern
       >>= mapP (fmap fst . fetchPost)
@@ -210,8 +196,21 @@ build _ = do
 
     liftIO $ Aeson.encodeFile output feed
 
+  routeStatic "pages/feed.xml" "feed.xml" \input output -> do
+    putInfo $ unwords ["FEED", output]
+    tItem <- template "atom-item.xml"
+
+    posts <- getDirectoryFiles "" postsPattern
+      >>= mapP (fmap (atomFeedItem . fst) . fetchPost)
+
+    siteMeta <- jsonInsert "updated" (Clock.iso8601Show buildTime)
+      . Aeson.toJSON <$> getSite posts
+
+    Template.preprocessFile siteMeta tItem input
+      >>= writeFile output . LBS.fromStrict . Text.encodeUtf8
+
   routePage "pages/404.md" \input output -> do
-    putInfo $ unwords ["PAGE", input]
+    putInfo $ unwords ["PAGE", output]
 
     t <- template "page.html"
     siteMeta <- getSiteMeta
@@ -220,7 +219,7 @@ build _ = do
       >>= writePage siteMeta t output
 
   routePage "pages/index.md" \input output -> do
-    putInfo $ unwords ["PAGE", input]
+    putInfo $ unwords ["PAGE", output]
 
     posts <- getDirectoryFiles "" postsPattern
       >>= mapP fetchPost
@@ -232,8 +231,8 @@ build _ = do
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
-  routePage' "pages/posts.md" "posts/index.html" \input output -> do
-    putInfo $ unwords ["PAGE", input]
+  routeStatic "pages/posts.md" "posts/index.html" \input output -> do
+    putInfo $ unwords ["PAGE", output]
 
     posts <- getDirectoryFiles "" postsPattern
       >>= mapP (fmap fst . fetchPost)
@@ -245,8 +244,8 @@ build _ = do
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
-  routePage' "pages/tags.md" "tags.html" \input output -> do
-    putInfo $ unwords ["PAGE", input]
+  routeStatic "pages/tags.md" "tags.html" \input output -> do
+    putInfo $ unwords ["PAGE", output]
 
     posts <- getDirectoryFiles "" postsPattern
       >>= mapP (fmap fst . fetchPost)
@@ -270,10 +269,9 @@ build _ = do
     need $ Map.keys map
 
   siteOutput </> "posts/*/index.html" %> \output -> do
+    putInfo $ unwords ["POST", output
+                      ]
     (input, page) <- (Map.! output) <$> liftIO (MVar.readMVar postsMap)
-
-    putInfo $ unwords ["POST", input]
-
     t <- template "post.html"
     siteMeta <- getSiteMeta
 
@@ -293,10 +291,12 @@ build _ = do
 
     need deps
 
-  pure ()
-
   where
-    postsPattern = ["posts/*.md", "posts/*/index.md"]
+    postsPattern
+      |  b.watch =
+        ["drafts/*.md", "drafts/*/index.md", "posts/*.md", "posts/*/index.md"]
+      | otherwise =
+        ["posts/*.md", "posts/*/index.md"]
 
 timerStart :: IO (IO String)
 timerStart = do
@@ -397,7 +397,7 @@ run o (Build b) = do
     (build b)
 run o (Preview w) = do
   shakeOpts <- shakeOptions o
-  _ <- forkIO (watch shakeOpts (build BuildOptions{ drafts = True, watch = True }))
+  _ <- forkIO (watch shakeOpts (build BuildOptions{ watch = True }))
   let app = Wai.staticApp (staticSettings siteOutput)
   Warp.runSettings warpSettings app
   where
@@ -455,7 +455,6 @@ parseOptions = do
 
   where
     pBuild = Build <$> do
-      drafts <- A.switch (A.long "drafts" <> A.short 'd' <> A.help "Include drafts")
       watch <- A.switch (A.long "watch" <> A.short 'w' <> A.help "Watch for changes and rebuild automatically")
       pure BuildOptions {..}
 
