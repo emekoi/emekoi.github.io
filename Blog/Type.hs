@@ -62,6 +62,12 @@ tagLink (Tag t) = URI.URI
   , uriFragment = URI.mkFragment t
   }
 
+linkifyTags :: Set Tag -> Set Tag
+linkifyTags = Set.map (Tag
+  . TextL.toStrict
+  . renderText
+  . \(Tag t) -> a_ [href_ (URI.render $ tagLink (Tag t))] ("#" <> toHtmlRaw t))
+
 newtype Time = MkTime UTCTime
   deriving (Generic, Show, Typeable, Eq, Hashable, NFData, Ord)
 
@@ -83,18 +89,46 @@ instance FromJSON Time where
   parseJSON = Aeson.withText "Time" \(Text.unpack -> o) -> do
     MkTime <$> (iso8601ParseM o <|> (flip UTCTime 0 <$>iso8601ParseM o))
 
+data DisplayTime = DisplayTime
+  { time    :: Maybe Time
+  , fmt     :: Maybe String
+  , iso8601 :: Maybe String
+  }
+  deriving (Generic, Show, Typeable)
+
+instance Eq DisplayTime where
+  a == b = a.time == b.time
+
+instance Ord DisplayTime where
+  a `compare` b = a.time `compare` b.time
+
+instance Semigroup DisplayTime where
+  a <> b = DisplayTime
+    (a.time <|> b.time)
+    (a.fmt <|> b.fmt)
+    (a.iso8601 <|> b.iso8601)
+
+instance Hashable DisplayTime
+instance Binary DisplayTime
+instance NFData DisplayTime
+
+instance ToJSON DisplayTime where
+  toJSON     = Aeson.genericToJSON aesonOptions
+  toEncoding = Aeson.genericToEncoding aesonOptions
+
+instance FromJSON DisplayTime where
+  parseJSON = Aeson.genericParseJSON aesonOptions
+
 data Post = Post
-  { body            :: TextL.Text
-  , direction       :: Maybe Text
-  , hideTitle       :: Bool
-  , published       :: Maybe Time
-  , publishedIs8601 :: Maybe Time
-  , subtitle        :: Maybe Text
-  , tags            :: Set Tag
-  , title           :: Text
-  , updated         :: Maybe Time
-  , updatedIso8601  :: Maybe Time
-  , slug            :: Text
+  { body      :: TextL.Text
+  , direction :: Maybe Text
+  , hideTitle :: Bool
+  , published :: DisplayTime
+  , subtitle  :: Maybe Text
+  , tags      :: Set Tag
+  , title     :: Text
+  , updated   :: DisplayTime
+  , slug      :: Text
   }
   deriving (Generic, Typeable, Eq)
 
@@ -121,12 +155,22 @@ instance FromJSON Post where
     updated   <- o .:? "updated"
     slug      <- o .:? "slug" .!= titleSlug title
     pure Post
-      { body            = mempty
-      , publishedIs8601 = Nothing
-      , updatedIso8601  = Nothing
+      { body      = mempty
+      , published = DisplayTime
+        { time    = published
+        , fmt     = fmtTime <$> published
+        , iso8601 = isoTime <$> published
+        }
+      , updated   = DisplayTime
+        { time    = updated
+        , fmt     = fmtTime <$> updated
+        , iso8601 = isoTime <$> updated
+        }
       , ..
       }
     where
+      fmtTime (MkTime t) = formatTime defaultTimeLocale "%e %B %Y" t
+      isoTime (MkTime t) = iso8601Show t
       (.:) x y = x Aeson..: Aeson.fromString (fieldMod y)
       (.:?) x y = x Aeson..:? Aeson.fromString (fieldMod y)
       (.!=) = (Aeson..!=)
@@ -152,12 +196,6 @@ instance ToJSON Site where
 
 instance FromJSON Site where
   parseJSON = Aeson.genericParseJSON aesonOptions
-
-linkifyTags :: Set Tag -> Set Tag
-linkifyTags = Set.map (Tag
-  . TextL.toStrict
-  . renderText
-  . \(Tag t) -> a_ [href_ (URI.render $ tagLink (Tag t))] ("#" <> toHtmlRaw t))
 
 data Page = Page
   { meta :: Aeson.Object

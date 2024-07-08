@@ -6,17 +6,17 @@ module Blog.Shake
   , PostQ (..)
   , PostA (..)
   , Route (..)
-  , extensions
+  , defaultExtensions
   , forP_
   , gitHashOracle
   , mapP
+  , postExtensions
   , renderMarkdown
   , renderMarkdownIO
   , route
   , routePage
   , routePage'
   , routeStatic
-  , tagsMeta
   , writeFile
   , writePage
   ) where
@@ -31,13 +31,11 @@ import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans
-import           Data.Aeson                 ((.=))
 import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString            as BS
 import qualified Data.ByteString.Lazy       as LBS
 import           Data.Foldable              (toList)
 import qualified Data.Map.Strict            as Map
-import qualified Data.Set                   as Set
 import           Data.String                (IsString (..))
 import           Data.Text                  (Text)
 import qualified Data.Text                  as Text
@@ -110,16 +108,6 @@ routePage = route . Dynamic (\input -> FP.takeBaseName input <.> "html")
 routePage' :: FilePath -> FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
 routePage' input output = route (Static False (Just input) output)
 
-tagsMeta :: Site -> Aeson.Value
-tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
-  where
-    f (Tag k) v = (Aeson.object ["tag" .= ("#" <> k), "site" .= Aeson.Object ("posts" .= v)] :)
-    tagMap Site{..} =
-      foldr (\p posts -> Set.foldl' (\posts t -> Map.adjust (p:) t posts) posts p.tags)
-      -- foldr (\p posts -> Set.foldl' (flip (Map.adjust (p :))) posts p.tags)
-        (Map.fromAscList . map (, []) $ Set.toAscList tags)
-        posts
-
 ghcHighlight :: Monad m => Text -> Maybe (HtmlT m ())
 ghcHighlight (tokenizeHaskell -> Just x) = pure $
   forM_ x \(c, toHtml -> h) ->
@@ -163,19 +151,21 @@ highlight = blockRenderM \old block -> case block of
    wrap :: Monad m => HtmlT m () -> HtmlT m ()
    wrap x = div_ [class_ "hl"] ("\n" <* pre_ x)
 
-extensions :: [ExtensionT Action]
-extensions =
+defaultExtensions :: [ExtensionT Action]
+defaultExtensions =
   [ MMark.rawBlocks
   , MMark.descriptionList
-  , MMark.demoteHeaders
   , highlight
   ]
 
+postExtensions :: [ExtensionT Action]
+postExtensions = MMark.demoteHeaders : defaultExtensions
+
 renderMarkdown :: FilePath -> Text -> Action Page
-renderMarkdown = MMark.renderMarkdown extensions
+renderMarkdown = MMark.renderMarkdown defaultExtensions
 
 renderMarkdownIO :: FilePath -> Action Page
-renderMarkdownIO = MMark.renderMarkdownIO extensions
+renderMarkdownIO = MMark.renderMarkdownIO defaultExtensions
 
 newtype GitHash = GitHash String
   deriving (Show, Typeable, Eq, Hashable, Binary, NFData)

@@ -4,6 +4,7 @@
 module Blog (main) where
 
 import           Blog.Config
+import qualified Blog.MMark                     as MMark
 import           Blog.Shake
 import qualified Blog.Template                  as Template
 import           Blog.Type
@@ -15,8 +16,14 @@ import           Control.Exception
 import           Control.Monad
 import           Data.Aeson                     ((.=))
 import qualified Data.Aeson                     as Aeson
+import qualified Data.ByteString.Lazy           as LBS
 import qualified Data.Map.Strict                as Map
+import qualified Data.Set                       as Set
+import           Data.String                    (fromString)
 import qualified Data.Text                      as Text
+import qualified Data.Text.Encoding             as Text
+import qualified Data.Time.Clock                as Clock
+import qualified Data.Time.Format.ISO8601       as Clock
 import           Development.Shake              hiding (shakeOptions)
 import qualified Development.Shake              as Shake
 import           Development.Shake.Classes
@@ -29,11 +36,8 @@ import qualified Options.Applicative            as A
 import           Prelude                        hiding (writeFile)
 
 #if defined(ENABLE_WATCH)
-import qualified Data.ByteString.Lazy.Char8     as BS
 import           Data.Function                  (fix)
 import           Data.Maybe                     (catMaybes)
-import qualified Data.Set                       as Set
-import           Data.String                    (fromString)
 import qualified Development.Shake.Database     as Shake
 import           Development.Shake.FilePath     ((<.>))
 import           GHC.Conc                       (forkIO, threadDelay)
@@ -94,9 +98,21 @@ postURL :: Post -> String
 postURL Post{..} = "posts" </> slug </> "index.html"
   where slug = Text.unpack $ titleSlug title
 
+tagsMeta :: Site -> Aeson.Value
+tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
+  where
+    f (Tag k) v = (Aeson.object ["tag" .= ("#" <> k), "site" .= Aeson.Object ("posts" .= v)] :)
+    tagMap Site{..} =
+      foldr (\p posts -> Set.foldl' (\posts t -> Map.adjust (p:) t posts) posts p.tags)
+      -- foldr (\p posts -> Set.foldl' (flip (Map.adjust (p :))) posts p.tags)
+        (Map.fromAscList . map (, []) $ Set.toAscList tags)
+        posts
+
 build ::  BuildOptions -> Rules ()
 build _ = do
   gitHash <- gitHashOracle
+
+  buildTime <- liftIO Clock.getCurrentTime
 
   getSite <- newCache \posts -> do
     hash <- gitHash "master"
@@ -108,14 +124,18 @@ build _ = do
 
   fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracleCache $ \(PostQ input) -> do
     need [input]
-    renderMarkdownIO input >>= \page ->
+
+    MMark.renderMarkdownIO postExtensions input >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
         Aeson.Error err ->
           liftIO . throwIO $ FileError (Just input) err
         Aeson.Success v | Text.null v.title ->
           liftIO . throwIO $ FileError (Just input) "missing metadata field: title"
-        Aeson.Success Post{..}              ->
-          let meta = "tags" .= linkifyTags tags <> page.meta in
+        Aeson.Success Post{..} -> do
+          (Aeson.Object meta) <- pure . Aeson.toJSON $ Post
+            { tags = linkifyTags tags
+            , ..
+            }
           pure $ PostA
             ( Post { body = page.body, .. }
             , Page meta page.body
@@ -181,6 +201,23 @@ build _ = do
     Template.preprocessFile (Aeson.Object $ "tags" .= tagsMeta) tPostList input
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
+
+  routePage' "pages/feed.xml" "feed.xml" \input output -> do
+    putInfo $ unwords ["FEED", input]
+
+    let setUpdated Post{..} = Post{ updated = updated <> published, .. }
+    posts <- getDirectoryFiles "" postsPattern
+      >>= mapP (fmap (setUpdated . fst) . fetchPost)
+
+    tItem <- template "atom-item.xml"
+
+    siteMeta <- jsonInsert "updated" (fromString $ Clock.iso8601Show buildTime)
+      . Aeson.toJSON <$> getSite posts
+
+    Template.preprocessFile siteMeta tItem input
+      >>= writeFile output . LBS.fromStrict . Text.encodeUtf8
+
+    pure ()
 
   postsMap <- liftIO MVar.newEmptyMVar
 
@@ -332,7 +369,7 @@ run o (Preview w) = do
 
     staticSettings path = let s = Wai.defaultFileServerSettings path in s
       { Wai.ss404Handler = Just \_ respond ->
-        BS.readFile (path </> "404.html")
+        LBS.readFile (path </> "404.html")
           >>= respond . Wai.responseLBS Status.status404 []
       , Wai.ssLookupFile = \pieces ->
         case splitAt (length pieces - 1) pieces of

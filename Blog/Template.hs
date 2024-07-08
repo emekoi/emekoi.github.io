@@ -93,14 +93,15 @@ compileDir dir = fmap wrap . addOracleCache $ fix \loop (TemplateQ tName) -> do
 preprocess :: Aeson.Value -> Template -> Maybe FilePath -> Text -> Action Text
 preprocess site (Template _ tc) file input = do
   (ws, out) <- either throw return do
-    nodes <- Stache.parseMustache "<input>" input
+    nodes <- Stache.parseMustache fname input
     pure . fmap TextL.toStrict $ Stache.renderMustacheW
       (Template pname (Map.insert pname nodes tc))
       (Object $ "site" .= site)
   unless (null ws) $
-    liftIO . putStrLn $ unlines (Stache.displayMustacheWarning <$> ws)
+    putInfo . unlines $ (fmtWarning <$> ws)
   pure out
   where
+    fmtWarning x = fname <> ": " <> Stache.displayMustacheWarning x
     throw = liftIO . throwIO . FileError file . Mega.errorBundlePretty
     pname = Stache.PName $ Text.pack fname
     fname = fromMaybe "<input>" file
