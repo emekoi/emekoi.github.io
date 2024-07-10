@@ -15,7 +15,9 @@ flag ci
 
 common base
   ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing
-  ld-options: -Wl,--gc-sections
+  ld-options: -fuse-ld=mold -Wl,--gc-sections,--build-id
+  ld-options: -Wl,--icf=all,--ignore-data-address-equality
+
   default-language: Haskell2010
   default-extensions:
     ApplicativeDo

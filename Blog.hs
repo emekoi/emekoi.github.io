@@ -26,7 +26,7 @@ import qualified Data.Time.Format.ISO8601       as Clock
 import           Development.Shake              hiding (shakeOptions)
 import qualified Development.Shake              as Shake
 import           Development.Shake.Classes
-import           Development.Shake.FilePath     ((</>))
+import           Development.Shake.FilePath     ((</>), (<.>))
 import qualified Development.Shake.FilePath     as Shake
 import           GHC.Clock
 import           GHC.Conc                       (numCapabilities)
@@ -190,7 +190,7 @@ build b = do
   routeStatic1 "feed.json" \output -> do
     putInfo $ unwords ["FEED", output]
 
-    feed <- getDirectoryFiles "" postsPattern
+    feed <- getDirectoryFiles "" postPattern
       >>= mapP (fmap fst . fetchPost)
       >>= fmap jsonFeed . getSite
 
@@ -200,7 +200,7 @@ build b = do
     putInfo $ unwords ["FEED", output]
     tItem <- template "atom-item.xml"
 
-    posts <- getDirectoryFiles "" postsPattern
+    posts <- getDirectoryFiles "" postPattern
       >>= mapP (fmap (atomFeedItem . fst) . fetchPost)
 
     siteMeta <- jsonInsert "updated" (Clock.iso8601Show buildTime)
@@ -221,7 +221,7 @@ build b = do
   routePage "pages/index.md" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
-    posts <- getDirectoryFiles "" postsPattern
+    posts <- getDirectoryFiles "" postPattern
       >>= mapP fetchPost
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
@@ -234,7 +234,7 @@ build b = do
   routeStatic "pages/posts.md" "posts/index.html" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
-    posts <- getDirectoryFiles "" postsPattern
+    posts <- getDirectoryFiles "" postPattern
       >>= mapP (fmap fst . fetchPost)
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
@@ -247,7 +247,7 @@ build b = do
   routeStatic "pages/tags.md" "tags.html" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
-    posts <- getDirectoryFiles "" postsPattern
+    posts <- getDirectoryFiles "" postPattern
       >>= mapP (fmap fst . fetchPost)
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
@@ -260,7 +260,7 @@ build b = do
   postsMap <- liftIO MVar.newEmptyMVar
 
   action $ do
-    files <- getDirectoryFiles "" postsPattern
+    files <- getDirectoryFiles "" postPattern
     map <- Map.fromList <$> forP files \input -> do
       (post, page) <- fetchPost input
       pure (siteOutput </> postURL post, (input, page))
@@ -292,11 +292,18 @@ build b = do
     need deps
 
   where
-    postsPattern
-      |  b.watch =
-        ["drafts/*.md", "drafts/*/index.md", "posts/*.md", "posts/*/index.md"]
-      | otherwise =
-        ["posts/*.md", "posts/*/index.md"]
+    postFolders
+      |  b.watch  = ["posts", "drafts"]
+      | otherwise = ["posts"]
+    postExts = ["md", "lhs"]
+
+    postPattern = concat [
+      [ dir </> "*" <.> ext
+      , dir </> "*" </> "index" <.> ext
+      , dir </> "*" </> "Index" <.> ext
+      ] | dir <- postFolders
+        , ext <- postExts
+      ]
 
 timerStart :: IO (IO String)
 timerStart = do
