@@ -13,8 +13,7 @@
 --
 -- MMark rendering machinery.
 module Text.MMark.Render
-  ( renderM,
-    render
+  ( render
   )
 where
 
@@ -38,8 +37,8 @@ import qualified Text.URI            as URI
 --     * to lazy 'Data.Taxt.Lazy.Text' with 'renderText'
 --     * to lazy 'Data.ByteString.Lazy.ByteString' with 'renderBS'
 --     * directly to file with 'renderToFile'
-renderM :: forall m. Monad m => MMarkT m -> HtmlT m ()
-renderM MMark {..} =
+render :: forall m. Monad m => MMark m -> HtmlT m ()
+render MMark {..} =
   mapM_ rBlock mmarkBlocks
   where
     Extension {..} = mmarkExtension
@@ -55,12 +54,9 @@ renderM MMark {..} =
       x1 <- traverse (applyInlineTrans extInlineTrans) x0
       pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
 
-render :: MMark -> Html ()
-render = renderM
-
 -- | Apply a 'Render' to a given @'Block' 'Html' ()@.
-applyBlockRender :: Monad m => RenderT m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
-applyBlockRender (Render r) = fix (r . defaultBlockRender)
+applyBlockRender :: Monad m => Render m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
+applyBlockRender (Endo r) = fix (r . defaultBlockRender)
 
 -- | The default 'Block' render.
 -- | Rendering function to use to render sub-blocks
@@ -136,8 +132,8 @@ defaultBlockRender blockRender = \case
       CellAlignCenter -> [style_ "text-align:center"]
 
 -- | Apply a render to a given 'Inline'.
-applyInlineRender :: Monad m => RenderT m Inline -> (Inline -> HtmlT m ())
-applyInlineRender (Render r) = fix (r . defaultInlineRender)
+applyInlineRender :: Monad m => Render m Inline -> (Inline -> HtmlT m ())
+applyInlineRender (Endo r) = fix (r . defaultInlineRender)
 
 -- | The default render for 'Inline' elements.
 -- | Rendering function to use to render sub-inlines

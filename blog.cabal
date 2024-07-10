@@ -14,7 +14,8 @@ flag ci
   default:     False
 
 common base
-  ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing -fsplit-sections
+  ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing
+  ld-options: -Wl,--gc-sections
   default-language: Haskell2010
   default-extensions:
     ApplicativeDo
@@ -54,28 +55,22 @@ executable blog
     build-depends:
       , aeson                  ^>= 2.2
       , base                   ^>= 4.19
-      , binary                 ^>= 0.8
-      , bytestring             ^>= 0.11
+      , bytestring             ^>= 0.12
       , containers             ^>= 0.6
       , directory              ^>= 1.3
-      , filepath               ^>= 1.4
-      , foldl                  ^>= 1.4
       , ghc-syntax-highlighter ^>= 0.0.10
       , lucid                  ^>= 2.11
       , megaparsec             ^>= 9.6
       , mmark                  ^>= 0.0.7
       , modern-uri             ^>= 0.3
-      , mtl                    ^>= 2.3
       , optparse-applicative   ^>= 0.18
-      , prettyprinter          ^>= 1.7
-      , process                ^>= 1.6
-      , raw-strings-qq         ^>= 1.1
       , shake                  ^>= 0.19
       , stache                 ^>= 2.3
       , template-haskell       ^>= 2.21
       , text                   ^>= 2.1
       , text-icu               ^>= 0.8
       , time                   ^>= 1.12
+      , transformers           ^>= 0.6
 
     if !flag(ci)
       build-depends:

@@ -11,7 +11,8 @@ import           Blog.Type                  (Page (..), fileError)
 import           Blog.Util
 import           Control.Arrow
 import           Control.Monad
-import           Control.Monad.Trans
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Class
 import           Data.Function              (fix)
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.List.NonEmpty         as NE
@@ -45,8 +46,8 @@ mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link] h)
           uriFragment = URI.mkFragment anchor
         }
 
-applyBlockRender :: Monad m => RenderT m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
-applyBlockRender (Render r) = fix (r . baseBlockRender)
+applyBlockRender :: Monad m => Render m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
+applyBlockRender (Endo r) = fix (r . baseBlockRender)
 
 baseBlockRender :: Monad m => (Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
 baseBlockRender blockRender = \case
@@ -65,7 +66,6 @@ baseBlockRender blockRender = \case
   Heading6 (i, html) ->
     mkHeader h6_ i html >> nl
   CodeBlock _ txt -> do
-    -- div_ [class_ "hl"] (nl <* (pre_ $ toHtml txt))
     pre_ (code_ $ toHtml txt) >> nl
   Naked (_, html) ->
     html >> nl
@@ -118,8 +118,8 @@ baseBlockRender blockRender = \case
       CellAlignRight -> [style_ "text-align:right"]
       CellAlignCenter -> [style_ "text-align:center"]
 
-applyInlineRender :: Monad m => RenderT m Inline -> (Inline -> HtmlT m ())
-applyInlineRender (Render r) = fix (r . baseInlineRender)
+applyInlineRender :: Monad m => Render m Inline -> (Inline -> HtmlT m ())
+applyInlineRender (Endo r) = fix (r . baseInlineRender)
 
 baseInlineRender :: Monad m => (Inline -> HtmlT m ()) -> Inline -> HtmlT m ()
 baseInlineRender inlineRender = \case
@@ -152,8 +152,8 @@ baseInlineRender inlineRender = \case
   Span attrs inner ->
     span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
 
-renderHTML :: forall m. Monad m => [ExtensionT m] -> MMarkT m -> HtmlT m ()
-renderHTML exts (MMark.useExtensionsM exts -> MMark {..}) =
+renderHTML :: forall m. Monad m => [Extension m] -> MMark m -> HtmlT m ()
+renderHTML exts (MMark.useExtensions exts -> MMark {..}) =
   mapM_ rBlock mmarkBlocks
   where
     Extension {..} = mmarkExtension
@@ -177,23 +177,23 @@ md = TH.QuasiQuoter
   , quoteDec  = \_ -> fail "illegal Page QuasiQuote"
   }
 
-renderMarkdown :: (MonadFail m, MonadIO m) => [ExtensionT m] -> FilePath -> Text -> m Page
+renderMarkdown :: (MonadFail m, MonadIO m) => [Extension m] -> FilePath -> Text -> m Page
 renderMarkdown exts input source = do
-  case MMark.parseM input source of
+  case MMark.parse input source of
     Left errs -> fileError (Just input) $ Mega.errorBundlePretty errs
     Right r -> do
       let meta = fromMaybe mempty $ MMark.projectYaml r
       body <- renderTextT $ renderHTML exts r
       pure Page {..}
 
-renderMarkdownIO :: (MonadFail m, MonadIO m) => [ExtensionT m] -> FilePath -> m Page
+renderMarkdownIO :: (MonadFail m, MonadIO m) => [Extension m] -> FilePath -> m Page
 renderMarkdownIO exts file = do
   input <- liftIO $ Text.readFile file
   renderMarkdown exts file input
 
 -- scuffed implementation of description lists
-descriptionList :: MonadFail m => ExtensionT m
-descriptionList = blockRenderM \old -> \case
+descriptionList :: Monad m => Extension m
+descriptionList = blockRender \old -> \case
   Div attrs blocks | elem "dl" (MMark.classes attrs) -> do
     dl_ $ forM_ (pairUp blocks) \(x, y) -> do
       dt_ (old x)
@@ -207,14 +207,14 @@ descriptionList = blockRenderM \old -> \case
     go (acc, Just fst) snd = ((fst, snd) : acc, Nothing)
 
 -- emit blocks with language 'raw' as raw HTML
-rawBlocks :: MonadFail m => ExtensionT m
-rawBlocks = blockRenderM \old -> \case
-  CodeBlock (Just "{=raw}") txt -> toHtmlRaw txt
+rawBlocks :: Monad m => Extension m
+rawBlocks = blockRender \old -> \case
+  CodeBlock (Just "{=raw}") txt ->  toHtmlRaw txt
   x -> old x
 
 -- demote headers by 1 (h1 -> h2, ..., h6 -> p)
-demoteHeaders :: MonadFail m => ExtensionT m
-demoteHeaders = blockTransM \case
+demoteHeaders :: Monad m => Extension m
+demoteHeaders = blockTrans \case
   Heading1 x -> pure $ Heading2 x
   Heading2 x -> pure $ Heading3 x
   Heading3 x -> pure $ Heading4 x

@@ -75,24 +75,20 @@
 -- trade-offs) is really worth it, so it hasn't been implemented so far.
 module Text.MMark.Extension
   ( -- * Extension construction
-    ExtensionT,
+    Extension,
 
     -- ** Block-level manipulation
     Bni,
     Block (..),
     CellAlign (..),
-    blockTransM,
     blockTrans,
-    blockRenderM,
     blockRender,
     Ois,
     getOis,
 
     -- ** Inline-level manipulation
     Inline (..),
-    inlineTransM,
     inlineTrans,
-    inlineRenderM,
     inlineRender,
 
     -- * Scanner construction
@@ -104,7 +100,6 @@ module Text.MMark.Extension
   )
 where
 
-import           Control.Arrow
 import qualified Control.Foldl   as L
 import           Lucid
 import           Text.MMark.Type
@@ -116,11 +111,8 @@ import           Text.MMark.Util
 -- upwards. This has the benefit that the result of any transformation is
 -- final in the sense that sub-elements of resulting block won't be
 -- traversed again.
-blockTransM :: Monad m => (Bni -> m Bni) -> ExtensionT m
-blockTransM f = mempty {extBlockTrans = Kleisli f}
-
-blockTrans :: (Bni -> Bni) -> Extension
-blockTrans f = blockTransM (pure . f)
+blockTrans :: Monad m => (Bni -> m Bni) -> Extension m
+blockTrans f = mempty {extBlockTrans = EndoM f}
 
 -- | Create an extension that replaces or augments rendering of 'Block's of
 -- markdown document. The argument of 'blockRender' will be given the
@@ -135,29 +127,20 @@ blockTrans f = blockTransM (pure . f)
 -- > (Block (Ois, Html ()) -> Html ()) -> (Block (Ois, Html ()) -> Html ())
 --
 -- See also: 'Ois' and 'getOis'.
-blockRenderM :: Monad m => ((Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Block (Ois, HtmlT m ()) -> HtmlT m ()) -> ExtensionT m
-blockRenderM f = mempty {extBlockRender = Render f}
-
-blockRender :: ((Block (Ois, Html ()) -> Html ()) -> Block (Ois, Html ()) -> Html ()) -> Extension
-blockRender = blockRender
+blockRender :: Monad m => ((Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Extension m
+blockRender f = mempty {extBlockRender = Endo f}
 
 -- | Create an extension that performs a transformation on 'Inline'
 -- components in entire markdown document. Similarly to 'blockTrans' the
 -- transformation is applied from the most deeply nested elements moving
 -- upwards.
-inlineTransM :: Monad m => (Inline -> m Inline) -> ExtensionT m
-inlineTransM f = mempty {extInlineTrans = Kleisli f}
-
-inlineTrans :: (Inline -> Inline) -> Extension
-inlineTrans f = inlineTransM (pure . f)
+inlineTrans :: Monad m => (Inline -> m Inline) -> Extension m
+inlineTrans f = mempty {extInlineTrans = EndoM f}
 
 -- | Create an extension that replaces or augments rendering of 'Inline's of
 -- markdown document. This works like 'blockRender'.
-inlineRenderM :: Monad m => ((Inline -> HtmlT m ()) -> Inline -> HtmlT m ()) -> ExtensionT m
-inlineRenderM f = mempty {extInlineRender = Render f}
-
-inlineRender :: ((Inline -> Html ()) -> Inline -> Html ()) -> Extension
-inlineRender = inlineRenderM
+inlineRender :: Monad m => ((Inline -> HtmlT m ()) -> Inline -> HtmlT m ()) -> Extension m
+inlineRender f = mempty {extInlineRender = Endo f}
 
 -- | Create a 'L.Fold' from an initial state and a folding function.
 scanner ::

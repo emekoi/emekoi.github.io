@@ -31,7 +31,7 @@ import           Blog.Util
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Control.Monad.Trans
+import           Control.Monad.Trans.Class
 import qualified Data.Aeson                 as Aeson
 import qualified Data.ByteString            as BS
 import qualified Data.ByteString.Lazy       as LBS
@@ -145,8 +145,8 @@ ghcHighlight (tokenizeHaskell -> Just x) = pure $
       OtherTok       -> Just "x"
 ghcHighlight _ = Nothing
 
-highlight :: ExtensionT Action
-highlight = blockRenderM \old block -> case block of
+highlight :: Extension Action
+highlight = blockRender \old block -> case block of
   CodeBlock (Just "haskell") txt ->
     case ghcHighlight txt of
       Just html -> wrap html
@@ -164,14 +164,14 @@ highlight = blockRenderM \old block -> case block of
    wrap :: Monad m => HtmlT m () -> HtmlT m ()
    wrap x = div_ [class_ "hl"] ("\n" <* pre_ x)
 
-defaultExtensions :: [ExtensionT Action]
+defaultExtensions :: [Extension Action]
 defaultExtensions =
   [ MMark.rawBlocks
   , MMark.descriptionList
   , highlight
   ]
 
-postExtensions :: [ExtensionT Action]
+postExtensions :: [Extension Action]
 postExtensions = MMark.demoteHeaders : defaultExtensions
 
 renderMarkdown :: FilePath -> Text -> Action Page

@@ -13,14 +13,12 @@ import           Blog.Util
 import           Control.Applicative
 import           Control.Arrow
 import qualified Control.Concurrent.MVar        as MVar
-import           Control.Exception
 import           Control.Monad
 import           Data.Aeson                     ((.=))
 import qualified Data.Aeson                     as Aeson
 import qualified Data.ByteString.Lazy           as LBS
 import qualified Data.Map.Strict                as Map
 import qualified Data.Set                       as Set
-import           Data.String                    (fromString)
 import qualified Data.Text                      as Text
 import qualified Data.Text.Encoding             as Text
 import qualified Data.Time.Clock                as Clock
@@ -37,8 +35,10 @@ import qualified Options.Applicative            as A
 import           Prelude                        hiding (writeFile)
 
 #if defined(ENABLE_WATCH)
+import           Control.Exception
 import           Data.Function                  (fix)
 import           Data.Maybe                     (catMaybes)
+import           Data.String                    (fromString)
 import qualified Development.Shake.Database     as Shake
 import           Development.Shake.FilePath     ((<.>))
 import           GHC.Conc                       (forkIO, threadDelay)

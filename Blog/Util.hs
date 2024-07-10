@@ -1,19 +1,17 @@
 module Blog.Util
-  ( ExtensionT
-  , liftAction
+  ( liftAction
   , titleSlug
   , jsonInsert
   ) where
 
 import           Data.Aeson
-import qualified Data.Aeson.KeyMap    as Aeson
-import qualified Data.Char            as Char
-import           Data.Text            (Text)
-import qualified Data.Text            as Text
-import qualified Data.Text.ICU        as ICU
-import qualified Data.Text.ICU.Char   as ICU
+import qualified Data.Aeson.KeyMap  as Aeson
+import qualified Data.Char          as Char
+import           Data.Text          (Text)
+import qualified Data.Text          as Text
+import qualified Data.Text.ICU      as ICU
+import qualified Data.Text.ICU.Char as ICU
 import           Development.Shake
-import           Text.MMark.Extension as MMark
 
 latin1Replace :: Char -> Maybe Text
 latin1Replace '\x0c6' = Just "ae"
