@@ -188,6 +188,7 @@ build b = do
 
   staticFiles "css/*.css"
   staticFiles "fonts//*"
+  staticFiles "static/*"
 
   routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
     putInfo $ unwords ["RESUME", output]

@@ -18,6 +18,10 @@ Email
 Github
 
 [@emekoi]({{site.git}})
+
+GPG Key
+
+[0B81A91D60C23D68](/static/0B81A91D60C23D68.asc)
 :::
 
 # Recent Posts
