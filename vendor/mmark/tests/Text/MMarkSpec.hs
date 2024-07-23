@@ -1,26 +1,28 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Text.MMarkSpec (spec) where
+module Text.MMarkSpec
+    ( spec
+    ) where
 
-import qualified Control.Foldl         as L
-import           Data.Aeson
-import           Data.Char
-import           Data.List.NonEmpty    (NonEmpty (..))
-import qualified Data.List.NonEmpty    as NE
-import           Data.Monoid
-import           Data.Text             (Text)
-import qualified Data.Text             as T
-import qualified Data.Text.IO          as TIO
-import           Lucid
-import           Test.Hspec
-import           Test.Hspec.Megaparsec
-import           Text.Megaparsec       (ErrorFancy (..))
-import qualified Text.MMark            as MMark
-import           Text.MMark            (MMarkErr (..))
-import qualified Text.MMark.Extension  as Ext
-import           Text.MMark.Extension  (Inline (..))
-import           Text.MMark.TestUtils
+import Control.Foldl         qualified as L
+import Data.Aeson
+import Data.Char
+import Data.List.NonEmpty    (NonEmpty (..))
+import Data.List.NonEmpty    qualified as NE
+import Data.Monoid
+import Data.Text             (Text)
+import Data.Text             qualified as T
+import Data.Text.IO          qualified as TIO
+import Lucid
+import Test.Hspec
+import Test.Hspec.Megaparsec
+import Text.Megaparsec       (ErrorFancy (..))
+import Text.MMark            (MMarkErr (..))
+import Text.MMark            qualified as MMark
+import Text.MMark.Extension  (Inline (..))
+import Text.MMark.Extension  qualified as Ext
+import Text.MMark.TestUtils
 
 -- NOTE This test suite is mostly based on (sometimes altered) examples from
 -- the Common Mark specification. We use the version 0.28 (2017-08-01),

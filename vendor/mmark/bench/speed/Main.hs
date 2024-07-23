@@ -1,8 +1,10 @@
-module Main (main) where
+module Main
+    ( main
+    ) where
 
-import           Criterion.Main
-import qualified Data.Text.IO   as T
-import qualified Text.MMark     as MMark
+import Criterion.Main
+import Data.Text.IO   qualified as T
+import Text.MMark     qualified as MMark
 
 main :: IO ()
 main =

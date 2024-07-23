@@ -1,28 +1,26 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Text.MMark.TestUtils
-  ( -- * Document creation and rendering
-    mkDoc,
-    toText,
+    ( -- * Document creation and rendering
+      mkDoc
+    , toText
+      -- * Parser expectations
+    , (##->)
+    , (=->)
+    , (==->)
+    , (~->)
+    , (~~->)
+    ) where
 
-    -- * Parser expectations
-    (~~->),
-    (~->),
-    (=->),
-    (==->),
-    (##->),
-  )
-where
-
-import           Control.Monad
-import qualified Data.List.NonEmpty as NE
-import           Data.Text          (Text)
-import qualified Data.Text.Lazy     as TL
-import qualified Lucid              as L
-import           Test.Hspec
-import           Text.Megaparsec
-import qualified Text.MMark         as MMark
-import           Text.MMark         (MMark, MMarkErr)
+import Control.Monad
+import Data.List.NonEmpty qualified as NE
+import Data.Text          (Text)
+import Data.Text.Lazy     qualified as TL
+import Lucid              qualified as L
+import Test.Hspec
+import Text.Megaparsec
+import Text.MMark         (MMark, MMarkErr)
+import Text.MMark         qualified as MMark
 
 ----------------------------------------------------------------------------
 -- Document creation and rendering

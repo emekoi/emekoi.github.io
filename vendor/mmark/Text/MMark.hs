@@ -113,31 +113,27 @@
 -- "Text.MMark.Extension" module, which has some documentation focusing on
 -- extension writing.
 module Text.MMark
-  ( -- * Parsing
-    MMark,
-    MMarkErr (..),
-    parse,
+    ( -- * Parsing
+      MMark
+    , MMarkErr (..)
+    , parse
+      -- * Extensions
+    , Extension
+    , useExtension
+    , useExtensions
+      -- * Scanning
+    , projectYaml
+    , runScanner
+    , runScannerM
+      -- * Rendering
+    , render
+    ) where
 
-    -- * Extensions
-    Extension,
-    useExtension,
-    useExtensions,
-
-    -- * Scanning
-    runScanner,
-    runScannerM,
-    projectYaml,
-
-    -- * Rendering
-    render,
-  )
-where
-
-import qualified Control.Foldl     as L
-import           Data.Aeson
-import           Text.MMark.Parser (MMarkErr (..), parse)
-import           Text.MMark.Render (render)
-import           Text.MMark.Type
+import Control.Foldl     qualified as L
+import Data.Aeson
+import Text.MMark.Parser (MMarkErr (..), parse)
+import Text.MMark.Render (render)
+import Text.MMark.Type
 
 ----------------------------------------------------------------------------
 -- Extensions

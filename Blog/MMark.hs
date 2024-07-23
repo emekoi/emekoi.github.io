@@ -1,35 +1,35 @@
 module Blog.MMark
-  ( demoteHeaders
-  , descriptionList
-  , md
-  , rawBlocks
-  , renderMarkdown
-  , renderMarkdownIO
-  ) where
+    ( demoteHeaders
+    , descriptionList
+    , md
+    , rawBlocks
+    , renderMarkdown
+    , renderMarkdownIO
+    ) where
 
-import           Blog.Type                  (Page (..), fileError)
-import           Blog.Util
-import           Control.Arrow
-import           Control.Monad
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Class
-import           Data.Function              (fix)
-import           Data.List.NonEmpty         (NonEmpty (..))
-import qualified Data.List.NonEmpty         as NE
-import           Data.Maybe                 (fromMaybe)
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import qualified Data.Text.IO               as Text
-import qualified Language.Haskell.TH.Quote  as TH
-import qualified Language.Haskell.TH.Syntax as TH
-import           Lucid
-import qualified Text.Megaparsec.Error      as Mega
-import qualified Text.MMark                 as MMark
-import           Text.MMark.Extension       as MMark
-import           Text.MMark.Trans
-import           Text.MMark.Type            as MMark
-import           Text.MMark.Util
-import qualified Text.URI                   as URI
+import Blog.Type                  (Page (..), fileError)
+import Blog.Util
+import Control.Arrow
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
+import Data.Function              (fix)
+import Data.List.NonEmpty         (NonEmpty (..))
+import Data.List.NonEmpty         qualified as NE
+import Data.Maybe                 (fromMaybe)
+import Data.Text                  (Text)
+import Data.Text                  qualified as Text
+import Data.Text.IO               qualified as Text
+import Language.Haskell.TH.Quote  qualified as TH
+import Language.Haskell.TH.Syntax qualified as TH
+import Lucid
+import Text.Megaparsec.Error      qualified as Mega
+import Text.MMark                 qualified as MMark
+import Text.MMark.Extension       as MMark
+import Text.MMark.Trans
+import Text.MMark.Type            as MMark
+import Text.MMark.Util
+import Text.URI                   qualified as URI
 
 nl :: Monad m => HtmlT m ()
 nl = "\n"

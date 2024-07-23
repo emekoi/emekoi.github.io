@@ -11,12 +11,11 @@
 --
 -- MMark block\/inline transformation helpers.
 module Text.MMark.Trans
-  ( applyBlockTrans,
-    applyInlineTrans,
-  )
-where
+    ( applyBlockTrans
+    , applyInlineTrans
+    ) where
 
-import           Text.MMark.Type
+import Text.MMark.Type
 
 -- | Apply block transformation in the @'Endo' 'Bni'@ form to a block 'Bni'.
 applyBlockTrans :: Monad m => EndoM m Bni -> Bni -> m Bni

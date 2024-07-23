@@ -13,17 +13,16 @@
 --
 -- Internal utilities.
 module Text.MMark.Util
-  ( asPlainText,
-    lucidAttributes
-  )
-where
+    ( asPlainText
+    , lucidAttributes
+    ) where
 
-import           Data.List.NonEmpty (NonEmpty (..))
-import qualified Data.Map.Strict    as Map
-import           Data.Monoid        (Last (..))
-import           Data.Text          (Text)
-import           Lucid
-import           Text.MMark.Type
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Map.Strict    qualified as Map
+import Data.Monoid        (Last (..))
+import Data.Text          (Text)
+import Lucid
+import Text.MMark.Type
 
 -- | Convert a non-empty collection of 'Inline's into their plain text
 -- representation. This is used e.g. to render image descriptions.

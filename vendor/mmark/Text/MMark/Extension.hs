@@ -74,36 +74,31 @@
 -- way. I'm not sure if the additional complexity (and possible performance
 -- trade-offs) is really worth it, so it hasn't been implemented so far.
 module Text.MMark.Extension
-  ( -- * Extension construction
-    Extension,
+    ( -- * Extension construction
+      Extension
+      -- ** Block-level manipulation
+    , Block (..)
+    , Bni
+    , CellAlign (..)
+    , Ois
+    , blockRender
+    , blockTrans
+    , getOis
+      -- ** Inline-level manipulation
+    , Inline (..)
+    , inlineRender
+    , inlineTrans
+      -- * Scanner construction
+    , scanner
+    , scannerM
+      -- * Utils
+    , asPlainText
+    ) where
 
-    -- ** Block-level manipulation
-    Bni,
-    Block (..),
-    CellAlign (..),
-    blockTrans,
-    blockRender,
-    Ois,
-    getOis,
-
-    -- ** Inline-level manipulation
-    Inline (..),
-    inlineTrans,
-    inlineRender,
-
-    -- * Scanner construction
-    scanner,
-    scannerM,
-
-    -- * Utils
-    asPlainText,
-  )
-where
-
-import qualified Control.Foldl   as L
-import           Lucid
-import           Text.MMark.Type
-import           Text.MMark.Util
+import Control.Foldl   qualified as L
+import Lucid
+import Text.MMark.Type
+import Text.MMark.Util
 
 -- | Create an extension that performs a transformation on 'Block's of
 -- markdown document. Since a block may contain other blocks we choose to

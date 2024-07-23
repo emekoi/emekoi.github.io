@@ -15,54 +15,50 @@
 --
 -- Types for the internal helper definitions for the parser.
 module Text.MMark.Parser.Internal.Type
-  ( -- * Block-level parser state
-    BlockState,
-    initialBlockState,
-    bstAllowNaked,
-    bstRefLevel,
-    bstDefs,
+    ( -- * Block-level parser state
+      BlockState
+    , bstAllowNaked
+    , bstDefs
+    , bstRefLevel
+    , initialBlockState
+      -- * Inline-level parser state
+    , CharType (..)
+    , InlineState
+    , Isp (..)
+    , initialInlineState
+    , istAllowEmpty
+    , istAllowImages
+    , istAllowLinks
+    , istDefs
+    , istLastChar
+      -- * Reference and footnote definitions
+    , DefLabel
+    , Defs
+    , mkDefLabel
+    , referenceDefs
+    , unDefLabel
+      -- * Other
+    , MMarkErr (..)
+    ) where
 
-    -- * Inline-level parser state
-    InlineState,
-    initialInlineState,
-    istLastChar,
-    istAllowEmpty,
-    istAllowLinks,
-    istAllowImages,
-    istDefs,
-    Isp (..),
-    CharType (..),
-
-    -- * Reference and footnote definitions
-    Defs,
-    referenceDefs,
-    DefLabel,
-    mkDefLabel,
-    unDefLabel,
-
-    -- * Other
-    MMarkErr (..),
-  )
-where
-
-import           Control.DeepSeq
-import           Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
-import           Data.Data            (Data)
-import           Data.Hashable        (Hashable)
-import           Data.HashMap.Strict  (HashMap)
-import qualified Data.HashMap.Strict  as HM
-import           Data.List            (intercalate)
-import           Data.List.NonEmpty   (NonEmpty (..))
-import qualified Data.List.NonEmpty   as NE
-import           Data.Proxy
-import           Data.Text            (Text)
-import qualified Data.Text            as T
-import           Data.Typeable        (Typeable)
-import           GHC.Generics
-import           Lens.Micro.TH
-import           Text.Megaparsec
-import           Text.URI             (URI)
+import Control.DeepSeq
+import Data.CaseInsensitive (CI)
+import Data.CaseInsensitive qualified as CI
+import Data.Data            (Data)
+import Data.Hashable        (Hashable)
+import Data.HashMap.Strict  (HashMap)
+import Data.HashMap.Strict  qualified as HM
+import Data.List            (intercalate)
+import Data.List.NonEmpty   (NonEmpty (..))
+import Data.List.NonEmpty   qualified as NE
+import Data.Proxy
+import Data.Text            (Text)
+import Data.Text            qualified as T
+import Data.Typeable        (Typeable)
+import GHC.Generics
+import Lens.Micro.TH
+import Text.Megaparsec
+import Text.URI             (URI)
 
 ----------------------------------------------------------------------------
 -- Block-level parser state
@@ -72,12 +68,12 @@ data BlockState = BlockState
   { -- | Should we consider a paragraph that does not end with a blank line
     -- 'Naked'? It does not make sense to do so in the top-level document,
     -- but in lists, 'Naked' text is pretty common.
-    _bstAllowNaked :: Bool,
+    _bstAllowNaked :: Bool
     -- | Current reference level: 1 column for top-level of document, column
     -- where content starts for block quotes and lists.
-    _bstRefLevel   :: Pos,
+  , _bstRefLevel   :: Pos
     -- | Reference and footnote definitions
-    _bstDefs       :: Defs
+  , _bstDefs       :: Defs
   }
 
 -- | Initial value for 'BlockState'.
@@ -95,15 +91,15 @@ initialBlockState =
 -- | Inline-level parser state.
 data InlineState = InlineState
   { -- | Type of the last encountered character
-    _istLastChar    :: !CharType,
+    _istLastChar    :: !CharType
     -- | Whether to allow empty inlines
-    _istAllowEmpty  :: Bool,
+  , _istAllowEmpty  :: Bool
     -- | Whether to allow parsing of links
-    _istAllowLinks  :: Bool,
+  , _istAllowLinks  :: Bool
     -- | Whether to allow parsing of images
-    _istAllowImages :: Bool,
+  , _istAllowImages :: Bool
     -- | Reference link definitions
-    _istDefs        :: Defs
+  , _istDefs        :: Defs
   }
   deriving (Show)
 
@@ -120,30 +116,28 @@ initialInlineState =
 
 -- | 'Inline' source pending parsing.
 data Isp
-  = -- | We have an inline source pending parsing
-    IspSpan Int Text
-  | -- | We should just return this parse error
-    IspError (ParseError Text MMarkErr)
+  -- | We have an inline source pending parsing
+  = IspSpan Int Text
+  -- | We should just return this parse error
+  | IspError (ParseError Text MMarkErr)
   deriving (Eq, Show)
 
 -- | Type of the last seen character.
 data CharType
-  = -- | White space or a transparent character
-    SpaceChar
-  | -- | Punctuation character
-    PunctChar
-  | -- | Other character
-    OtherChar
+  -- | White space or a transparent character
+  = SpaceChar
+  -- | Punctuation character
+  | PunctChar
+  -- | Other character
+  | OtherChar
   deriving (Eq, Ord, Show)
 
 ----------------------------------------------------------------------------
 -- Reference and footnote definitions
 
 -- | An opaque container for reference and footnote definitions.
-newtype Defs = Defs
-  { -- | Reference definitions containing a 'URI' and optionally title
-    _referenceDefs :: HashMap DefLabel (URI, Maybe Text)
-  }
+newtype Defs
+  = Defs { _referenceDefs :: HashMap DefLabel (URI, Maybe Text) }
   deriving (Show)
 
 -- | Empty 'Defs'.
@@ -154,8 +148,9 @@ emptyDefs =
     }
 
 -- | An opaque type for definition label.
-newtype DefLabel = DefLabel (CI Text)
-  deriving (Eq, Ord, Hashable, Show)
+newtype DefLabel
+  = DefLabel (CI Text)
+  deriving (Eq, Hashable, Ord, Show)
 
 -- | Smart constructor for the 'DefLabel' type.
 mkDefLabel :: Text -> DefLabel
@@ -170,37 +165,37 @@ unDefLabel (DefLabel x) = CI.original x
 
 -- | MMark custom parse errors.
 data MMarkErr
-  = -- | YAML error that occurred during parsing of a YAML block
-    YamlParseError String
-  | -- | This delimiter run should be in left- or right- flanking position
-    NonFlankingDelimiterRun (NonEmpty Char)
-  | -- | Ordered list start numbers must be nine digits or less
-    --
-    -- @since 0.0.2.0
-    ListStartIndexTooBig Word
-  | -- | The index in an ordered list is out of order, first number is the
-    -- actual index we ran into, the second number is the expected index
-    --
-    -- @since 0.0.2.0
-    ListIndexOutOfOrder Word Word
-  | -- | Duplicate reference definitions are not allowed
-    --
-    -- @since 0.0.3.0
-    DuplicateReferenceDefinition Text
-  | -- | Could not find this reference definition, the second argument is
-    -- the collection of close names (typo corrections)
-    --
-    -- @since 0.0.3.0
-    CouldNotFindReferenceDefinition Text [Text]
-  | -- | This numeric character is invalid
-    --
-    -- @since 0.0.3.0
-    InvalidNumericCharacter Int
-  | -- | Unknown HTML5 entity name
-    --
-    -- @since 0.0.3.0
-    UnknownHtmlEntityName Text
-  deriving (Eq, Ord, Show, Read, Generic, Typeable, Data)
+  -- | YAML error that occurred during parsing of a YAML block
+  = YamlParseError String
+  -- | This delimiter run should be in left- or right- flanking position
+  | NonFlankingDelimiterRun (NonEmpty Char)
+  -- | Ordered list start numbers must be nine digits or less
+  --
+  -- @since 0.0.2.0
+  | ListStartIndexTooBig Word
+  -- | The index in an ordered list is out of order, first number is the
+  -- actual index we ran into, the second number is the expected index
+  --
+  -- @since 0.0.2.0
+  | ListIndexOutOfOrder Word Word
+  -- | Duplicate reference definitions are not allowed
+  --
+  -- @since 0.0.3.0
+  | DuplicateReferenceDefinition Text
+  -- | Could not find this reference definition, the second argument is
+  -- the collection of close names (typo corrections)
+  --
+  -- @since 0.0.3.0
+  | CouldNotFindReferenceDefinition Text [Text]
+  -- | This numeric character is invalid
+  --
+  -- @since 0.0.3.0
+  | InvalidNumericCharacter Int
+  -- | Unknown HTML5 entity name
+  --
+  -- @since 0.0.3.0
+  | UnknownHtmlEntityName Text
+  deriving (Data, Eq, Generic, Ord, Read, Show, Typeable)
 
 instance ShowErrorComponent MMarkErr where
   showErrorComponent = \case

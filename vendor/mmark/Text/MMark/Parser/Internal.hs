@@ -12,52 +12,48 @@
 -- An internal module that builds a framework that the "Text.MMark.Parser"
 -- module uses.
 module Text.MMark.Parser.Internal
-  ( -- * Block-level parser monad
-    BParser,
-    runBParser,
-    isNakedAllowed,
-    refLevel,
-    subEnv,
-    registerReference,
+    ( -- * Block-level parser monad
+      BParser
+    , isNakedAllowed
+    , refLevel
+    , registerReference
+    , runBParser
+    , subEnv
+      -- * Inline-level parser monad
+    , CharType (..)
+    , IParser
+    , Isp (..)
+    , disallowEmpty
+    , disallowImages
+    , disallowLinks
+    , getLastChar
+    , isEmptyAllowed
+    , isImagesAllowed
+    , isLinksAllowed
+    , lastChar
+    , lookupReference
+    , runIParser
+      -- * Reference and footnote definitions
+    , Defs
+      -- * Other
+    , MMarkErr (..)
+    ) where
 
-    -- * Inline-level parser monad
-    IParser,
-    runIParser,
-    disallowEmpty,
-    isEmptyAllowed,
-    disallowLinks,
-    isLinksAllowed,
-    disallowImages,
-    isImagesAllowed,
-    getLastChar,
-    lastChar,
-    lookupReference,
-    Isp (..),
-    CharType (..),
-
-    -- * Reference and footnote definitions
-    Defs,
-
-    -- * Other
-    MMarkErr (..),
-  )
-where
-
-import           Control.Monad.State.Strict
-import           Data.Bifunctor
-import           Data.Function                   ((&))
-import           Data.HashMap.Strict             (HashMap)
-import qualified Data.HashMap.Strict             as HM
-import qualified Data.List.NonEmpty              as NE
-import           Data.Ratio                      ((%))
-import           Data.Text                       (Text)
-import           Data.Text.Metrics               (damerauLevenshteinNorm)
-import           Lens.Micro                      (Lens', over, set, (.~), (^.))
-import           Lens.Micro.Extras               (view)
-import qualified Text.Megaparsec                 as M
-import           Text.Megaparsec                 hiding (State)
-import           Text.MMark.Parser.Internal.Type
-import           Text.URI                        (URI)
+import Control.Monad.State.Strict
+import Data.Bifunctor
+import Data.Function                   ((&))
+import Data.HashMap.Strict             (HashMap)
+import Data.HashMap.Strict             qualified as HM
+import Data.List.NonEmpty              qualified as NE
+import Data.Ratio                      ((%))
+import Data.Text                       (Text)
+import Data.Text.Metrics               (damerauLevenshteinNorm)
+import Lens.Micro                      (Lens', over, set, (.~), (^.))
+import Lens.Micro.Extras               (view)
+import Text.Megaparsec                 hiding (State)
+import Text.Megaparsec                 qualified as M
+import Text.MMark.Parser.Internal.Type
+import Text.URI                        (URI)
 
 ----------------------------------------------------------------------------
 -- Block-level parser monad

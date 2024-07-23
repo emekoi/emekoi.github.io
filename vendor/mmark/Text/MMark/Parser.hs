@@ -19,45 +19,44 @@
 --
 -- MMark markdown parser.
 module Text.MMark.Parser
-  ( MMarkErr (..),
-    parse,
-  )
-where
+    ( MMarkErr (..)
+    , parse
+    ) where
 
-import           Control.Applicative                hiding (many, some)
-import           Control.Monad
-import qualified Control.Monad.Combinators.NonEmpty as NE
-import qualified Data.Aeson                         as Aeson
-import           Data.Bifunctor                     (Bifunctor (..))
-import           Data.Bool                          (bool)
-import qualified Data.Char                          as Char
-import qualified Data.HashMap.Strict                as HM
-import           Data.HTML.Entities                 (htmlEntityMap)
-import           Data.List.NonEmpty                 (NonEmpty (..), (<|))
-import qualified Data.List.NonEmpty                 as NE
-import qualified Data.Map.Strict                    as Map
-import           Data.Maybe                         (catMaybes, fromJust,
-                                                     isJust, isNothing)
-import           Data.Monoid                        (Any (..), Last (..))
-import           Data.Ratio                         ((%))
-import qualified Data.Set                           as E
-import           Data.Text                          (Text)
-import qualified Data.Text                          as T
-import qualified Data.Text.Encoding                 as TE
-import           Lens.Micro                         ((^.))
-import qualified Text.Email.Validate                as Email
-import           Text.Megaparsec                    hiding (State (..), parse)
-import           Text.Megaparsec.Char               hiding (eol)
-import qualified Text.Megaparsec.Char.Lexer         as L
-import           Text.MMark.Parser.Internal
-import           Text.MMark.Type
-import           Text.MMark.Util
-import qualified Text.URI                           as URI
-import           Text.URI                           (URI)
-import           Text.URI.Lens                      (uriPath)
+import Control.Applicative                hiding (many, some)
+import Control.Monad
+import Control.Monad.Combinators.NonEmpty qualified as NE
+import Data.Aeson                         qualified as Aeson
+import Data.Bifunctor                     (Bifunctor (..))
+import Data.Bool                          (bool)
+import Data.Char                          qualified as Char
+import Data.HashMap.Strict                qualified as HM
+import Data.HTML.Entities                 (htmlEntityMap)
+import Data.List.NonEmpty                 (NonEmpty (..), (<|))
+import Data.List.NonEmpty                 qualified as NE
+import Data.Map.Strict                    qualified as Map
+import Data.Maybe                         (catMaybes, fromJust, isJust,
+                                           isNothing)
+import Data.Monoid                        (Any (..), Last (..))
+import Data.Ratio                         ((%))
+import Data.Set                           qualified as E
+import Data.Text                          (Text)
+import Data.Text                          qualified as T
+import Data.Text.Encoding                 qualified as TE
+import Lens.Micro                         ((^.))
+import Text.Email.Validate                qualified as Email
+import Text.Megaparsec                    hiding (State (..), parse)
+import Text.Megaparsec.Char               hiding (eol)
+import Text.Megaparsec.Char.Lexer         qualified as L
+import Text.MMark.Parser.Internal
+import Text.MMark.Type
+import Text.MMark.Util
+import Text.URI                           (URI)
+import Text.URI                           qualified as URI
+import Text.URI.Lens                      (uriPath)
 
 #if !defined(ghcjs_HOST_OS)
-import qualified Data.Yaml                          as Yaml
+import Data.Yaml                          qualified as Yaml
 #endif
 
 ----------------------------------------------------------------------------
@@ -65,29 +64,29 @@ import qualified Data.Yaml                          as Yaml
 
 -- | Frame that describes where we are in parsing inlines.
 data InlineFrame
-  = -- | Emphasis with asterisk @*@
-    EmphasisFrame
-  | -- | Emphasis with underscore @_@
-    EmphasisFrame_
-  | -- | Strong emphasis with asterisk @**@
-    StrongFrame
-  | -- | Strong emphasis with underscore @__@
-    StrongFrame_
-  | -- | Strikeout
-    StrikeoutFrame
-  | -- | Subscript
-    SubscriptFrame
-  | -- | Superscript
-    SuperscriptFrame
+  -- | Emphasis with asterisk @*@
+  = EmphasisFrame
+  -- | Emphasis with underscore @_@
+  | EmphasisFrame_
+  -- | Strong emphasis with asterisk @**@
+  | StrongFrame
+  -- | Strong emphasis with underscore @__@
+  | StrongFrame_
+  -- | Strikeout
+  | StrikeoutFrame
+  -- | Subscript
+  | SubscriptFrame
+  -- | Superscript
+  | SuperscriptFrame
   deriving (Eq, Ord, Show)
 
 -- | State of inline parsing that specifies whether we expect to close one
 -- frame or there is a possibility to close one of two alternatives.
 data InlineState
-  = -- | One frame to be closed
-    SingleFrame InlineFrame
-  | -- | Two frames to be closed
-    DoubleFrame InlineFrame InlineFrame
+  -- | One frame to be closed
+  = SingleFrame InlineFrame
+  -- | Two frames to be closed
+  | DoubleFrame InlineFrame InlineFrame
   deriving (Eq, Ord, Show)
 
 ----------------------------------------------------------------------------

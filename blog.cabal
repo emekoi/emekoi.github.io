@@ -23,19 +23,26 @@ common base
     ApplicativeDo
     BangPatterns
     BlockArguments
+    DataKinds
     DuplicateRecordFields
+    FlexibleContexts
+    FlexibleInstances
+    FunctionalDependencies
     GADTs
     GeneralizedNewtypeDeriving
+    ImportQualifiedPost
     LambdaCase
+    MultiParamTypeClasses
     NamedFieldPuns
     NoFieldSelectors
-    OverloadedLists
+    -- OverloadedLists
     OverloadedRecordDot
     OverloadedStrings
     RecordWildCards
     ScopedTypeVariables
     TupleSections
     TypeApplications
+    TypeFamilies
     TypeOperators
     ViewPatterns
 

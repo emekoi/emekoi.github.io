@@ -2,56 +2,56 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module Blog.Shake
-  ( GitHash (..)
-  , PostQ (..)
-  , PostA (..)
-  , Route (..)
-  , defaultExtensions
-  , forP_
-  , gitHashOracle
-  , mapP
-  , postExtensions
-  , renderMarkdown
-  , renderMarkdownIO
-  , route
-  , routePage
-  , routeStatic
-  , routeStatic1
-  , staticFiles
-  , writeFile
-  , writePage
-  ) where
+    ( GitHash (..)
+    , PostA (..)
+    , PostQ (..)
+    , Route (..)
+    , defaultExtensions
+    , forP_
+    , gitHashOracle
+    , mapP
+    , postExtensions
+    , renderMarkdown
+    , renderMarkdownIO
+    , route
+    , routePage
+    , routeStatic
+    , routeStatic1
+    , staticFiles
+    , writeFile
+    , writePage
+    ) where
 
-import           Blog.Config                (siteOutput)
-import qualified Blog.MMark                 as MMark
-import           Blog.Template              (Template)
-import qualified Blog.Template              as Template
-import           Blog.Type
-import           Blog.Util
-import           Control.Applicative
-import           Control.Monad
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Class
-import qualified Data.Aeson                 as Aeson
-import qualified Data.ByteString            as BS
-import qualified Data.ByteString.Lazy       as LBS
-import           Data.Foldable              (toList)
-import qualified Data.Map.Strict            as Map
-import           Data.String                (IsString (..))
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import qualified Data.Text.Encoding         as Text
-import qualified Data.Text.Lazy.Encoding    as TextL
-import           Development.Shake
-import           Development.Shake.Classes
-import           Development.Shake.FilePath ((<.>), (</>))
-import qualified Development.Shake.FilePath as FP
-import           GHC.Stack
-import           GHC.SyntaxHighlighter      (Token (..), tokenizeHaskell)
-import           Lucid
-import           Prelude                    hiding (writeFile)
-import qualified System.Directory           as Dir
-import           Text.MMark.Extension       as MMark
+import Blog.Config                (siteOutput)
+import Blog.MMark                 qualified as MMark
+import Blog.Template              (Template)
+import Blog.Template              qualified as Template
+import Blog.Type
+import Blog.Util
+import Control.Applicative
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
+import Data.Aeson                 qualified as Aeson
+import Data.ByteString            qualified as BS
+import Data.ByteString.Lazy       qualified as LBS
+import Data.Foldable              (toList)
+import Data.Map.Strict            qualified as Map
+import Data.String                (IsString (..))
+import Data.Text                  (Text)
+import Data.Text                  qualified as Text
+import Data.Text.Encoding         qualified as Text
+import Data.Text.Lazy.Encoding    qualified as TextL
+import Development.Shake
+import Development.Shake.Classes
+import Development.Shake.FilePath ((<.>), (</>))
+import Development.Shake.FilePath qualified as FP
+import GHC.Stack
+import GHC.SyntaxHighlighter      (Token (..), tokenizeHaskell)
+import Lucid
+import Prelude                    hiding (writeFile)
+import System.Directory           qualified as Dir
+import Text.MMark.Extension       as MMark
 
 forP_ :: Foldable t => t a -> (a -> Action b) -> Action ()
 forP_ t f = void $ forP (toList t) f
@@ -180,8 +180,9 @@ renderMarkdown = MMark.renderMarkdown defaultExtensions
 renderMarkdownIO :: FilePath -> Action Page
 renderMarkdownIO = MMark.renderMarkdownIO defaultExtensions
 
-newtype GitHash = GitHash String
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+newtype GitHash
+  = GitHash String
+  deriving (Binary, Eq, Hashable, NFData, Show, Typeable)
 
 type instance RuleResult GitHash = Text
 
@@ -189,14 +190,16 @@ gitHashOracle :: Rules (String -> Action Text)
 gitHashOracle = fmap (. GitHash) . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
   cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
 
-newtype PostQ = PostQ FilePath
-  deriving (Typeable, Eq, Hashable, Binary, NFData)
+newtype PostQ
+  = PostQ FilePath
+  deriving (Binary, Eq, Hashable, NFData, Typeable)
 
 instance Show PostQ where
   show (PostQ p) = show p
 
-newtype PostA = PostA { unPostA :: (Post, Page) }
-  deriving (Typeable, Eq, Hashable, Binary, NFData)
+newtype PostA
+  = PostA { unPostA :: (Post, Page) }
+  deriving (Binary, Eq, Hashable, NFData, Typeable)
 
 instance Show PostA where
   show (PostA (p, _)) = show p

@@ -1,11 +1,11 @@
 module Blog.Config
-  ( module Blog.Config
-  ) where
+    ( module Blog.Config
+    ) where
 
-import           Blog.Type
-import qualified Data.List as List
-import qualified Data.Ord  as Ord
-import           Data.Text (Text)
+import Blog.Type
+import Data.List qualified as List
+import Data.Ord  qualified as Ord
+import Data.Text (Text)
 
 author      :: Text
 description :: Text

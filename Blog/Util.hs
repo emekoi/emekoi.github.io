@@ -1,17 +1,17 @@
 module Blog.Util
-  ( liftAction
-  , titleSlug
-  , jsonInsert
-  ) where
+    ( jsonInsert
+    , liftAction
+    , titleSlug
+    ) where
 
-import           Data.Aeson
-import qualified Data.Aeson.KeyMap  as Aeson
-import qualified Data.Char          as Char
-import           Data.Text          (Text)
-import qualified Data.Text          as Text
-import qualified Data.Text.ICU      as ICU
-import qualified Data.Text.ICU.Char as ICU
-import           Development.Shake
+import Data.Aeson
+import Data.Aeson.KeyMap  qualified as Aeson
+import Data.Char          qualified as Char
+import Data.Text          (Text)
+import Data.Text          qualified as Text
+import Data.Text.ICU      qualified as ICU
+import Data.Text.ICU.Char qualified as ICU
+import Development.Shake
 
 latin1Replace :: Char -> Maybe Text
 latin1Replace '\x0c6' = Just "ae"

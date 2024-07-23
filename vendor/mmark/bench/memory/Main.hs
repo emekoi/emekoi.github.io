@@ -1,8 +1,10 @@
-module Main (main) where
+module Main
+    ( main
+    ) where
 
-import qualified Data.Text.IO as T
-import qualified Text.MMark   as MMark
-import           Weigh
+import Data.Text.IO qualified as T
+import Text.MMark   qualified as MMark
+import Weigh
 
 main :: IO ()
 main = mainWith $ do

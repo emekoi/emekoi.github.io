@@ -3,38 +3,38 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module Blog.Template
-  ( Template (..)
-  , compileDir
-  , empty
-  , preprocess
-  , preprocessFile
-  , renderPage
-  ) where
+    ( Template (..)
+    , compileDir
+    , empty
+    , preprocess
+    , preprocessFile
+    , renderPage
+    ) where
 
-import           Blog.Type
-import           Control.Monad
-import           Control.Monad.IO.Class
-import           Data.Aeson                 (Value (..), (.=))
-import qualified Data.Aeson                 as Aeson
-import           Data.Foldable
-import           Data.Function              (fix)
-import           Data.List.NonEmpty         (NonEmpty (..))
-import qualified Data.Map.Strict            as Map
-import           Data.Maybe
-import           Data.Semigroup
-import qualified Data.Set                   as Set
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import qualified Data.Text.IO               as Text
-import qualified Data.Text.Lazy             as TextL
-import           Development.Shake
-import           Development.Shake.Classes
-import           Development.Shake.FilePath ((<.>), (</>))
-import qualified Text.Megaparsec.Error      as Mega
-import qualified Text.Megaparsec.Pos        as Mega
-import qualified Text.Mustache              as Stache
-import qualified Text.Mustache.Parser       as Stache
-import           Text.Mustache.Type         (Node (..), Template (..))
+import Blog.Type
+import Control.Monad
+import Control.Monad.IO.Class
+import Data.Aeson                 (Value (..), (.=))
+import Data.Aeson                 qualified as Aeson
+import Data.Foldable
+import Data.Function              (fix)
+import Data.List.NonEmpty         (NonEmpty (..))
+import Data.Map.Strict            qualified as Map
+import Data.Maybe
+import Data.Semigroup
+import Data.Set                   qualified as Set
+import Data.Text                  (Text)
+import Data.Text                  qualified as Text
+import Data.Text.IO               qualified as Text
+import Data.Text.Lazy             qualified as TextL
+import Development.Shake
+import Development.Shake.Classes
+import Development.Shake.FilePath ((<.>), (</>))
+import Text.Megaparsec.Error      qualified as Mega
+import Text.Megaparsec.Pos        qualified as Mega
+import Text.Mustache              qualified as Stache
+import Text.Mustache.Parser       qualified as Stache
+import Text.Mustache.Type         (Node (..), Template (..))
 
 instance NFData Node
 instance NFData Template
@@ -51,11 +51,13 @@ instance Hashable Node
 instance Hashable Stache.PName
 instance Hashable Template
 
-newtype TemplateQ = TemplateQ FilePath
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData)
+newtype TemplateQ
+  = TemplateQ FilePath
+  deriving (Binary, Eq, Hashable, NFData, Show, Typeable)
 
-newtype TemplateA = TemplateA Template
-  deriving (Typeable, Eq, Hashable, NFData, Binary)
+newtype TemplateA
+  = TemplateA Template
+  deriving (Binary, Eq, Hashable, NFData, Typeable)
 
 instance Show TemplateA where
   show = const "Template{..}"

@@ -13,23 +13,22 @@
 --
 -- MMark rendering machinery.
 module Text.MMark.Render
-  ( render
-  )
-where
+    ( render
+    ) where
 
-import           Control.Arrow
-import           Control.Monad
-import           Control.Monad.Trans
-import           Data.Char           (isSpace)
-import           Data.Function       (fix)
-import           Data.List.NonEmpty  (NonEmpty (..))
-import qualified Data.List.NonEmpty  as NE
-import qualified Data.Text           as T
-import           Lucid
-import           Text.MMark.Trans
-import           Text.MMark.Type
-import           Text.MMark.Util
-import qualified Text.URI            as URI
+import Control.Arrow
+import Control.Monad
+import Control.Monad.Trans
+import Data.Char           (isSpace)
+import Data.Function       (fix)
+import Data.List.NonEmpty  (NonEmpty (..))
+import Data.List.NonEmpty  qualified as NE
+import Data.Text           qualified as T
+import Lucid
+import Text.MMark.Trans
+import Text.MMark.Type
+import Text.MMark.Util
+import Text.URI            qualified as URI
 
 -- | Render a 'MMark' markdown document. You can then render @'Html' ()@ to
 -- various things:

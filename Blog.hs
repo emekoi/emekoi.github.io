@@ -2,53 +2,55 @@
 {-# LANGUAGE NoOverloadedLists #-}
 {-# LANGUAGE TypeFamilies      #-}
 
-module Blog (main) where
+module Blog
+    ( main
+    ) where
 
-import           Blog.Config
-import qualified Blog.MMark                     as MMark
-import           Blog.Shake
-import qualified Blog.Template                  as Template
-import           Blog.Type
-import           Blog.Util
-import           Control.Applicative
-import           Control.Arrow
-import qualified Control.Concurrent.MVar        as MVar
-import           Control.Monad
-import           Data.Aeson                     ((.=))
-import qualified Data.Aeson                     as Aeson
-import qualified Data.ByteString.Lazy           as LBS
-import qualified Data.Map.Strict                as Map
-import qualified Data.Set                       as Set
-import qualified Data.Text                      as Text
-import qualified Data.Text.Encoding             as Text
-import qualified Data.Time.Clock                as Clock
-import qualified Data.Time.Format.ISO8601       as Clock
-import           Development.Shake              hiding (shakeOptions)
-import qualified Development.Shake              as Shake
-import           Development.Shake.Classes
-import           Development.Shake.FilePath     ((<.>), (</>))
-import qualified Development.Shake.FilePath     as Shake
-import           GHC.Clock
-import           GHC.Conc                       (numCapabilities)
-import           Numeric                        (showFFloat)
-import qualified Options.Applicative            as A
-import           Prelude                        hiding (writeFile)
+import Blog.Config
+import Blog.MMark                     qualified as MMark
+import Blog.Shake
+import Blog.Template                  qualified as Template
+import Blog.Type
+import Blog.Util
+import Control.Applicative
+import Control.Arrow
+import Control.Concurrent.MVar        qualified as MVar
+import Control.Monad
+import Data.Aeson                     ((.=))
+import Data.Aeson                     qualified as Aeson
+import Data.ByteString.Lazy           qualified as LBS
+import Data.Map.Strict                qualified as Map
+import Data.Set                       qualified as Set
+import Data.Text                      qualified as Text
+import Data.Text.Encoding             qualified as Text
+import Data.Time.Clock                qualified as Clock
+import Data.Time.Format.ISO8601       qualified as Clock
+import Development.Shake              hiding (shakeOptions)
+import Development.Shake              qualified as Shake
+import Development.Shake.Classes
+import Development.Shake.FilePath     ((<.>), (</>))
+import Development.Shake.FilePath     qualified as Shake
+import GHC.Clock
+import GHC.Conc                       (numCapabilities)
+import Numeric                        (showFFloat)
+import Options.Applicative            qualified as A
+import Prelude                        hiding (writeFile)
 
 #if defined(ENABLE_WATCH)
-import           Control.Exception
-import           Data.Function                  (fix)
-import           Data.Maybe                     (catMaybes)
-import           Data.String                    (fromString)
-import qualified Development.Shake.Database     as Shake
-import           GHC.Conc                       (forkIO, threadDelay)
-import qualified Network.HTTP.Types.Status      as Status
-import qualified Network.Wai                    as Wai
-import qualified Network.Wai.Application.Static as Wai
-import qualified Network.Wai.Handler.Warp       as Warp
-import qualified System.Directory               as Dir
-import qualified System.FSNotify                as FS
-import           System.FSNotify                (Event (..))
-import qualified WaiAppStatic.Types             as Wai
+import Control.Exception
+import Data.Function                  (fix)
+import Data.Maybe                     (catMaybes)
+import Data.String                    (fromString)
+import Development.Shake.Database     qualified as Shake
+import GHC.Conc                       (forkIO, threadDelay)
+import Network.HTTP.Types.Status      qualified as Status
+import Network.Wai                    qualified as Wai
+import Network.Wai.Application.Static qualified as Wai
+import Network.Wai.Handler.Warp       qualified as Warp
+import System.Directory               qualified as Dir
+import System.FSNotify                (Event (..))
+import System.FSNotify                qualified as FS
+import WaiAppStatic.Types             qualified as Wai
 #endif
 
 data Options = Options
@@ -58,7 +60,7 @@ data Options = Options
   }
 
 data BuildOptions = BuildOptions
-  { watch  :: Bool
+  { watch :: Bool
   }
 
 data CleanOptions = CleanOptions
@@ -481,7 +483,7 @@ parseOptions = do
         [ A.long "port"
         , A.short 'p'
         , A.metavar "PORT"
-        , A.value 8000
+        , A.value 8080
         , A.showDefault
         ])
       pure PreviewOptions {..}

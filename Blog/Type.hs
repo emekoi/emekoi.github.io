@@ -3,42 +3,42 @@
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
 module Blog.Type
-  ( DisplayTime (..)
-  , FileError (..)
-  , Page (..)
-  , Post (..)
-  , Site (..)
-  , Tag (..)
-  , Time (..)
-  , pattern Time
-  , fileError
-  , linkifyTags
-  , tagLink
-  ) where
+    ( DisplayTime (..)
+    , FileError (..)
+    , Page (..)
+    , Post (..)
+    , Site (..)
+    , Tag (..)
+    , Time (..)
+    , fileError
+    , linkifyTags
+    , pattern Time
+    , tagLink
+    ) where
 
-import           Blog.Util                  (titleSlug)
-import           Control.Applicative
-import           Control.Exception
-import           Control.Monad.IO.Class
-import           Data.Aeson                 (FromJSON (..), ToJSON (..))
-import qualified Data.Aeson                 as Aeson
-import qualified Data.Aeson.Key             as Aeson
-import qualified Data.Char                  as Char
-import qualified Data.List                  as List
-import           Data.List.NonEmpty         (NonEmpty (..))
-import           Data.Set                   (Set)
-import qualified Data.Set                   as Set
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import qualified Data.Text.Lazy             as TextL
-import           Data.Time
-import           Data.Time.Format.ISO8601
-import           Development.Shake.Classes
-import           GHC.Generics
-import qualified Language.Haskell.TH        as TH
-import qualified Language.Haskell.TH.Syntax as TH
-import           Lucid
-import qualified Text.URI                   as URI
+import Blog.Util                  (titleSlug)
+import Control.Applicative
+import Control.Exception
+import Control.Monad.IO.Class
+import Data.Aeson                 (FromJSON (..), ToJSON (..))
+import Data.Aeson                 qualified as Aeson
+import Data.Aeson.Key             qualified as Aeson
+import Data.Char                  qualified as Char
+import Data.List                  qualified as List
+import Data.List.NonEmpty         (NonEmpty (..))
+import Data.Set                   (Set)
+import Data.Set                   qualified as Set
+import Data.Text                  (Text)
+import Data.Text                  qualified as Text
+import Data.Text.Lazy             qualified as TextL
+import Data.Time
+import Data.Time.Format.ISO8601
+import Development.Shake.Classes
+import GHC.Generics
+import Language.Haskell.TH        qualified as TH
+import Language.Haskell.TH.Syntax qualified as TH
+import Lucid
+import Text.URI                   qualified as URI
 
 fieldMod :: String -> String
 fieldMod =
@@ -51,8 +51,9 @@ aesonOptions = Aeson.defaultOptions
   { Aeson.fieldLabelModifier = fieldMod
   }
 
-newtype Tag = Tag Text
-  deriving (Show, Typeable, Eq, Hashable, Binary, NFData, Ord, ToJSON, FromJSON)
+newtype Tag
+  = Tag Text
+  deriving (Binary, Eq, FromJSON, Hashable, NFData, Ord, Show, ToJSON, Typeable)
 
 tagLink :: Tag -> URI.URI
 tagLink (Tag t) = URI.URI
@@ -71,8 +72,9 @@ linkifyTags = Set.map (Tag
   . renderText
   . \(Tag t) -> a_ [href_ (URI.render $ tagLink (Tag t))] ("#" <> toHtmlRaw t))
 
-newtype Time = MkTime UTCTime
-  deriving (Generic, Show, Typeable, Eq, Hashable, NFData, Ord)
+newtype Time
+  = MkTime UTCTime
+  deriving (Eq, Generic, Hashable, NFData, Ord, Show, Typeable)
 
 pattern Time :: Day -> DiffTime -> Time
 pattern Time day diff = MkTime (UTCTime day diff)
@@ -133,7 +135,7 @@ data Post = Post
   , updated   :: DisplayTime
   , slug      :: Text
   }
-  deriving (Generic, Typeable, Eq)
+  deriving (Eq, Generic, Typeable)
 
 instance Show Post where
   show Post{..} = "Post{" ++ show title ++ "}"
@@ -152,7 +154,7 @@ instance FromJSON Post where
     hideTitle <- o .:? "hideTitle" .!= False
     published <- o .:? "published"
     subtitle  <- o .:? "subtitle"
-    tags      <- o .:? "tags" .!= []
+    tags      <- o .:? "tags" .!= mempty
     title     <- o .: "title"
     -- updated   <- fmap (<|> published) (o .:? "updated")
     updated   <- o .:? "updated"
@@ -204,7 +206,7 @@ data Page = Page
   { meta :: Aeson.Object
   , body :: TextL.Text
   }
-  deriving (Show, Typeable, Eq, Generic)
+  deriving (Eq, Generic, Show, Typeable)
 
 instance Hashable Page
 instance NFData Page
@@ -231,7 +233,7 @@ data FileError = FileError
   { path :: Maybe FilePath
   , msg  :: String
   }
-  deriving (Show, Typeable, Generic)
+  deriving (Generic, Show, Typeable)
 
 instance Exception FileError where
   displayException p = p.msg
