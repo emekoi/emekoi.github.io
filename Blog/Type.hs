@@ -7,6 +7,7 @@ module Blog.Type
     , FileError (..)
     , Page (..)
     , Post (..)
+    , Publication (..)
     , Site (..)
     , Tag (..)
     , Time (..)
@@ -156,7 +157,6 @@ instance FromJSON Post where
     subtitle  <- o .:? "subtitle"
     tags      <- o .:? "tags" .!= mempty
     title     <- o .: "title"
-    -- updated   <- fmap (<|> published) (o .:? "updated")
     updated   <- o .:? "updated"
     slug      <- o .:? "slug" .!= titleSlug title
     pure Post
@@ -240,3 +240,13 @@ instance Exception FileError where
 
 fileError :: MonadIO m => Maybe FilePath -> String -> m a
 fileError path msg = liftIO . throwIO $ FileError {..}
+
+data Publication = Publication
+  { title   :: Text
+  , uri     :: Text
+  , authors :: [Text]
+  }
+  deriving (Generic)
+
+instance Aeson.FromJSON Publication where
+  parseJSON = Aeson.genericParseJSON aesonOptions

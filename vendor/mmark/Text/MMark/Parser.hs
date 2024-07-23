@@ -1097,17 +1097,24 @@ numRef = do
     then customFailure' o (InvalidNumericCharacter n)
     else return (Char.chr n)
 
+htmlComment :: (MonadParsec e Text m) => m ()
+htmlComment = L.skipBlockCommentNested "<!--" "-->"
+
 sc :: (MonadParsec e Text m) => m ()
-sc = void $ takeWhileP (Just "white space") isSpaceN
+sc = L.space (void $ takeWhileP (Just "white space") isSpaceN)
+  mzero htmlComment
 
 sc1 :: (MonadParsec e Text m) => m ()
-sc1 = void $ takeWhile1P (Just "white space") isSpaceN
+sc1 = L.space (void $ takeWhile1P (Just "white space") isSpaceN)
+  mzero htmlComment
 
 sc' :: (MonadParsec e Text m) => m ()
-sc' = void $ takeWhileP (Just "white space") isSpace
+sc' = L.space (void $ takeWhileP (Just "white space") isSpace)
+  mzero htmlComment
 
 sc1' :: (MonadParsec e Text m) => m ()
-sc1' = void $ takeWhile1P (Just "white space") isSpace
+sc1' = L.space (void $ takeWhile1P (Just "white space") isSpace)
+  mzero htmlComment
 
 eol :: (MonadParsec e Text m) => m ()
 eol =

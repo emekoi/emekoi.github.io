@@ -11,7 +11,6 @@ You can find my resume [here](/static/resume.pdf).
 # Contact
 
 ::: {.dl}
-
 Email
 
 <{{site.email}}>
@@ -19,12 +18,21 @@ Email
 Github
 
 [@emekoi]({{site.git}})
-
 :::
 
 # Recent Posts
 {{> post-list.md }}
 
-# Bibliography
-You can find a list of all the works I have cited (or hope to cite) [here](/bibliography).
+# Publications
 
+::: {.dl}
+{{# site.publications }}
+[{{ title }}]({{ uri }})
+
+{{ authors }}
+
+{{/ site.publications }}
+:::
+
+<!-- # Bibliography -->
+<!-- You can find a list of all the works I have cited (or hope to cite) [here](/bibliography). -->

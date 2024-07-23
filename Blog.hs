@@ -19,6 +19,7 @@ import Control.Monad
 import Data.Aeson                     ((.=))
 import Data.Aeson                     qualified as Aeson
 import Data.ByteString.Lazy           qualified as LBS
+import Data.List                      qualified as List
 import Data.Map.Strict                qualified as Map
 import Data.Set                       qualified as Set
 import Data.Text                      qualified as Text
@@ -97,6 +98,18 @@ postURL :: Post -> String
 postURL Post{..} = "posts" </> slug </> "index.html"
   where slug = Text.unpack $ titleSlug title
 
+pubList :: FilePath -> Action [Aeson.Value]
+pubList file = do
+  need [file]
+  liftIO (Aeson.decode <$> LBS.readFile file) >>= \case
+    Nothing   -> fileError (Just file) "invalid json"
+    Just works -> forM works \Publication{..} ->
+      pure $ Aeson.object
+        [ "title"   .= title
+        , "uri"     .= uri
+        , "authors" .= mconcat (List.intersperse ", " authors)
+        ]
+
 atomFeedItem :: Post -> Post
 atomFeedItem Post{..} = Post
   { updated = updated <> published
@@ -136,8 +149,7 @@ tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
   where
     f (Tag k) v = (Aeson.object ["tag" .= ("#" <> k), "site" .= Aeson.Object ("posts" .= v)] :)
     tagMap Site{..} =
-      foldr (\p posts -> Set.foldl' (\posts t -> Map.adjust (p:) t posts) posts p.tags)
-      -- foldr (\p posts -> Set.foldl' (flip (Map.adjust (p :))) posts p.tags)
+      foldr (\p posts -> Set.foldl' (flip (Map.adjust (p :))) posts p.tags)
         (Map.fromAscList . map (, []) $ Set.toAscList tags)
         posts
 
@@ -225,8 +237,11 @@ build b = do
     posts <- getDirectoryFiles "" postPattern
       >>= mapP fetchPost
 
+    works <- pubList "pages/publications.json"
+
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
-    siteMeta <- Aeson.toJSON <$> getSite (fst <$> take 5 posts)
+    siteMeta <- jsonInsert "publications" works
+      . Aeson.toJSON <$> getSite (fst <$> take 5 posts)
 
     Template.preprocessFile siteMeta tPostList input
       >>= renderMarkdown input
