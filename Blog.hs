@@ -26,7 +26,7 @@ import qualified Data.Time.Format.ISO8601       as Clock
 import           Development.Shake              hiding (shakeOptions)
 import qualified Development.Shake              as Shake
 import           Development.Shake.Classes
-import           Development.Shake.FilePath     ((</>), (<.>))
+import           Development.Shake.FilePath     ((<.>), (</>))
 import qualified Development.Shake.FilePath     as Shake
 import           GHC.Clock
 import           GHC.Conc                       (numCapabilities)
@@ -40,7 +40,6 @@ import           Data.Function                  (fix)
 import           Data.Maybe                     (catMaybes)
 import           Data.String                    (fromString)
 import qualified Development.Shake.Database     as Shake
-import           Development.Shake.FilePath     ((<.>))
 import           GHC.Conc                       (forkIO, threadDelay)
 import qualified Network.HTTP.Types.Status      as Status
 import qualified Network.Wai                    as Wai
@@ -102,17 +101,6 @@ atomFeedItem Post{..} = Post
   , ..
   }
 
-jsonFeedItem :: Post -> Aeson.Value
-jsonFeedItem Post{..} = Aeson.object
-  [ "id"             .= (url <> "/" <> slug)
-  , "url"            .= (url <> "/" <> slug)
-  , "content_html"   .= body
-  , "title"          .= title
-  , "date_published" .= published.iso8601
-  , "date_modified"  .= (updated.iso8601 <|> published.iso8601)
-  , "tags"           .= tags
-  ]
-
 jsonFeed :: Site -> Aeson.Value
 jsonFeed Site{..} = Aeson.object
   [ "version"       .= ("https://jsonfeed.org/version/1.1" :: String)
@@ -129,6 +117,17 @@ jsonFeed Site{..} = Aeson.object
   , "language"      .= lang
   , "items"         .= (jsonFeedItem <$> posts)
   ]
+  where
+    jsonFeedItem :: Post -> Aeson.Value
+    jsonFeedItem Post{..} = Aeson.object
+      [ "id"             .= (url <> "/" <> slug)
+      , "url"            .= (url <> "/" <> slug)
+      , "content_html"   .= body
+      , "title"          .= title
+      , "date_published" .= published.iso8601
+      , "date_modified"  .= (updated.iso8601 <|> published.iso8601)
+      , "tags"           .= tags
+      ]
 
 tagsMeta :: Site -> Aeson.Value
 tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
