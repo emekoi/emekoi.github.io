@@ -13,21 +13,22 @@ module Text.MMark.TestUtils
     ) where
 
 import Control.Monad
-import Data.List.NonEmpty qualified as NE
-import Data.Text          (Text)
-import Data.Text.Lazy     qualified as TL
-import Lucid              qualified as L
+import Data.Functor.Identity
+import Data.List.NonEmpty    qualified as NE
+import Data.Text             (Text)
+import Data.Text.Lazy        qualified as TL
+import Lucid                 qualified as L
 import Test.Hspec
 import Text.Megaparsec
-import Text.MMark         (MMark, MMarkErr)
-import Text.MMark         qualified as MMark
+import Text.MMark            (MMark, MMarkErr)
+import Text.MMark            qualified as MMark
 
 ----------------------------------------------------------------------------
 -- Document creation and rendering
 
 -- | Create an 'MMark' document from the given input reporting an
 -- expectation failure if it cannot be parsed.
-mkDoc :: Text -> IO MMark
+mkDoc :: Text -> IO (MMark Identity)
 mkDoc input =
   case MMark.parse "" input of
     Left bundle -> do
@@ -38,7 +39,7 @@ mkDoc input =
     Right x -> return x
 
 -- | Render an 'MMark' document to 'Text'.
-toText :: MMark -> Text
+toText :: MMark Identity -> Text
 toText = TL.toStrict . L.renderText . MMark.render
 
 ----------------------------------------------------------------------------

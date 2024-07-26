@@ -6,15 +6,16 @@ module Text.MMark.ExtensionSpec
     ( spec
     ) where
 
-import Data.List.NonEmpty   (NonEmpty (..))
-import Data.Text            (Text)
-import Data.Text            qualified as T
-import Lucid                qualified as L
+import Data.Functor.Identity
+import Data.List.NonEmpty    (NonEmpty (..))
+import Data.Text             (Text)
+import Data.Text             qualified as T
+import Lucid                 qualified as L
 import Test.Hspec
 import Test.QuickCheck
-import Text.MMark           qualified as MMark
-import Text.MMark.Extension (Block (..), Inline (..))
-import Text.MMark.Extension qualified as Ext
+import Text.MMark            qualified as MMark
+import Text.MMark.Extension  (Block (..), Inline (..))
+import Text.MMark.Extension  qualified as Ext
 import Text.MMark.TestUtils
 
 spec :: Spec
@@ -107,15 +108,15 @@ instance Arbitrary Text where
 -- Testing extensions
 
 -- | Convert H1 headings into H2 headings.
-h1_to_h2 :: MMark.Extension
+h1_to_h2 :: MMark.Extension Identity
 h1_to_h2 = Ext.blockTrans $ \case
-  Heading1 inner -> Heading2 inner
-  other -> other
+  Heading1 inner -> pure $ Heading2 inner
+  other -> pure other
 
 -- | Add a data attribute calculated based on plain text contents of the
 -- level 1 heading to test the 'Ext.getOis' thing and 'Ext.blockRender' in
 -- general.
-add_h1_content :: MMark.Extension
+add_h1_content :: MMark.Extension Identity
 add_h1_content = Ext.blockRender $ \old block ->
   case block of
     Heading1 inner ->
@@ -125,13 +126,13 @@ add_h1_content = Ext.blockRender $ \old block ->
     other -> old other
 
 -- | Convert all 'Emphasis' to 'Strong'.
-em_to_strong :: MMark.Extension
+em_to_strong :: MMark.Extension Identity
 em_to_strong = Ext.inlineTrans $ \case
-  Emphasis inner -> Strong inner
-  other -> other
+  Emphasis inner -> pure $ Strong inner
+  other -> pure other
 
 -- | Add given class to all 'Emphasis' things.
-add_em_class :: Text -> MMark.Extension
+add_em_class :: Text -> MMark.Extension Identity
 add_em_class given = Ext.inlineRender $ \old inline ->
   case inline of
     Emphasis inner -> L.with (old (Emphasis inner)) [L.class_ given]

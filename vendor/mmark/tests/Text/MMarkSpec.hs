@@ -8,6 +8,7 @@ module Text.MMarkSpec
 import Control.Foldl         qualified as L
 import Data.Aeson
 import Data.Char
+import Data.Functor.Identity
 import Data.List.NonEmpty    (NonEmpty (..))
 import Data.List.NonEmpty    qualified as NE
 import Data.Monoid
@@ -69,8 +70,8 @@ spec = parallel $ do
       it "CM12" $
         let s = "- `one\n- two`"
          in s
-              ~~-> [ err 6 (ueib <> etok '`' <> ecsc),
-                     err 13 (ueib <> etok '`' <> ecsc)
+              ~~-> [ err 6 (ueib <> etok '`' <> ecsc <> eri),
+                     err 13 (ueib <> etok '`' <> ecsc <> eri)
                    ]
     context "4.1 Thematic breaks" $ do
       it "CM13" $
@@ -210,8 +211,8 @@ spec = parallel $ do
       it "CM60" $
         let s = "`Foo\n----\n`\n\n<a title=\"a lot\n---\nof dashes\"/>\n"
          in s
-              ~~-> [ err 4 (ueib <> etok '`' <> ecsc),
-                     err 11 (ueib <> etok '`' <> ecsc)
+              ~~-> [ err 4 (ueib <> etok '`' <> ecsc <> eri),
+                     err 11 (ueib <> etok '`' <> ecsc <> eri)
                    ]
       it "CM61" $
         "> Foo\n---"
@@ -319,7 +320,7 @@ spec = parallel $ do
           ==-> "<pre><code>aaa\n~~~\n</code></pre>\n"
       it "CM95" $
         let s = "```"
-         in s ~-> err 3 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 3 (ueib <> etok '`' <> ecsc <> eri)
       it "CM96" $
         let s = "`````\n\n```\naaa\n"
          in s
@@ -805,7 +806,7 @@ spec = parallel $ do
     context "6 Inlines" $
       it "CM288" $
         let s = "`hi`lo`\n"
-         in s ~-> err 7 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 7 (ueib <> etok '`' <> ecsc <> eri)
     context "6.1 Blackslash escapes" $ do
       it "CM289" $
         "\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\`\\{\\|\\}\\~\n"
@@ -921,7 +922,7 @@ spec = parallel $ do
         "`foo `` bar`" ==-> "<p><code>foo `` bar</code></p>\n"
       it "CM321" $
         let s = "`foo\\`bar`\n"
-         in s ~-> err 10 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 10 (ueib <> etok '`' <> ecsc <> eri)
       it "CM322" $
         let s = "*foo`*`\n"
          in s ~-> err 7 (ueib <> etok '*' <> eic)
@@ -930,25 +931,25 @@ spec = parallel $ do
          in s ~-> err 20 (ueib <> etok ']' <> eic)
       it "CM324" $
         let s = "`<a href=\"`\">`\n"
-         in s ~-> err 14 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 14 (ueib <> etok '`' <> ecsc <> eri)
       it "CM325" $
         "<a href=\"`\">`"
           ==-> "<p>&lt;a href=&quot;<code>&quot;&gt;</code></p>\n"
       it "CM326" $
         let s = "`<http://foo.bar.`baz>`\n"
-         in s ~-> err 23 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 23 (ueib <> etok '`' <> ecsc <> eri)
       it "CM327" $
         "<http://foo.bar.`baz>`"
           ==-> "<p>&lt;http://foo.bar.<code>baz&gt;</code></p>\n"
       it "CM328" $
         let s = "```foo``\n"
-         in s ~-> err 8 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 8 (ueib <> etok '`' <> ecsc <> eri)
       it "CM329" $
         let s = "`foo\n"
-         in s ~-> err 4 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 4 (ueib <> etok '`' <> ecsc <> eri)
       it "CM330" $
         let s = "`foo``bar``\n"
-         in s ~-> err 11 (ueib <> etok '`' <> ecsc)
+         in s ~-> err 11 (ueib <> etok '`' <> ecsc <> eri)
     context "6.4 Emphasis and strong emphasis" $ do
       it "CM331" $
         "*foo bar*" ==-> "<p><em>foo bar</em></p>\n"
@@ -1940,7 +1941,7 @@ spec = parallel $ do
         let s = "Foo | Bar\n--- | ---\n`foo\nbar` | bar"
          in s
               ~~-> [ err 24 (utok '\n' <> etok '`' <> ecsc),
-                     err 35 (ueib <> etok '`' <> ecsc)
+                     err 35 (ueib <> etok '`' <> ecsc <> eri)
                    ]
       it "parses tables with just header row" $
         "Foo | Bar\n--- | ---"
@@ -1976,7 +1977,7 @@ spec = parallel $ do
     context "multiple parse errors" $ do
       it "they are reported in correct order" $ do
         let s = "Foo `\n\nBar `.\n"
-            pe = ueib <> etok '`' <> ecsc
+            pe = ueib <> etok '`' <> ecsc <> eri
         s
           ~~-> [ err 5 pe,
                  err 13 pe
@@ -2094,10 +2095,10 @@ spec = parallel $ do
 -- Testing extensions
 
 -- | Append given text to all 'Plain' blocks.
-append_ext :: Text -> MMark.Extension
+append_ext :: Text -> MMark.Extension Identity
 append_ext y = Ext.inlineTrans $ \case
-  Plain x -> Plain (x <> y)
-  other -> other
+  Plain x -> pure $ Plain (x <> y)
+  other -> pure other
 
 ----------------------------------------------------------------------------
 -- Testing scanners
@@ -2153,6 +2154,10 @@ ews = elabel "white space"
 -- | Expecting code span content.
 ecsc :: ET s
 ecsc = elabel "code span content"
+
+-- | Expecting raw inline content.
+eri :: ET s
+eri = elabel "raw inline content"
 
 -- | Expecting common URI components.
 euric :: ET Text

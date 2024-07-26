@@ -39,7 +39,7 @@ import Data.Maybe                         (catMaybes, fromJust, isJust,
                                            isNothing)
 import Data.Monoid                        (Any (..), Last (..))
 import Data.Ratio                         ((%))
-import Data.Set                           qualified as E
+import Data.Set                           qualified as Set
 import Data.Text                          (Text)
 import Data.Text                          qualified as T
 import Data.Text.Encoding                 qualified as TE
@@ -159,11 +159,10 @@ pAttributes :: MonadParsec MMarkErr Text m => m Attributes
 pAttributes = between (char '{') (char '}') $ do
   mconcat <$> some ((pClass <|> pId <|> pPair) <* sc)
   where
-    isTokenChar c = not $ or
-      [ isAsciiPunctuation c && c /= '-'
-      , isSpaceN c
-      , c `elem` ['#', '.', '"']
-      ]
+    isTokenChar c = not $ isAsciiPunctuation c && c /= '-'
+      || isSpaceN c
+      || c `elem` ['#', '.', '"']
+
     xmlCompat c = Char.isAsciiLower c && c /= ':'
     isValueChar c = Char.isAscii c &&
       (Char.isAlphaNum c || c `elem` ['_', '-', ':'])
@@ -655,12 +654,16 @@ pInlines = do
     else NE.some $ do
       mch <- lookAhead (anySingle <?> "inline content")
       case mch of
-        '`' -> pCodeSpan
+        '`' -> try pRawInline <|> pCodeSpan
         '[' -> do
           allowsLinks <- isLinksAllowed
-          if allowsLinks
-            then try pLink <|> try pSpan <|> unexpEic (Tokens $ nes '[')
-            else try pSpan <|> unexpEic (Tokens $ nes '[')
+          observing (try pSpan) >>= \case
+            Left err -> if allowsLinks
+              then pLink <|> parseError err
+              -- else unexpEic (Tokens $ nes '[')
+              else parseError err
+            Right x -> pure x
+
         '!' -> do
           gotImage <- (succeeds . void . lookAhead . string) "!["
           allowsImages <- isImagesAllowed
@@ -814,7 +817,7 @@ pPlain = fmap (Plain . bakeText) . foldSome $ do
               then
                 failure
                   (Just . Tokens . nes $ ch)
-                  (E.singleton . Label . NE.fromList $ "inline content")
+                  (Set.singleton . Label . NE.fromList $ "inline content")
               else
                 if Char.isPunctuation ch
                   then char ch <* lastChar PunctChar
@@ -850,8 +853,25 @@ pSpan = do
   void (char '[')
   txt <- disallowEmpty pInlines
   void (char ']')
-  attr <- pAttributes <* sc
+  attr <- try pAttributes
   Span attr txt <$ lastChar OtherChar
+
+-- | Parse a raw inline.
+pRawInline :: IParser Inline
+pRawInline = do
+  n <- try (length <$> some (char '`'))
+  let finalizer = try $ do
+        void $ count n (char '`')
+        void $ chunk "{=raw}"
+  r <-
+    RawInline . collapseWhiteSpace . T.concat
+      <$> manyTill
+        ( label "raw inline content" $
+            takeWhile1P Nothing (== '`')
+              <|> takeWhile1P Nothing (/= '`')
+        )
+        finalizer
+  r <$ lastChar OtherChar
 
 ----------------------------------------------------------------------------
 -- Auxiliary inline-level parsers
@@ -978,7 +998,7 @@ pRfdr frame = try $ do
       expectingInlineContent = region $ \case
         TrivialError pos us es ->
           TrivialError pos us $
-            E.insert (Label $ NE.fromList "inline content") es
+            Set.insert (Label $ NE.fromList "inline content") es
         other -> other
   o <- getOffset
   (void . expectingInlineContent . string) dels
@@ -1240,7 +1260,7 @@ inlineFrameDel = \case
 
 replaceEof :: String -> ParseError Text e -> ParseError Text e
 replaceEof altLabel = \case
-  TrivialError pos us es -> TrivialError pos (f <$> us) (E.map f es)
+  TrivialError pos us es -> TrivialError pos (f <$> us) (Set.map f es)
   FancyError pos xs -> FancyError pos xs
   where
     f EndOfInput = Label (NE.fromList altLabel)
@@ -1337,7 +1357,7 @@ succeeds m = True <$ m <|> pure False
 prependErr :: Int -> MMarkErr -> [Block Isp] -> [Block Isp]
 prependErr o custom blocks = Naked (IspError err) : blocks
   where
-    err = FancyError o (E.singleton $ ErrorCustom custom)
+    err = FancyError o (Set.singleton $ ErrorCustom custom)
 
 mailtoScheme :: URI.RText 'URI.Scheme
 mailtoScheme = fromJust (URI.mkScheme "mailto")
@@ -1349,7 +1369,7 @@ unexpEic :: (MonadParsec e Text m) => ErrorItem Char -> m a
 unexpEic x =
   failure
     (Just x)
-    (E.singleton . Label . NE.fromList $ "inline content")
+    (Set.singleton . Label . NE.fromList $ "inline content")
 
 nes :: a -> NonEmpty a
 nes a = a :| []
@@ -1372,4 +1392,4 @@ customFailure' o e =
   parseError $
     FancyError
       o
-      (E.singleton (ErrorCustom e))
+      (Set.singleton (ErrorCustom e))
