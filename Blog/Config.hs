@@ -5,16 +5,15 @@ module Blog.Config
 import Blog.Type
 import Data.List qualified as List
 import Data.Ord  qualified as Ord
-import Data.Text (Text)
 
-author      :: Text
-description :: Text
-email       :: Text
-git         :: Text
-lang        :: Text
-source      :: Text
-title       :: Text
-url         :: Text
+author      :: StrictText
+description :: StrictText
+email       :: StrictText
+git         :: StrictText
+lang        :: StrictText
+source      :: StrictText
+title       :: StrictText
+url         :: StrictText
 
 author      = "Emeka Nkurumeh"
 description = author <> "'s Blog"
@@ -28,7 +27,7 @@ url         = "https://emekoi.github.io"
 siteOutput :: FilePath
 siteOutput = "_site"
 
-siteBuild :: Text -> [Post] -> Site
+siteBuild :: StrictText -> [Post] -> Site
 siteBuild hash posts = Site
   { author
   , description

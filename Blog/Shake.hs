@@ -39,7 +39,6 @@ import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Foldable              (toList)
 import Data.Map.Strict            qualified as Map
 import Data.String                (IsString (..))
-import Data.Text                  (Text)
 import Data.Text                  qualified as Text
 import Data.Text.Encoding         qualified as Text
 import Data.Text.Lazy.IO          qualified as TextL
@@ -126,14 +125,14 @@ routeStatic input output f = do
   outputFile %> \output -> need [input] *> f input output
   want [outputFile]
 
-ghcHighlight :: Monad m => Text -> Maybe (HtmlT m ())
+ghcHighlight :: Monad m => StrictText -> Maybe (HtmlT m ())
 ghcHighlight (tokenizeHaskell -> Just x) = pure $
   forM_ x \(c, toHtml -> h) ->
     case tokenClass c of
       Just c  -> span_ [class_ c] h
       Nothing -> span_ h
   where
-    tokenClass :: Token -> Maybe Text
+    tokenClass :: Token -> Maybe StrictText
     tokenClass = \case
       KeywordTok     -> Just "k"
       PragmaTok      -> Just "na"
@@ -161,7 +160,7 @@ highlight = blockRender \old block -> case block of
     wrap $ toHtmlRaw html
   _ -> old block
  where
-   pygmentize :: Text -> BS.ByteString -> Action BS.ByteString
+   pygmentize :: StrictText -> BS.ByteString -> Action BS.ByteString
    pygmentize lang raw = fromStdout <$> cmd @(CmdOption -> [String] -> Action _)
      (StdinBS (BS.fromStrict raw))
      [ "pygmentize", "-l", Text.unpack lang, "-f", "html", "-O", "nowrap=True"]
@@ -211,7 +210,7 @@ defaultExtensions =
 postExtensions :: [Extension Action]
 postExtensions = MMark.demoteHeaders : defaultExtensions
 
-renderMarkdown :: FilePath -> Text -> Action Page
+renderMarkdown :: FilePath -> StrictText -> Action Page
 renderMarkdown = MMark.renderMarkdown defaultExtensions
 
 renderMarkdownIO :: FilePath -> Action Page
@@ -221,9 +220,9 @@ newtype GitHash
   = GitHash String
   deriving (Binary, Eq, Hashable, NFData, Show, Typeable)
 
-type instance RuleResult GitHash = Text
+type instance RuleResult GitHash = StrictText
 
-gitHashOracle :: Rules (String -> Action Text)
+gitHashOracle :: Rules (String -> Action StrictText)
 gitHashOracle = fmap (. GitHash) . addOracle $ \(GitHash branch) -> Text.strip . Text.decodeUtf8 . fromStdout <$>
   cmd @(String -> [String] -> Action _) "git" ["rev-parse", "--short", branch]
 

@@ -7,13 +7,14 @@ module Blog.Util
 import Data.Aeson
 import Data.Aeson.KeyMap  qualified as Aeson
 import Data.Char          qualified as Char
-import Data.Text          (Text)
 import Data.Text          qualified as Text
 import Data.Text.ICU      qualified as ICU
 import Data.Text.ICU.Char qualified as ICU
 import Development.Shake
 
-latin1Replace :: Char -> Maybe Text
+type StrictText = Text.Text
+
+latin1Replace :: Char -> Maybe StrictText
 latin1Replace '\x0c6' = Just "ae"
 latin1Replace '\x0e6' = Just "ae"
 latin1Replace '\x0d0' = Just "d"
@@ -32,7 +33,7 @@ latin1Replace '\x191' = Just "f"
 latin1Replace '\x192' = Just "f"
 latin1Replace _       = Nothing
 
-titleSlug :: Text -> Text
+titleSlug :: StrictText -> StrictText
 titleSlug = f . ICU.nfd
   where
     g c | ICU.property ICU.Diacritic c = ""

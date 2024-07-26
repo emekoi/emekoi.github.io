@@ -7,7 +7,7 @@ module Blog.MMark
     , renderMarkdownIO
     ) where
 
-import Blog.Type                  (Page (..), fileError)
+import Blog.Type                  (Page (..), StrictText, fileError)
 import Blog.Util
 import Control.Arrow
 import Control.Monad
@@ -18,7 +18,6 @@ import Data.Function              (fix)
 import Data.List.NonEmpty         (NonEmpty (..))
 import Data.List.NonEmpty         qualified as NE
 import Data.Maybe                 (fromMaybe)
-import Data.Text                  (Text)
 import Data.Text                  qualified as Text
 import Data.Text.IO               qualified as Text
 import Language.Haskell.TH.Quote  qualified as TH
@@ -178,7 +177,7 @@ md = TH.QuasiQuoter
   , quoteDec  = \_ -> fail "illegal Page QuasiQuote"
   }
 
-renderMarkdown :: (MonadFail m, MonadIO m) => [Extension m] -> FilePath -> Text -> m Page
+renderMarkdown :: (MonadFail m, MonadIO m) => [Extension m] -> FilePath -> StrictText -> m Page
 renderMarkdown exts input source = do
   case MMark.parse input source of
     Left errs -> fileError (Just input) $ Mega.errorBundlePretty errs

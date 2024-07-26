@@ -5,10 +5,14 @@
 module Blog.Type
     ( DisplayTime (..)
     , FileError (..)
+    , LazyByteString
+    , LazyText
     , Page (..)
     , Post (..)
     , Publication (..)
     , Site (..)
+    , StrictByteString
+    , StrictText
     , Tag (..)
     , Time (..)
     , fileError
@@ -24,12 +28,13 @@ import Control.Monad.IO.Class
 import Data.Aeson                 (FromJSON (..), ToJSON (..))
 import Data.Aeson                 qualified as Aeson
 import Data.Aeson.Key             qualified as Aeson
+import Data.ByteString.Char8      qualified as C8
+import Data.ByteString.Lazy.Char8 qualified as LC8
 import Data.Char                  qualified as Char
 import Data.List                  qualified as List
 import Data.List.NonEmpty         (NonEmpty (..))
 import Data.Set                   (Set)
 import Data.Set                   qualified as Set
-import Data.Text                  (Text)
 import Data.Text                  qualified as Text
 import Data.Text.Lazy             qualified as TextL
 import Data.Time
@@ -40,6 +45,12 @@ import Language.Haskell.TH        qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Lucid
 import Text.URI                   qualified as URI
+
+type StrictByteString = C8.ByteString
+type LazyByteString = LC8.ByteString
+
+type StrictText = Text.Text
+type LazyText = TextL.Text
 
 fieldMod :: String -> String
 fieldMod =
@@ -53,7 +64,7 @@ aesonOptions = Aeson.defaultOptions
   }
 
 newtype Tag
-  = Tag Text
+  = Tag StrictText
   deriving (Binary, Eq, FromJSON, Hashable, NFData, Ord, Show, ToJSON, Typeable)
 
 tagLink :: Tag -> URI.URI
@@ -136,15 +147,15 @@ displayTime t = DisplayTime
     isoTime (MkTime t) = iso8601Show t
 
 data Post = Post
-  { body      :: TextL.Text
-  , direction :: Maybe Text
+  { body      :: LazyText
+  , direction :: Maybe StrictText
   , hideTitle :: Bool
   , published :: DisplayTime
-  , subtitle  :: Maybe Text
+  , subtitle  :: Maybe StrictText
   , tags      :: Set Tag
-  , title     :: Text
+  , title     :: StrictText
   , updated   :: DisplayTime
-  , slug      :: Text
+  , slug      :: StrictText
   }
   deriving (Eq, Generic, Typeable)
 
@@ -181,17 +192,17 @@ instance FromJSON Post where
       (.!=) = (Aeson..!=)
 
 data Site = Site
-  { author      :: Text
-  , description :: Text
-  , email       :: Text
-  , git         :: Text
-  , hash        :: Text
-  , lang        :: Text
+  { author      :: StrictText
+  , description :: StrictText
+  , email       :: StrictText
+  , git         :: StrictText
+  , hash        :: StrictText
+  , lang        :: StrictText
   , posts       :: [Post]
-  , source      :: Text
+  , source      :: StrictText
   , tags        :: Set Tag
-  , title       :: Text
-  , url         :: Text
+  , title       :: StrictText
+  , url         :: StrictText
   }
   deriving (Generic)
 
@@ -204,7 +215,7 @@ instance FromJSON Site where
 
 data Page = Page
   { meta :: Aeson.Object
-  , body :: TextL.Text
+  , body :: LazyText
   }
   deriving (Eq, Generic, Show, Typeable)
 
@@ -242,9 +253,9 @@ fileError :: MonadIO m => Maybe FilePath -> String -> m a
 fileError path msg = liftIO . throwIO $ FileError {..}
 
 data Publication = Publication
-  { title   :: Text
-  , uri     :: Text
-  , authors :: [Text]
+  { title   :: StrictText
+  , uri     :: StrictText
+  , authors :: [StrictText]
   }
   deriving (Generic)
 

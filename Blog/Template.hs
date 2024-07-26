@@ -23,7 +23,6 @@ import Data.Map.Strict            qualified as Map
 import Data.Maybe
 import Data.Semigroup
 import Data.Set                   qualified as Set
-import Data.Text                  (Text)
 import Data.Text                  qualified as Text
 import Data.Text.IO               qualified as Text
 import Data.Text.Lazy             qualified as TextL
@@ -95,7 +94,7 @@ compileDir dir = fmap wrap . addOracleCache $ fix \loop (TemplateQ tName) -> do
       | p `Set.notMember` c = (Set.insert p c, Text.unpack (Stache.unPName p) : r)
     getPartials acc _ = acc
 
-preprocess :: Aeson.Value -> Template -> Maybe FilePath -> Text -> Action Text
+preprocess :: Aeson.Value -> Template -> Maybe FilePath -> StrictText -> Action StrictText
 preprocess site (Template _ tc) file input = do
   (ws, out) <- either throw return do
     nodes <- Stache.parseMustache fname input
@@ -111,7 +110,7 @@ preprocess site (Template _ tc) file input = do
     pname = Stache.PName $ Text.pack fname
     fname = fromMaybe "<input>" file
 
-preprocessFile :: Aeson.Value -> Template -> FilePath -> Action Text
+preprocessFile :: Aeson.Value -> Template -> FilePath -> Action StrictText
 preprocessFile site t file = do
   need [file]
   input <- liftIO $ Text.readFile file
