@@ -87,24 +87,22 @@ p:last-child {
 
 .post-list ul {
   list-style: none;
-  padding: 0;
   margin: 0;
+  padding: 0;
 }
 
-/* h1 a, h2 a, h3 a, h4 a, h5 a, h6 a { */
-/*   text-decoration: none; */
-/* } */
-
-/* h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover, h6 a:hover { */
-/*   text-decoration: underline; */
-/* } */
-
-:is(h1, h2, h3, h4, h5, h6) a {
+.anchor, .anchor:visited {
+  color: var(--color-tx-faint);
+  margin-right: 20px;
+  position: absolute;
+  right: 100%;
   text-decoration: none;
+  /* top: 20%; */
 }
 
-:is(h1, h2, h3, h4, h5, h6) a:hover {
-  text-decoration: underline;
+.anchor:before {
+  color: inherit;
+  content: "\00A7";
 }
 
 /* taken from the default pandoc styles */

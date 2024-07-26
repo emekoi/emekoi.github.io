@@ -13,6 +13,7 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
+import Data.Foldable              (foldl')
 import Data.Function              (fix)
 import Data.List.NonEmpty         (NonEmpty (..))
 import Data.List.NonEmpty         qualified as NE
@@ -35,7 +36,7 @@ nl :: Monad m => HtmlT m ()
 nl = "\n"
 
 mkHeader :: Monad m => ([Attribute] -> HtmlT m () -> HtmlT m ()) -> Ois -> HtmlT m () -> HtmlT m ()
-mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link] h)
+mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link, class_ "anchor"] mempty *> h)
   where
     anchor = titleSlug (asPlainText $ getOis i)
     link = URI.URI
@@ -201,7 +202,7 @@ descriptionList = blockRender \old -> \case
     "\n"
   x -> old x
   where
-    pairUp = reverse . fst . foldl go ([], Nothing)
+    pairUp = reverse . fst . foldl' go ([], Nothing)
 
     go (acc, Nothing) fst  = (acc, Just fst)
     go (acc, Just fst) snd = ((fst, snd) : acc, Nothing)
