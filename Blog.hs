@@ -167,6 +167,7 @@ build b = do
 
   template <- Template.compileDir "templates"
 
+  -- fetch and render posts, wrapping the underlying oracle
   fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracleCache $ \(PostQ input) -> do
     need [input]
 
@@ -186,10 +187,12 @@ build b = do
             , Page meta page.body
             )
 
+  -- copy static resources
   staticFiles "css/*.css"
   staticFiles "fonts//*"
   staticFiles "static/*"
 
+  -- build resume
   routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
     putInfo $ unwords ["RESUME", output]
 
@@ -201,6 +204,7 @@ build b = do
       , "-auxdir=" ++ buildDir
       ]
 
+  -- write JSON feed
   routeStatic1 "feed.json" \output -> do
     putInfo $ unwords ["FEED", output]
 
@@ -210,6 +214,7 @@ build b = do
 
     liftIO $ Aeson.encodeFile output feed
 
+  -- write atom feed
   routeStatic "pages/feed.xml" "feed.xml" \input output -> do
     putInfo $ unwords ["FEED", output]
     tItem <- template "atom-item.xml"
@@ -223,15 +228,7 @@ build b = do
     Template.preprocessFile siteMeta tItem input
       >>= writeFile output . LBS.fromStrict . Text.encodeUtf8
 
-  routePage "pages/404.md" \input output -> do
-    putInfo $ unwords ["PAGE", output]
-
-    t <- template "page.html"
-    siteMeta <- getSiteMeta
-
-    renderMarkdownIO input
-      >>= writePage siteMeta t output
-
+  -- index page
   routePage "pages/index.md" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
@@ -248,6 +245,7 @@ build b = do
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
+  -- post archive
   routeStatic "pages/posts.md" "posts/index.html" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
@@ -261,6 +259,7 @@ build b = do
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
+  -- post/tag mappings
   routeStatic "pages/tags.md" "tags.html" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
@@ -274,8 +273,29 @@ build b = do
       >>= renderMarkdown input
       >>= writePage siteMeta tPage output
 
+  -- notes page
+  routeStatic "pages/notes.md" "notes.html" \input output -> do
+    putInfo $ unwords ["PAGE", output]
+
+    tPage <- template "page.html"
+    siteMeta <- getSiteMeta
+
+    MMark.renderMarkdownIO (noteEntry : defaultExtensions) input
+      >>= writePage siteMeta tPage output
+
+  -- 404 page
+  routePage "pages/404.md" \input output -> do
+    putInfo $ unwords ["PAGE", output]
+
+    t <- template "page.html"
+    siteMeta <- getSiteMeta
+
+    renderMarkdownIO input
+      >>= writePage siteMeta t output
+
   postsMap <- liftIO MVar.newEmptyMVar
 
+  -- need all posts and map outputs to inputs
   action $ do
     files <- getDirectoryFiles "" postPattern
     map <- Map.fromList <$> forP files \input -> do
@@ -285,6 +305,7 @@ build b = do
     runAfter . void $ MVar.takeMVar postsMap
     need $ Map.keys map
 
+  -- render each post
   siteOutput </> "posts/*/index.html" %> \output -> do
     putInfo $ unwords ["POST", output
                       ]
@@ -298,6 +319,7 @@ build b = do
       outDir = Shake.takeDirectory output
       inDir  = Shake.takeDirectory input
 
+    -- copy over associated static data
     deps <- if length (Shake.splitPath inDir) == 1
       then pure [input]
       else do

@@ -125,6 +125,16 @@ instance ToJSON DisplayTime where
 instance FromJSON DisplayTime where
   parseJSON = Aeson.genericParseJSON aesonOptions
 
+displayTime :: Maybe Time -> DisplayTime
+displayTime t = DisplayTime
+  { time    = t
+  , fmt     = fmtTime <$> t
+  , iso8601 = isoTime <$> t
+  }
+  where
+    fmtTime (MkTime t) = formatTime defaultTimeLocale "%e %B %Y" t
+    isoTime (MkTime t) = iso8601Show t
+
 data Post = Post
   { body      :: TextL.Text
   , direction :: Maybe Text
@@ -161,21 +171,11 @@ instance FromJSON Post where
     slug      <- o .:? "slug" .!= titleSlug title
     pure Post
       { body      = mempty
-      , published = DisplayTime
-        { time    = published
-        , fmt     = fmtTime <$> published
-        , iso8601 = isoTime <$> published
-        }
-      , updated   = DisplayTime
-        { time    = updated
-        , fmt     = fmtTime <$> updated
-        , iso8601 = isoTime <$> updated
-        }
+      , published = displayTime published
+      , updated   = displayTime updated
       , ..
       }
     where
-      fmtTime (MkTime t) = formatTime defaultTimeLocale "%e %B %Y" t
-      isoTime (MkTime t) = iso8601Show t
       (.:) x y = x Aeson..: Aeson.fromString (fieldMod y)
       (.:?) x y = x Aeson..:? Aeson.fromString (fieldMod y)
       (.!=) = (Aeson..!=)

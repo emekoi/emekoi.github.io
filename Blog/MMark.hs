@@ -194,7 +194,7 @@ renderMarkdownIO exts file = do
 -- scuffed implementation of description lists
 descriptionList :: Monad m => Extension m
 descriptionList = blockRender \old -> \case
-  Div attrs blocks | elem "dl" (MMark.classes attrs) -> do
+  Div attrs blocks | "dl" `elem` attrs.classes -> do
     dl_ $ forM_ (pairUp blocks) \(x, y) -> do
       dt_ (old x)
       dd_ (old y)

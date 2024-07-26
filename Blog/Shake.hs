@@ -10,6 +10,7 @@ module Blog.Shake
     , forP_
     , gitHashOracle
     , mapP
+    , noteEntry
     , postExtensions
     , renderMarkdown
     , renderMarkdownIO
@@ -33,15 +34,16 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Data.Aeson                 qualified as Aeson
-import Data.ByteString            qualified as BS
-import Data.ByteString.Lazy       qualified as LBS
+import Data.ByteString.Char8      qualified as BS
+import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Foldable              (toList)
 import Data.Map.Strict            qualified as Map
 import Data.String                (IsString (..))
 import Data.Text                  (Text)
 import Data.Text                  qualified as Text
 import Data.Text.Encoding         qualified as Text
-import Data.Text.Lazy.Encoding    qualified as TextL
+import Data.Text.Lazy.IO          qualified as TextL
+import Data.Time
 import Development.Shake
 import Development.Shake.Classes
 import Development.Shake.FilePath ((<.>), (</>))
@@ -52,6 +54,7 @@ import Lucid
 import Prelude                    hiding (writeFile)
 import System.Directory           qualified as Dir
 import Text.MMark.Extension       as MMark
+import Text.MMark.Type            as MMark
 
 forP_ :: Foldable t => t a -> (a -> Action b) -> Action ()
 forP_ t f = void $ forP (toList t) f
@@ -68,9 +71,11 @@ writeFile output contents = do
     LBS.writeFile output contents
 
 writePage :: HasCallStack => Aeson.Value -> Template -> FilePath -> Page -> Action ()
-writePage meta template output = writeFile output
-  . TextL.encodeUtf8
-  . Template.renderPage meta template
+writePage meta template output page =
+  liftIO do
+    Dir.createDirectoryIfMissing True (FP.takeDirectory output)
+    let contents = Template.renderPage meta template page
+    TextL.writeFile output contents
 
 data Route
   = Dynamic (FilePath -> FilePath) FilePattern
@@ -163,6 +168,38 @@ highlight = blockRender \old block -> case block of
 
    wrap :: Monad m => HtmlT m () -> HtmlT m ()
    wrap x = div_ [class_ "hl"] ("\n" <* pre_ x)
+
+noteEntry :: Extension Action
+noteEntry = demote <> renderNote
+  where
+    decode = Aeson.decode
+      . LBS.fromStrict
+      . (\x -> BS.cons '"' (BS.snoc x '"'))
+      . Text.encodeUtf8
+
+    renderNote = blockRender \old block -> case block of
+      Div attrs (title : body) | "note" `elem` attrs.classes ->
+        case attrs.pairs Map.!? "date" >>= decode of
+          Just (MkTime t) -> do
+            article_ $ do
+              old title
+              "\n"
+              div_ [class_ "post-info"] . ul_ . li_ . toHtml $
+                formatTime defaultTimeLocale "%e %B %Y" t
+              "\n"
+              mapM_ old body
+            "\n"
+          Nothing -> old block
+      _ -> old block
+
+    demote = blockTrans \case
+      Heading1 x -> pure $ Heading3 x
+      Heading2 x -> pure $ Heading4 x
+      Heading3 x -> pure $ Heading5 x
+      Heading4 x -> pure $ Heading6 x
+      Heading5 x -> pure $ Paragraph x
+      Heading6 x -> pure $ Paragraph x
+      x -> pure x
 
 defaultExtensions :: [Extension Action]
 defaultExtensions =
