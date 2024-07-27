@@ -216,13 +216,13 @@ build b = do
 
   -- compile literate agda files
   adgaSrcMap <- liftAction $
-    Map.fromList . fmap (\x -> (agdaOut x, x)) <$> getDirectoryFiles "" ["posts/*.lagda.md"]
+    Map.fromList . fmap (\x -> (agdaOut x, x)) <$> getDirectoryFiles "" agdaPostPatterns
 
-  agdaOut "posts/*.lagda.md" %> \output -> do
+  (agdaOut <$> agdaPostPatterns) |%> \output -> do
     putInfo $ unwords ["AGDA", output]
     input <- (Map.! output) <$> adgaSrcMap
     need [input]
-    command_ [Cwd "posts"] "agda"
+    command_ [Cwd $ Shake.takeDirectory input] "agda"
       [ "--html"
       , "--html-highlight=code"
       , "--html-dir=../agda"
@@ -335,7 +335,7 @@ build b = do
 
   -- need all posts and map outputs to inputs
   action $ do
-    files <- getDirectoryFiles "" postPattern
+    files <- getPostFiles
     map <- Map.fromList <$> forP files \input -> do
       (post, page) <- fetchPost input
       pure (siteOutput </> postURL post, (input, page))
@@ -381,9 +381,13 @@ build b = do
         , ext <- postExts
       ]
 
+    getPostFiles = getDirectoryFiles "" postPattern
+
     agdaOut x = Shake.replaceDirectory (Shake.replaceExtensions x "md") "agda"
 
-    getPostFiles = getDirectoryFiles "" postPattern
+    agdaPostPatterns
+      | b.watch   = ["drafts/*.lagda.md", "posts/*.lagda.md"]
+      | otherwise = ["posts/*.lagda.md"]
 
 timerStart :: IO (IO String)
 timerStart = do
