@@ -19,6 +19,7 @@ module Blog.Shake
     , routeStatic
     , routeStatic1
     , staticFiles
+    , staticFiles'
     , writeFile
     , writePage
     ) where
@@ -63,7 +64,7 @@ mapP :: (a -> Action b) -> [a] -> Action [b]
 mapP = flip forP
 {-# INLINE mapP #-}
 
-writeFile :: HasCallStack => FilePath -> LBS.ByteString -> Action ()
+writeFile :: HasCallStack => FilePath -> LazyByteString -> Action ()
 writeFile output contents = do
   liftIO do
     Dir.createDirectoryIfMissing True (FP.takeDirectory output)
@@ -103,12 +104,15 @@ route (Dynamic g pat) f = do
     need [input]
     f input output
 
-staticFiles :: FilePattern -> Rules ()
-staticFiles = flip route f . Dynamic id
+staticFiles' :: FilePattern -> (FilePath -> FilePath) -> Rules ()
+staticFiles' p k = flip route f $ Dynamic k p
   where
     f input output = do
       putInfo $ unwords ["STATIC", output]
       copyFileChanged input output
+
+staticFiles :: FilePattern -> Rules ()
+staticFiles = flip staticFiles' id
 
 routePage :: FilePath -> (FilePath -> FilePath -> Action ()) -> Rules ()
 routePage = route . Dynamic (\input -> FP.takeBaseName input <.> "html")
@@ -160,7 +164,7 @@ highlight = blockRender \old block -> case block of
     wrap $ toHtmlRaw html
   _ -> old block
  where
-   pygmentize :: StrictText -> BS.ByteString -> Action BS.ByteString
+   pygmentize :: StrictText -> StrictByteString -> Action StrictByteString
    pygmentize lang raw = fromStdout <$> cmd @(CmdOption -> [String] -> Action _)
      (StdinBS (BS.fromStrict raw))
      [ "pygmentize", "-l", Text.unpack lang, "-f", "html", "-O", "nowrap=True"]

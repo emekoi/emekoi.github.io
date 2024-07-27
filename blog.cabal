@@ -35,7 +35,6 @@ common base
     MultiParamTypeClasses
     NamedFieldPuns
     NoFieldSelectors
-    -- OverloadedLists
     OverloadedRecordDot
     OverloadedStrings
     RecordWildCards
@@ -51,6 +50,7 @@ executable blog
     ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is Blog
     main-is:     Blog.hs
     other-modules:
+      Blog.Agda
       Blog.Config
       Blog.MMark
       Blog.Shake
@@ -70,6 +70,7 @@ executable blog
       , ghc-syntax-highlighter ^>= 0.0.10
       , lucid                  ^>= 2.11
       , megaparsec             ^>= 9.6
+      , microlens              ^>= 0.4
       , mmark                  ^>= 0.0.7
       , modern-uri             ^>= 0.3
       , optparse-applicative   ^>= 0.18

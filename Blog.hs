@@ -6,6 +6,7 @@ module Blog
     ( main
     ) where
 
+import Blog.Agda                      qualified as Agda
 import Blog.Config
 import Blog.MMark                     qualified as MMark
 import Blog.Shake
@@ -24,6 +25,7 @@ import Data.Map.Strict                qualified as Map
 import Data.Set                       qualified as Set
 import Data.Text                      qualified as Text
 import Data.Text.Encoding             qualified as Text
+import Data.Text.IO                   qualified as Text
 import Data.Time.Clock                qualified as Clock
 import Data.Time.Format.ISO8601       qualified as Clock
 import Development.Shake              hiding (shakeOptions)
@@ -169,9 +171,15 @@ build b = do
 
   -- fetch and render posts, wrapping the underlying oracle
   fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracleCache $ \(PostQ input) -> do
+    (source, input) <- liftIO case Shake.splitExtensions input of
+      (Shake.takeBaseName -> base, ".lagda.md") -> do
+        let input = "agda" </> base <.> "md"
+        Text.readFile input >>= fmap (,input) . Agda.readAgda input
+      _ -> (, input) <$> Text.readFile input
+
     need [input]
 
-    MMark.renderMarkdownIO postExtensions input >>= \page ->
+    MMark.renderMarkdown postExtensions input source >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
         Aeson.Error err ->
           fileError (Just input) err
@@ -191,6 +199,19 @@ build b = do
   staticFiles "css/*.css"
   staticFiles "fonts//*"
   staticFiles "static/*"
+
+  -- copy static agda files
+  route (Dynamic (`Shake.replaceDirectory` "static/agda") "agda/*.html" ) \input output -> do
+    putInfo $ unwords ["AGDA", output]
+
+    let mkPage = Page ("title" .= Shake.takeBaseName input)
+
+    tPage <- template "agda-page.html"
+    siteMeta <- getSiteMeta
+
+    liftIO (Text.readFile input)
+      >>= Agda.readAgdaNaked input
+      >>= (writePage siteMeta tPage output . mkPage)
 
   -- build resume
   routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
@@ -307,8 +328,7 @@ build b = do
 
   -- render each post
   siteOutput </> "posts/*/index.html" %> \output -> do
-    putInfo $ unwords ["POST", output
-                      ]
+    putInfo $ unwords ["POST", output]
     (input, page) <- (Map.! output) <$> liftIO (MVar.readMVar postsMap)
     t <- template "post.html"
     siteMeta <- getSiteMeta
