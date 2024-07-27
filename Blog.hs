@@ -348,11 +348,16 @@ build b = do
     forP deps \file -> do
       copyFileChanged file (Shake.replaceDirectory file outDir)
 
+    case Shake.splitExtensions input of
+      (Shake.takeBaseName -> base, ".lagda.md") ->
+        need ["agda" </> base <.> "md"]
+      _ -> pure ()
+
     need deps
 
   where
     postFolders
-      |  b.watch  = ["posts", "drafts"]
+      |  b.watch  = ["drafts", "posts"]
       | otherwise = ["posts"]
     postExts = ["md", "lhs"]
 
