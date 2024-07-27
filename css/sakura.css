@@ -95,7 +95,7 @@ a, a:visited {
 }
 
 a:hover {
-  color: var(--color-cy) !important;
+  color: var(--color-cy);
 }
 
 ul {

@@ -60,11 +60,6 @@ p:last-child {
   color: var(--color-tx-muted);
 }
 
-/* HACK: no clue how to get muted links with colored hover */
-.post-info a {
-  color: inherit;
-}
-
 .post-info ul {
   list-style: none;
   padding: 0;
@@ -101,7 +96,6 @@ p:last-child {
 }
 
 .anchor:before {
-  color: inherit;
   content: "\00A7";
 }
 
