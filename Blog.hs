@@ -170,14 +170,15 @@ build b = do
   template <- Template.compileDir "templates"
 
   -- fetch and render posts, wrapping the underlying oracle
-  fetchPost <- fmap (\x -> fmap (.unPostA) . x . PostQ) . addOracleCache $ \(PostQ input) -> do
-    (source, input) <- liftIO case Shake.splitExtensions input of
-      (Shake.takeBaseName -> base, ".lagda.md") -> do
-        let input = "agda" </> base <.> "md"
-        Text.readFile input >>= fmap (,input) . Agda.readAgda input
-      _ -> (, input) <$> Text.readFile input
-
+  fetchPost <- fmap wrapPostQ . addOracleCache $ \(PostQ input) -> do
     need [input]
+
+    (source, input) <- case Shake.splitExtensions input of
+      (Shake.takeBaseName -> base, ".lagda.md") ->
+        let input = "agda" </> base <.> "md" in
+        need [input] *> liftIO (Text.readFile input)
+          >>= fmap (,input) . Agda.readAgda input
+      _ -> (, input) <$> liftIO (Text.readFile input)
 
     MMark.renderMarkdown postExtensions input source >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
@@ -213,6 +214,22 @@ build b = do
       >>= Agda.readAgdaNaked input
       >>= (writePage siteMeta tPage output . mkPage)
 
+  -- compile literate agda files
+  adgaSrcMap <- liftAction $
+    Map.fromList . fmap (\x -> (agdaOut x, x)) <$> getDirectoryFiles "" ["posts/*.lagda.md"]
+
+  agdaOut "posts/*.lagda.md" %> \output -> do
+    putInfo $ unwords ["AGDA", output]
+    input <- (Map.! output) <$> adgaSrcMap
+    need [input]
+    command_ [Cwd "posts"] "agda"
+      [ "--html"
+      , "--html-highlight=code"
+      , "--html-dir=../agda"
+      , "--css=agda.css"
+      , Shake.takeFileName input
+      ]
+
   -- build resume
   routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
     putInfo $ unwords ["RESUME", output]
@@ -229,7 +246,7 @@ build b = do
   routeStatic1 "feed.json" \output -> do
     putInfo $ unwords ["FEED", output]
 
-    feed <- getDirectoryFiles "" postPattern
+    feed <- getPostFiles
       >>= mapP (fmap fst . fetchPost)
       >>= fmap jsonFeed . getSite
 
@@ -240,7 +257,7 @@ build b = do
     putInfo $ unwords ["FEED", output]
     tItem <- template "atom-item.xml"
 
-    posts <- getDirectoryFiles "" postPattern
+    posts <- getPostFiles
       >>= mapP (fmap (atomFeedItem . fst) . fetchPost)
 
     siteMeta <- jsonInsert "updated" (Clock.iso8601Show buildTime)
@@ -253,7 +270,7 @@ build b = do
   routePage "pages/index.md" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
-    posts <- getDirectoryFiles "" postPattern
+    posts <- getPostFiles
       >>= mapP fetchPost
 
     works <- pubList "pages/publications.json"
@@ -270,7 +287,7 @@ build b = do
   routeStatic "pages/posts.md" "posts/index.html" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
-    posts <- getDirectoryFiles "" postPattern
+    posts <- getPostFiles
       >>= mapP (fmap fst . fetchPost)
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
@@ -284,7 +301,7 @@ build b = do
   routeStatic "pages/tags.md" "tags.html" \input output -> do
     putInfo $ unwords ["PAGE", output]
 
-    posts <- getDirectoryFiles "" postPattern
+    posts <- getPostFiles
       >>= mapP (fmap fst . fetchPost)
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
@@ -348,11 +365,6 @@ build b = do
     forP deps \file -> do
       copyFileChanged file (Shake.replaceDirectory file outDir)
 
-    case Shake.splitExtensions input of
-      (Shake.takeBaseName -> base, ".lagda.md") ->
-        need ["agda" </> base <.> "md"]
-      _ -> pure ()
-
     need deps
 
   where
@@ -368,6 +380,10 @@ build b = do
       ] | dir <- postFolders
         , ext <- postExts
       ]
+
+    agdaOut x = Shake.replaceDirectory (Shake.replaceExtensions x "md") "agda"
+
+    getPostFiles = getDirectoryFiles "" postPattern
 
 timerStart :: IO (IO String)
 timerStart = do

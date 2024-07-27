@@ -20,6 +20,7 @@ module Blog.Shake
     , routeStatic1
     , staticFiles
     , staticFiles'
+    , wrapPostQ
     , writeFile
     , writePage
     ) where
@@ -245,3 +246,6 @@ instance Show PostA where
   show (PostA (p, _)) = show p
 
 type instance RuleResult PostQ = PostA
+
+wrapPostQ :: (PostQ -> Action PostA) -> FilePath -> Action (Post, Page)
+wrapPostQ k = fmap (.unPostA) . k . PostQ
