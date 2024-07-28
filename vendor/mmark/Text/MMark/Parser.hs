@@ -30,6 +30,7 @@ import Data.Aeson                         qualified as Aeson
 import Data.Bifunctor                     (Bifunctor (..))
 import Data.Bool                          (bool)
 import Data.Char                          qualified as Char
+import Data.DList                         qualified as DList
 import Data.HashMap.Strict                qualified as HM
 import Data.HTML.Entities                 (htmlEntityMap)
 import Data.List.NonEmpty                 (NonEmpty (..), (<|))
@@ -111,8 +112,8 @@ parse file input =
             fmap $
               first (replaceEof "end of inline block")
                 . runIParser defs pInlinesTop
-          e2p = either dSingleton (const dEmpty)
-       in case NE.nonEmpty . dToList $ foldMap (foldMap e2p) parsed of
+          e2p = either DList.singleton (const DList.empty)
+       in case NE.nonEmpty . DList.toList $ foldMap (foldMap e2p) parsed of
             Nothing ->
               Right
                 MMark
@@ -133,10 +134,7 @@ parse file input =
                           pstateLinePrefix = ""
                         }
                   }
-  where
-    dSingleton = Endo . (:)
-    dEmpty     = Endo id
-    dToList    = (`appEndo` [] )
+
 ----------------------------------------------------------------------------
 -- Block parser
 

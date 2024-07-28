@@ -123,13 +123,10 @@ module Text.MMark
     , useExtensions
       -- * Scanning
     , projectYaml
-    , runScanner
-    , runScannerM
       -- * Rendering
     , render
     ) where
 
-import Control.Foldl     qualified as L
 import Data.Aeson
 import Text.MMark.Parser (MMarkErr (..), parse)
 import Text.MMark.Render (render)
@@ -157,39 +154,6 @@ useExtension ext mmark =
 -- applied later, i.e. the last extension in the list is applied first.
 useExtensions :: Monad m => [Extension m] -> MMark m -> MMark m
 useExtensions exts = useExtension (mconcat exts)
-
-----------------------------------------------------------------------------
--- Scanning
-
--- | Scan an 'MMark' document efficiently in one pass. This uses the
--- excellent 'L.Fold' type, which see.
---
--- Take a look at the "Text.MMark.Extension" module if you want to create
--- scanners of your own.
-runScanner ::
-  -- | Document to scan
-  MMark m ->
-  -- | 'L.Fold' to use
-  L.Fold Bni a ->
-  -- | Result of scanning
-  a
-runScanner MMark {..} f = L.fold f mmarkBlocks
-
--- | Like 'runScanner', but allows us to run scanners with monadic context.
---
--- To bring 'L.Fold' and 'L.FoldM' types to the “least common denominator”
--- use 'L.generalize' and 'L.simplify'.
---
--- @since 0.0.2.0
-runScannerM ::
-  (Monad m) =>
-  -- | Document to scan
-  MMark n ->
-  -- | 'L.FoldM' to use
-  L.FoldM m Bni a ->
-  -- | Result of scanning
-  m a
-runScannerM MMark {..} f = L.foldM f mmarkBlocks
 
 -- | Extract contents of an optional YAML block that may have been parsed.
 projectYaml :: MMark m -> Maybe Object

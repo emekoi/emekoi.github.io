@@ -33,7 +33,6 @@ module Text.MMark.Type
     ) where
 
 import Control.DeepSeq
-import Control.Foldl      (EndoM (..))
 import Data.Aeson
 import Data.Data          (Data)
 import Data.Function      (on)
@@ -45,6 +44,15 @@ import Data.Typeable      (Typeable)
 import GHC.Generics
 import Lucid
 import Text.URI           (URI (..))
+
+newtype EndoM m a
+  = EndoM (a -> m a)
+
+instance Monad m => Semigroup (EndoM m a) where
+  EndoM f <> EndoM g = EndoM (\x -> g x >>= f)
+
+instance Monad m => Monoid (EndoM m a) where
+  mempty = EndoM pure
 
 -- | Representation of complete markdown document. You can't look inside of
 -- 'MMark' on purpose. The only way to influence an 'MMark' document you

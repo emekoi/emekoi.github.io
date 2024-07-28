@@ -2044,12 +2044,12 @@ spec = parallel $ do
             ]
       toText (MMark.useExtensions exts doc)
         `shouldBe` "<p>Here we go.123</p>\n"
-  describe "runScanner and scanner" $
+  describe "fold" $
     it "extracts information from markdown document" $ do
       doc <- mkDoc "Here we go, pals."
-      let n = MMark.runScanner doc (length_scan (const True))
+      let n = L.purely (Ext.fold doc) (length_scan (const True))
       n `shouldBe` 17
-  describe "combining of scanners" $
+  describe "combining of folds" $
     it "combines scanners" $ do
       doc <- mkDoc "Here we go, pals."
       let scan =
@@ -2057,7 +2057,7 @@ spec = parallel $ do
               <$> length_scan (const True)
               <*> length_scan isSpace
               <*> length_scan isPunctuation
-          r = MMark.runScanner doc scan
+          r = L.purely (Ext.fold doc) scan
       r `shouldBe` (17, 3, 2)
   describe "projectYaml" $ do
     context "when document does not contain a YAML section" $
@@ -2106,7 +2106,7 @@ append_ext y = Ext.inlineTrans $ \case
 -- | Scan total number of characters satisfying a predicate in all 'Plain'
 -- inlines.
 length_scan :: (Char -> Bool) -> L.Fold (Ext.Block (NonEmpty Inline)) Int
-length_scan p = Ext.scanner 0 $ \n block ->
+length_scan p = L.Fold `flip` 0 `flip` id $ \n block ->
   getSum $ Sum n <> foldMap (foldMap f) block
   where
     f (Plain txt) = (Sum . T.length) (T.filter p txt)
