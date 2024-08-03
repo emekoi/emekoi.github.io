@@ -73,6 +73,7 @@ executable blog
       , microlens              ^>= 0.4
       , mmark                  ^>= 0.0.7
       , modern-uri             ^>= 0.3
+      , mtl                    ^>= 2.3
       , optparse-applicative   ^>= 0.18
       , shake                  ^>= 0.19
       , stache                 ^>= 2.3

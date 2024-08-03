@@ -1,7 +1,11 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 module Blog.MMark
     ( demoteHeaders
     , descriptionList
+    , exposeRaw
     , md
+    , prettifyPlain
     , rawBlocks
     , renderMarkdown
     , renderMarkdownIO
@@ -222,3 +226,28 @@ demoteHeaders = blockTrans \case
   Heading5 x -> pure $ Heading6 x
   Heading6 x -> pure $ Paragraph x
   x -> pure x
+
+-- expose singleton raw blocks
+exposeRaw :: Monad m => Extension m
+exposeRaw = blockTrans \case
+  Paragraph i@(RawInline _ :| []) -> pure $ Naked i
+  x -> pure x
+
+prettifyPlain :: Monad m => Extension m
+prettifyPlain = inlineTrans \case
+  Plain x -> pure . Plain $ Text.unfoldr go x
+  x -> pure x
+  where
+    go i = case Text.uncons i of
+      Just ('.', i) ->
+        case Text.splitAt 2 i of
+          ("..", i) -> Just ('…', i)
+          _         -> Just ('.', i)
+      Just ('-', i) ->
+        case Text.splitAt 2 i of
+          ("--", i) -> Just ('—', i)
+          _ ->
+            case Text.splitAt 1 i of
+              ("-", i) -> Just ('–', i)
+              _        -> Just ('-', i)
+      x -> x

@@ -209,6 +209,8 @@ defaultExtensions :: [Extension Action]
 defaultExtensions =
   [ MMark.rawBlocks
   , MMark.descriptionList
+  , MMark.exposeRaw
+  , MMark.prettifyPlain
   , highlight
   ]
 

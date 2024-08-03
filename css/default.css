@@ -96,7 +96,7 @@ p:last-child {
 }
 
 .anchor:before {
-  content: "\00A7";
+  content: "§";
 }
 
 /* taken from the default pandoc styles */

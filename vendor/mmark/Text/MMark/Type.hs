@@ -46,7 +46,7 @@ import Lucid
 import Text.URI           (URI (..))
 
 newtype EndoM m a
-  = EndoM (a -> m a)
+  = EndoM {appEndoM :: a -> m a}
 
 instance Monad m => Semigroup (EndoM m a) where
   EndoM f <> EndoM g = EndoM (\x -> g x >>= f)

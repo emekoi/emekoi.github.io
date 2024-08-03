@@ -203,7 +203,7 @@ build b = do
 
   -- copy static agda files
   route (Dynamic (`Shake.replaceDirectory` "static/agda") "agda/*.html" ) \input output -> do
-    putInfo $ unwords ["AGDA", output]
+    putInfo $ unwords ["AGDA-STATIC", output]
 
     let mkPage = Page ("title" .= Shake.takeBaseName input)
 
