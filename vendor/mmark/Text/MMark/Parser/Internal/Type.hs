@@ -34,6 +34,7 @@ module Text.MMark.Parser.Internal.Type
       -- * Reference and footnote definitions
     , DefLabel
     , Defs
+    , footnoteDefs
     , mkDefLabel
     , referenceDefs
     , unDefLabel
@@ -58,6 +59,7 @@ import Data.Typeable        (Typeable)
 import GHC.Generics
 import Lens.Micro.TH
 import Text.Megaparsec
+import Text.MMark.Type      (Block)
 import Text.URI             (URI)
 
 ----------------------------------------------------------------------------
@@ -136,8 +138,10 @@ data CharType
 -- Reference and footnote definitions
 
 -- | An opaque container for reference and footnote definitions.
-newtype Defs
-  = Defs { _referenceDefs :: HashMap DefLabel (URI, Maybe Text) }
+data Defs = Defs
+  { _referenceDefs :: HashMap DefLabel (URI, Maybe Text)
+  , _footnoteDefs  :: HashMap DefLabel (Block Isp)
+  }
   deriving (Show)
 
 -- | Empty 'Defs'.
@@ -145,6 +149,7 @@ emptyDefs :: Defs
 emptyDefs =
   Defs
     { _referenceDefs = HM.empty
+    , _footnoteDefs = HM.empty
     }
 
 -- | An opaque type for definition label.
@@ -195,6 +200,11 @@ data MMarkErr
   --
   -- @since 0.0.3.0
   | UnknownHtmlEntityName Text
+  -- | Duplicate reference definitions are not allowed
+  | DuplicateFootnoteDefinition Text
+  -- | Could not find this reference definition, the second argument is
+  -- the collection of close names (typo corrections)
+  | CouldNotFindFootnoteDefinition Text [Text]
   deriving (Data, Eq, Generic, Ord, Read, Show, Typeable)
 
 instance ShowErrorComponent MMarkErr where
@@ -233,6 +243,22 @@ instance ShowErrorComponent MMarkErr where
       "invalid numeric character: " ++ show n
     UnknownHtmlEntityName name ->
       "unknown HTML5 entity name: \"" ++ T.unpack name ++ "\""
+    DuplicateFootnoteDefinition name ->
+      "duplicate footnote definitions are not allowed: \""
+        ++ T.unpack name
+        ++ "\""
+    CouldNotFindFootnoteDefinition name alts ->
+      "could not find a matching footnote definition for \""
+        ++ T.unpack name
+        ++ "\""
+        ++ case NE.nonEmpty alts of
+          Nothing -> ""
+          Just xs ->
+            "\nperhaps you meant "
+              ++ orList (quote . T.unpack <$> xs)
+              ++ "?"
+      where
+        quote x = "\"" ++ x ++ "\""
 
 instance NFData MMarkErr
 

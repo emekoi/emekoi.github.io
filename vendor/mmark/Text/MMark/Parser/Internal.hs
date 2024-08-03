@@ -16,6 +16,7 @@ module Text.MMark.Parser.Internal
       BParser
     , isNakedAllowed
     , refLevel
+    , registerFootnote
     , registerReference
     , runBParser
     , subEnv
@@ -31,6 +32,7 @@ module Text.MMark.Parser.Internal
     , isImagesAllowed
     , isLinksAllowed
     , lastChar
+    , lookupFootnote
     , lookupReference
     , runIParser
       -- * Reference and footnote definitions
@@ -53,6 +55,7 @@ import Lens.Micro.Extras               (view)
 import Text.Megaparsec                 hiding (State)
 import Text.Megaparsec                 qualified as M
 import Text.MMark.Parser.Internal.Type
+import Text.MMark.Type                 (Block)
 import Text.URI                        (URI)
 
 ----------------------------------------------------------------------------
@@ -109,6 +112,16 @@ registerReference ::
   -- | 'True' if there is a conflicting definition
   BParser Bool
 registerReference = registerGeneric referenceDefs
+
+-- | Register a footnote definition.
+registerFootnote ::
+  -- | Reference name
+  Text ->
+  -- | Footnote body
+  Block Isp ->
+  -- | 'True' if there is a conflicting definition
+  BParser Bool
+registerFootnote = registerGeneric footnoteDefs
 
 -- | A generic function for registering definitions in 'BParser'.
 registerGeneric ::
@@ -194,6 +207,15 @@ lookupReference ::
   -- corrections) or the requested definition in 'Right'
   IParser (Either [Text] (URI, Maybe Text))
 lookupReference = lookupGeneric referenceDefs
+
+-- | Lookup a footnote definition.
+lookupFootnote ::
+  -- | Reference label
+  Text ->
+  -- | A collection of suggested reference names in 'Left' (typo
+  -- corrections) or the requested definition in 'Right'
+  IParser (Either [Text] (Block Isp))
+lookupFootnote = lookupGeneric footnoteDefs
 
 -- | A generic function for looking up definition in 'IParser'.
 lookupGeneric ::

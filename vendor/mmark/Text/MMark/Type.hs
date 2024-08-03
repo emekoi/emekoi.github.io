@@ -33,6 +33,7 @@ module Text.MMark.Type
     ) where
 
 import Control.DeepSeq
+import Control.Monad      ((>=>))
 import Data.Aeson
 import Data.Data          (Data)
 import Data.Function      (on)
@@ -46,10 +47,10 @@ import Lucid
 import Text.URI           (URI (..))
 
 newtype EndoM m a
-  = EndoM {appEndoM :: a -> m a}
+  = EndoM { appEndoM :: a -> m a }
 
 instance Monad m => Semigroup (EndoM m a) where
-  EndoM f <> EndoM g = EndoM (\x -> g x >>= f)
+  EndoM f <> EndoM g = EndoM (g >=> f)
 
 instance Monad m => Monoid (EndoM m a) where
   mempty = EndoM pure
@@ -198,6 +199,8 @@ data Block a
   | Table (NonEmpty CellAlign) (NonEmpty (NonEmpty a))
   -- | Divs
   | Div Attributes [Block a]
+  -- | Footnote Definition
+  | Note Text [Block a]
   deriving
     ( Data
     , Eq
@@ -263,6 +266,8 @@ data Inline
   | Math MathType Text
   -- | Spans
   | Span Attributes (NonEmpty Inline)
+  -- | Footnote Reference
+  | NoteRef Text
   deriving (Data, Eq, Generic, Ord, Show, Typeable)
 
 instance NFData Inline

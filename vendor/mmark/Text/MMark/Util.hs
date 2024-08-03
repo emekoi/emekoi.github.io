@@ -41,6 +41,7 @@ asPlainText = foldMap $ \case
   RawInline txt -> txt
   Math _ txt -> txt
   Span _ xs -> asPlainText xs
+  NoteRef _ -> mempty
 
 -- | Convert 'Attributes' to lists of Lucid 'Attribute's
 lucidAttributes :: Attributes -> [Attribute]

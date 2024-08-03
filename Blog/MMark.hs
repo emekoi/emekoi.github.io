@@ -1,5 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-
 module Blog.MMark
     ( demoteHeaders
     , descriptionList
@@ -17,10 +15,15 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
-import Data.Foldable              (foldl')
+import Data.Foldable              (foldl', foldrM)
 import Data.Function              (fix)
+import Data.IORef                 (IORef)
+import Data.IORef                 qualified as IORef
+import Data.List                  qualified as List
 import Data.List.NonEmpty         (NonEmpty (..))
 import Data.List.NonEmpty         qualified as NE
+import Data.Map.Strict            (Map)
+import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromMaybe)
 import Data.Text                  qualified as Text
 import Data.Text.IO               qualified as Text
@@ -35,11 +38,32 @@ import Text.MMark.Type            as MMark
 import Text.MMark.Util
 import Text.URI                   qualified as URI
 
+data RenderState m = RenderState
+  { noteMap :: Map StrictText (Int -> HtmlT m ())
+  , noteRef :: [StrictText]
+  }
+
 nl :: Monad m => HtmlT m ()
 nl = "\n"
 
-mkHeader :: Monad m => ([Attribute] -> HtmlT m () -> HtmlT m ()) -> Ois -> HtmlT m () -> HtmlT m ()
-mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link, class_ "anchor"] mempty *> h)
+fn :: Int -> StrictText
+fn x = "fn:" <> Text.pack (show x)
+
+fnref :: Int -> StrictText
+fnref x = "fnref:" <> Text.pack (show x)
+
+fnrefBack :: Monad m => Int -> HtmlT m ()
+fnrefBack n =
+  a_ [ href_ $ "#" <> fnref n
+     , role_ "doc-backlink"
+     ] "↩"
+
+mkHeader
+  :: Monad m
+  => ([Attribute] -> HtmlT m () -> HtmlT m ())
+  -> Ois -> HtmlT m () -> HtmlT m ()
+mkHeader f i h = f [id_ anchor] $
+  a_ [href_ $ URI.render link, class_ "anchor"] mempty *> h
   where
     anchor = titleSlug (asPlainText $ getOis i)
     link = URI.URI
@@ -50,11 +74,17 @@ mkHeader f i h = f [id_ anchor] (a_ [href_ $ URI.render link, class_ "anchor"] m
           uriFragment = URI.mkFragment anchor
         }
 
-applyBlockRender :: Monad m => Render m (Block (Ois, HtmlT m ())) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
-applyBlockRender (Endo r) = fix (r . baseBlockRender)
+applyBlockRender
+  :: MonadIO m
+  => IORef (RenderState m) -> Render m (Block (Ois, HtmlT m ()))
+  -> Block (Ois, HtmlT m ()) -> HtmlT m ()
+applyBlockRender stateRef (Endo r) = fix (r . baseBlockRender stateRef)
 
-baseBlockRender :: Monad m => (Block (Ois, HtmlT m ()) -> HtmlT m ()) -> Block (Ois, HtmlT m ()) -> HtmlT m ()
-baseBlockRender blockRender = \case
+baseBlockRender
+  :: MonadIO m
+  => IORef (RenderState m) -> (Block (Ois, HtmlT m ()) -> HtmlT m ())
+  -> Block (Ois, HtmlT m ()) -> HtmlT m ()
+baseBlockRender stateRef blockRender = \case
   ThematicBreak ->
     hr_ [] >> nl
   Heading1 (i, html) ->
@@ -115,6 +145,21 @@ baseBlockRender blockRender = \case
   Div attrs blocks -> do
     div_ (lucidAttributes attrs) (nl <* mapM_ blockRender blocks)
     nl
+  Note label blocks -> do
+    liftIO $ IORef.modifyIORef' stateRef \RenderState{..} -> do
+      case List.unsnoc blocks of
+        Nothing ->
+          RenderState
+            { noteMap = Map.insert label (\_ -> pure ()) noteMap
+            , ..
+            }
+        Just (sx, x) ->
+          RenderState
+            { noteMap = Map.insert label
+                (\n -> forM_ sx blockRender *> rBacklink n x)
+                noteMap
+            , ..
+            }
   where
     alignStyle = \case
       CellAlignDefault -> []
@@ -122,11 +167,22 @@ baseBlockRender blockRender = \case
       CellAlignRight -> [style_ "text-align:right"]
       CellAlignCenter -> [style_ "text-align:center"]
 
-applyInlineRender :: Monad m => Render m Inline -> (Inline -> HtmlT m ())
-applyInlineRender (Endo r) = fix (r . baseInlineRender)
+    rBacklink n (Paragraph (i, x)) =
+      blockRender $ Paragraph (i, x *> toHtmlRaw @StrictText "&nbsp;" *> fnrefBack n)
+    rBacklink n b =
+      blockRender b *> fnrefBack n
 
-baseInlineRender :: Monad m => (Inline -> HtmlT m ()) -> Inline -> HtmlT m ()
-baseInlineRender inlineRender = \case
+applyInlineRender
+  :: MonadIO m
+  => IORef (RenderState m) -> Render m Inline
+  -> (Inline -> HtmlT m ())
+applyInlineRender stateRef (Endo r) = fix (r . baseInlineRender stateRef)
+
+baseInlineRender
+  :: MonadIO m
+  => IORef (RenderState m) -> (Inline -> HtmlT m ())
+  -> Inline -> HtmlT m ()
+baseInlineRender stateRef inlineRender = \case
   Plain txt ->
     toHtml txt
   LineBreak ->
@@ -142,9 +198,9 @@ baseInlineRender inlineRender = \case
   Superscript inner ->
     sup_ (mapM_ inlineRender inner)
   CodeSpan txt -> code_ (toHtml txt)
-  Link inner dest mtitle ->
-    let title = maybe [] (pure . title_) mtitle in
-      a_ (href_ (URI.render dest) : title) (mapM_ inlineRender inner)
+  Link inner uri mtitle ->
+      let title = maybe [] (pure . title_) mtitle in
+        a_ (href_ (URI.render uri) : title) (mapM_ inlineRender inner)
   Image desc src mtitle ->
     let title = maybe [] (pure . title_) mtitle in
       img_ (alt_ (asPlainText desc) : src_ (URI.render src) : loading_ "lazy" : title)
@@ -155,23 +211,44 @@ baseInlineRender inlineRender = \case
       in span_ [class_ c] (toHtmlRaw txt)
   Span attrs inner ->
     span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
+  NoteRef label -> do
+    RenderState{..} <- liftIO $ IORef.readIORef stateRef
+    let n = 1 + length noteRef
+    sup_ [id_ $ fnref n, role_ "doc-noteref"] $
+      a_ [class_ "footnote", href_ $ "#" <> fn n]
+         (toHtml . Text.pack $ show n)
+    liftIO $ IORef.writeIORef stateRef RenderState
+        { noteRef = label : noteRef
+        , ..
+        }
 
-renderHTML :: forall m. Monad m => [Extension m] -> MMark m -> HtmlT m ()
-renderHTML exts (MMark.useExtensions exts -> MMark {..}) =
-  mapM_ rBlock mmarkBlocks
+renderHTML
+  :: (Monad m, MonadIO m)
+  => [Extension m] -> MMark m -> HtmlT m ()
+renderHTML exts (MMark.useExtensions exts -> MMark {..}) = do
+  stateRef <- liftIO $ IORef.newIORef (RenderState mempty [])
+  mapM_ (rBlock stateRef) mmarkBlocks
+  state <- liftIO $ IORef.readIORef stateRef
+  unless (null state.noteRef) do
+    hr_ []
+    section_ [id_ "footnotes", role_ "doc-endnotes"] $ ol_ $
+      void $ foldrM `flip` (1 :: Int) `flip` state.noteRef $ \label n -> do
+        let
+          body = state.noteMap Map.! label
+        li_ [id_ $ fn n] do
+          body n
+        pure (n + 1)
   where
     Extension {..} = mmarkExtension
 
-    rBlock :: Monad m => Bni -> HtmlT m ()
-    rBlock x0 = do
+    rBlock stateRef x0 = do
       x1 <- lift $ applyBlockTrans extBlockTrans x0
-      x2 <- lift $ traverse rInlines x1
-      applyBlockRender extBlockRender x2
+      x2 <- lift $ traverse (rInlines stateRef) x1
+      applyBlockRender stateRef extBlockRender x2
 
-    rInlines :: Monad m => NonEmpty Inline -> m (Ois, HtmlT m ())
-    rInlines x0 = do
+    rInlines stateRef x0 = do
       x1 <- traverse (applyInlineTrans extInlineTrans) x0
-      pure $ (mkOisInternal &&& mapM_ (applyInlineRender extInlineRender)) x1
+      pure $ (mkOisInternal &&& mapM_ (applyInlineRender stateRef extInlineRender)) x1
 
 md :: TH.QuasiQuoter
 md = TH.QuasiQuoter

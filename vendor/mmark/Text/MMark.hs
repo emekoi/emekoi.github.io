@@ -1,5 +1,3 @@
-{-# LANGUAGE RecordWildCards #-}
-
 -- |
 -- Module      :  Text.MMark
 -- Copyright   :  © 2017–present Mark Karpov

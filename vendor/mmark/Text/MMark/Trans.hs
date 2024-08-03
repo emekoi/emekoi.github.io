@@ -24,6 +24,7 @@ applyBlockTrans t@(EndoM f) = \case
   OrderedList w xs -> traverse s xs >>= f . OrderedList w
   UnorderedList xs -> traverse s xs >>= f . UnorderedList
   Div a xs         -> s xs >>= f . Div a
+  Note label xs    -> s xs >>= f . Note label
   other -> f other
   where
     s = traverse (applyBlockTrans t)

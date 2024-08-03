@@ -123,6 +123,9 @@ defaultBlockRender blockRender = \case
   Div attrs blocks -> do
     div_ (lucidAttributes attrs) (newline <* mapM_ blockRender blocks)
     newline
+  Note label blocks -> do
+    div_ [class_ "footnotes", id_ label] (newline <* mapM_ blockRender blocks)
+    newline
   where
     alignStyle = \case
       CellAlignDefault -> []
@@ -167,6 +170,8 @@ defaultInlineRender inlineRender = \case
       in span_ [class_ c] (toHtmlRaw txt)
   Span attrs inner ->
     span_ (lucidAttributes attrs) (mapM_ inlineRender inner)
+  NoteRef label ->
+    sup_ $ a_ [href_ $ "#" <> label] (toHtml label)
 
 -- | HTML containing a newline.
 newline :: Monad m => HtmlT m ()

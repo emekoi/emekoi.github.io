@@ -221,6 +221,7 @@ pBlock = do
             Just <$> pUnorderedList,
             Just <$> pOrderedList,
             Just <$> pBlockquote,
+            Just <$> pNoteDef,
             pReferenceDef,
             Just <$> pParagraph
           ]
@@ -611,6 +612,30 @@ pClosingDivFence n = try . label "closing div fence" $ do
   skipMany (char ':')
   sc' *> (eof <|> eol)
 
+-- | Parse a footnote definition.
+pNoteDef :: BParser (Block Isp)
+pNoteDef = do
+  (o, dlabel) <- try (pNoteLabel <* char ':')
+  minLevel <- try $ do
+    minLevel <- (<> pos1) <$> L.indentLevel
+    eof <|> sc
+    l <- L.indentLevel
+    return $
+      if l > minLevel
+        then minLevel <> pos1
+        else minLevel
+  indLevel <- L.indentLevel
+  note <- Note dlabel <$> if indLevel >= minLevel
+    then do
+      let rlevel = slevel minLevel indLevel
+      subEnv False rlevel pBlocks
+    else pure []
+
+  conflict <- registerFootnote dlabel note
+  when conflict $
+    customFailure' o (DuplicateFootnoteDefinition dlabel)
+  pure note
+
 ----------------------------------------------------------------------------
 -- Auxiliary block-level parsers
 
@@ -656,7 +681,7 @@ pInlines = do
         '[' -> do
           allowsLinks <- isLinksAllowed
           observing (try pSpan) >>= \case
-            Left err -> if allowsLinks
+            Left err -> try pNoteRef <|> if allowsLinks
               then pLink <|> parseError err
               -- else unexpEic (Tokens $ nes '[')
               else parseError err
@@ -871,6 +896,15 @@ pRawInline = do
         finalizer
   r <$ lastChar OtherChar
 
+pNoteRef :: IParser Inline
+pNoteRef = do
+  (o, dlabel) <- try pNoteLabel
+  lookupFootnote dlabel >>= \case
+    Left names ->
+      customFailure' o (CouldNotFindFootnoteDefinition dlabel names)
+    Right _ ->
+      pure (NoteRef dlabel)
+
 ----------------------------------------------------------------------------
 -- Auxiliary inline-level parsers
 
@@ -1020,6 +1054,20 @@ getNextChar frameType = lookAhead (option SpaceChar (charType <$> anySingle))
       | ch == '\\' = OtherChar
       | Char.isPunctuation ch = PunctChar
       | otherwise = OtherChar
+
+-- | Parse label of a footnote.
+pNoteLabel :: (MonadParsec MMarkErr Text m) => m (Int, Text)
+pNoteLabel = do
+  try $ do
+    void (char '[')
+    void (char '^')
+    notFollowedBy (char ']')
+  o <- getOffset
+  sc
+  let f x = x /= '[' && x /= ']'
+  dlabel <- someEscapedWith f <?> "reference label"
+  void (char ']')
+  return (o, dlabel)
 
 ----------------------------------------------------------------------------
 -- Parsing helpers
