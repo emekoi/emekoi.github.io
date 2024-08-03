@@ -49,6 +49,8 @@ import Data.Data            (Data)
 import Data.Hashable        (Hashable)
 import Data.HashMap.Strict  (HashMap)
 import Data.HashMap.Strict  qualified as HM
+import Data.HashSet         (HashSet)
+import Data.HashSet         qualified as HS
 import Data.List            (intercalate)
 import Data.List.NonEmpty   (NonEmpty (..))
 import Data.List.NonEmpty   qualified as NE
@@ -59,7 +61,6 @@ import Data.Typeable        (Typeable)
 import GHC.Generics
 import Lens.Micro.TH
 import Text.Megaparsec
-import Text.MMark.Type      (Block)
 import Text.URI             (URI)
 
 ----------------------------------------------------------------------------
@@ -140,7 +141,7 @@ data CharType
 -- | An opaque container for reference and footnote definitions.
 data Defs = Defs
   { _referenceDefs :: HashMap DefLabel (URI, Maybe Text)
-  , _footnoteDefs  :: HashMap DefLabel (Block Isp)
+  , _footnoteDefs  :: HashSet DefLabel
   }
   deriving (Show)
 
@@ -149,7 +150,7 @@ emptyDefs :: Defs
 emptyDefs =
   Defs
     { _referenceDefs = HM.empty
-    , _footnoteDefs = HM.empty
+    , _footnoteDefs = HS.empty
     }
 
 -- | An opaque type for definition label.

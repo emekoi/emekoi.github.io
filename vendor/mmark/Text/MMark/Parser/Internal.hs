@@ -46,6 +46,7 @@ import Data.Bifunctor
 import Data.Function                   ((&))
 import Data.HashMap.Strict             (HashMap)
 import Data.HashMap.Strict             qualified as HM
+import Data.HashSet                    qualified as HS
 import Data.List.NonEmpty              qualified as NE
 import Data.Ratio                      ((%))
 import Data.Text                       (Text)
@@ -55,7 +56,6 @@ import Lens.Micro.Extras               (view)
 import Text.Megaparsec                 hiding (State)
 import Text.Megaparsec                 qualified as M
 import Text.MMark.Parser.Internal.Type
-import Text.MMark.Type                 (Block)
 import Text.URI                        (URI)
 
 ----------------------------------------------------------------------------
@@ -117,11 +117,16 @@ registerReference = registerGeneric referenceDefs
 registerFootnote ::
   -- | Reference name
   Text ->
-  -- | Footnote body
-  Block Isp ->
   -- | 'True' if there is a conflicting definition
   BParser Bool
-registerFootnote = registerGeneric footnoteDefs
+registerFootnote name = do
+  let dlabel = mkDefLabel name
+  defs <- gets (^. bstDefs . footnoteDefs)
+  if HS.member dlabel defs
+    then return True
+    else do
+      modify' $ over (bstDefs . footnoteDefs) (HS.insert dlabel)
+      return False
 
 -- | A generic function for registering definitions in 'BParser'.
 registerGeneric ::
@@ -214,8 +219,12 @@ lookupFootnote ::
   Text ->
   -- | A collection of suggested reference names in 'Left' (typo
   -- corrections) or the requested definition in 'Right'
-  IParser (Either [Text] (Block Isp))
-lookupFootnote = lookupGeneric footnoteDefs
+  IParser (Either [Text] ())
+lookupFootnote name = do
+  let dlabel = mkDefLabel name
+  defs <- gets (view (istDefs . footnoteDefs))
+  if HS.member dlabel defs then pure (Right ())
+  else pure . Left $ closeNames dlabel (HS.toList defs)
 
 -- | A generic function for looking up definition in 'IParser'.
 lookupGeneric ::

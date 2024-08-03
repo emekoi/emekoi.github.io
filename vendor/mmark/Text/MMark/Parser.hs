@@ -616,6 +616,10 @@ pClosingDivFence n = try . label "closing div fence" $ do
 pNoteDef :: BParser (Block Isp)
 pNoteDef = do
   (o, dlabel) <- try (pNoteLabel <* char ':')
+  conflict <- registerFootnote dlabel
+  when conflict $
+    customFailure' o (DuplicateFootnoteDefinition dlabel)
+
   minLevel <- try $ do
     minLevel <- (<> pos1) <$> L.indentLevel
     eof <|> sc
@@ -625,16 +629,12 @@ pNoteDef = do
         then minLevel <> pos1
         else minLevel
   indLevel <- L.indentLevel
-  note <- Note dlabel <$> if indLevel >= minLevel
+
+  Note dlabel <$> if indLevel >= minLevel
     then do
       let rlevel = slevel minLevel indLevel
       subEnv False rlevel pBlocks
     else pure []
-
-  conflict <- registerFootnote dlabel note
-  when conflict $
-    customFailure' o (DuplicateFootnoteDefinition dlabel)
-  pure note
 
 ----------------------------------------------------------------------------
 -- Auxiliary block-level parsers

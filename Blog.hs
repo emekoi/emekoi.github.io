@@ -62,13 +62,11 @@ data Options = Options
   , jobs      :: Int
   }
 
-newtype BuildOptions = BuildOptions
-  { watch :: Bool
-  }
+newtype BuildOptions
+  = BuildOptions { watch :: Bool }
 
-newtype CleanOptions = CleanOptions
-  { cache :: Bool
-  }
+newtype CleanOptions
+  = CleanOptions { cache :: Bool }
 
 data PreviewOptions = PreviewOptions
   { server :: Bool
