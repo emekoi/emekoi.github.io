@@ -600,6 +600,7 @@ pFencedDiv = do
   skipCount 3 (char ':')
   n <- length <$> many (char ':')
   attrs <- (sc' *> (pAttributes <|> pure mempty) <* eol) <?> "div attributes"
+  sc
   xs <- catMaybes <$> manyTill pBlock (pClosingDivFence n)
   Div attrs xs <$ sc
 

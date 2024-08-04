@@ -19,6 +19,7 @@ import Control.Concurrent.MVar        qualified as MVar
 import Control.Monad
 import Data.Aeson                     ((.=))
 import Data.Aeson                     qualified as Aeson
+import Data.Aeson.KeyMap              qualified as Aeson
 import Data.ByteString.Lazy           qualified as LBS
 import Data.List                      qualified as List
 import Data.Map.Strict                qualified as Map
@@ -171,12 +172,12 @@ build b = do
   fetchPost <- fmap wrapPostQ . addOracleCache $ \(PostQ input) -> do
     need [input]
 
-    (source, input) <- case Shake.splitExtensions input of
+    (source, input, agda) <- case Shake.splitExtensions input of
       (Shake.takeBaseName -> base, ".lagda.md") ->
         let input = "agda" </> base <.> "md" in
         need [input] *> liftIO (Text.readFile input)
-          >>= fmap (,input) . Agda.readAgda input
-      _ -> (, input) <$> liftIO (Text.readFile input)
+          >>= fmap (,input, True) . Agda.readAgda input
+      _ -> (, input, False) <$> liftIO (Text.readFile input)
 
     MMark.renderMarkdown postExtensions input source >>= \page ->
       case Aeson.fromJSON (Aeson.Object page.meta) of
@@ -186,12 +187,10 @@ build b = do
           fileError (Just input) "missing metadata field: title"
         Aeson.Success Post{..} -> do
           (Aeson.Object meta) <- pure . Aeson.toJSON $ Post
-            { tags = linkifyTags tags
-            , ..
-            }
+            { tags = linkifyTags tags, .. }
           pure $ PostA
             ( Post { body = page.body, .. }
-            , Page meta page.body
+            , Page (Aeson.insert "agda" (Aeson.toJSON agda) meta) page.body
             )
 
   -- copy static resources
