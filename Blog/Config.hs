@@ -27,9 +27,10 @@ url         = "https://emekoi.github.io"
 siteOutput :: FilePath
 siteOutput = "_site"
 
-siteBuild :: StrictText -> [Post] -> Site
-siteBuild hash posts = Site
+siteBuild :: Bool -> StrictText -> [Post] -> Site
+siteBuild debug hash posts = Site
   { author
+  , debug
   , description
   , email
   , git

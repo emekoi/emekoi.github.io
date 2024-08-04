@@ -21,10 +21,16 @@
     <script>
       {{> katex-load.js }}
     </script>
+    {{# site.debug }}<script defer src="https://livejs.com/live.js"></script>{{/ site.debug }}
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.css">
   </head>
   <body>
     {{> header.html }}
+    {{# site.debug }}
+    <div style="position:fixed; right:3ch; opacity:0.5; z-index:99; color:rgb(255,0,255);">
+       DEBUG
+    </div>
+    {{/ site.debug }}
     <main>
       {{^ naked-main }}
       <article>

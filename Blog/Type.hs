@@ -193,6 +193,7 @@ instance FromJSON Post where
 
 data Site = Site
   { author      :: StrictText
+  , debug       :: Bool
   , description :: StrictText
   , email       :: StrictText
   , git         :: StrictText

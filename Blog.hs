@@ -161,7 +161,7 @@ build b = do
 
   getSite <- newCache \posts -> do
     hash <- gitHash "master"
-    pure $ siteBuild hash posts
+    pure $ siteBuild b.watch hash posts
 
   let getSiteMeta = Aeson.toJSON <$> getSite []
 
