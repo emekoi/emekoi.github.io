@@ -40,7 +40,9 @@
         {{^ hide-title }}
         <header id="title-block-header">
           <h1 class="title">{{ title }}</h1>
-          {{# subtitle }}<p class="subtitle">{{.}}</p>{{/ subtitle }}
+          {{# subtitle }}
+          <p class="subtitle">{{.}}</p>
+          {{/ subtitle }}
         </header>
         {{/ hide-title }}
         {{& body }}

@@ -28,6 +28,7 @@ import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Text                  qualified as Text
 import Data.Text.IO               qualified as Text
+import Data.Text.Lazy             qualified as TextL
 import Language.Haskell.TH.Quote  qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Lucid
@@ -265,7 +266,7 @@ renderMarkdown exts input source = do
     Left errs -> fileError (Just input) $ Mega.errorBundlePretty errs
     Right r -> do
       let meta = loadMeta r (MMark.projectYaml r)
-      body <- renderTextT $ renderHTML exts r
+      body <- fmap TextL.strip . renderTextT $ renderHTML exts r
       pure Page {..}
   where
     loadMeta r m = MMark.fold r (\x b -> x || any (any isMath) b) False \b ->

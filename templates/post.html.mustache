@@ -16,7 +16,9 @@
     <script>
       {{> color-scheme-load.js }}
       {{> color-scheme-toggle.js }}
-      {{# agda }}{{> agda-hover.js }}{{/ agda }}
+      {{# agda }}
+      {{> agda-hover.js }}
+      {{/ agda }}
     </script>
     {{# katex }}
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.js"></script>
@@ -39,14 +41,22 @@
         {{^ hide-title }}
         <header id="title-block-header">
           <h1 class="title">{{ title }}</h1>
-          {{# subtitle }}<p class="subtitle">{{.}}</p>{{/ subtitle }}
+          {{# subtitle }}
+          <p class="subtitle">{{.}}</p>
+          {{/ subtitle }}
         </header>
         {{/ hide-title }}
         <div class="post-info">
           <ul>
-            {{# published.fmt }}<li>{{.}}</li>{{/ published.fmt }}
-            {{# updated.fmt }}<li>Updated: {{.}}</li>{{/ updated.fmt }}
-            {{# tags }}<li>{{& . }}</li>{{/ tags }}
+            {{# published.fmt }}
+            <li>{{.}}</li>
+            {{/ published.fmt }}
+            {{# updated.fmt }}
+            <li>Updated: {{.}}</li>
+            {{/ updated.fmt }}
+            {{# tags }}
+            <li>{{& . }}</li>
+            {{/ tags }}
           </ul>
         </div>
         {{& body }}
