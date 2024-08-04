@@ -95,9 +95,8 @@ shakeOptions Options{..} = do
 -- TODO: filter drafts based on published field
 -- TODO: relativize urls
 
-postURL :: Post -> String
-postURL Post{..} = "posts" </> slug </> "index.html"
-  where slug = Text.unpack $ titleSlug title
+postURL :: Post -> FilePath
+postURL Post{..} = "posts" </> Text.unpack slug </> "index.html"
 
 pubList :: FilePath -> Action [Aeson.Value]
 pubList file = do
