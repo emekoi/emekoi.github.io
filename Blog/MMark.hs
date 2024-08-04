@@ -15,6 +15,8 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
+import Data.Aeson                 (toJSON, (.=))
+import Data.Aeson.KeyMap          qualified as Aeson
 import Data.Foldable              (foldl', foldrM)
 import Data.Function              (fix)
 import Data.IORef                 (IORef)
@@ -24,7 +26,6 @@ import Data.List.NonEmpty         (NonEmpty (..))
 import Data.List.NonEmpty         qualified as NE
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
-import Data.Maybe                 (fromMaybe)
 import Data.Text                  qualified as Text
 import Data.Text.IO               qualified as Text
 import Language.Haskell.TH.Quote  qualified as TH
@@ -263,9 +264,15 @@ renderMarkdown exts input source = do
   case MMark.parse input source of
     Left errs -> fileError (Just input) $ Mega.errorBundlePretty errs
     Right r -> do
-      let meta = fromMaybe mempty $ MMark.projectYaml r
+      let meta = loadMeta r (MMark.projectYaml r)
       body <- renderTextT $ renderHTML exts r
       pure Page {..}
+  where
+    loadMeta r m = MMark.fold r (\x b -> x || any (any isMath) b) False \b ->
+      let katex = toJSON b in
+        maybe ("katex" .= katex) (Aeson.insert "katex" katex) m
+    isMath Math{} = True
+    isMath _      = False
 
 renderMarkdownIO :: (MonadFail m, MonadIO m) => [Extension m] -> FilePath -> m Page
 renderMarkdownIO exts file = do
