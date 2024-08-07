@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric   #-}
+{-# LANGUAGE NamedFieldPuns  #-}
 {-# LANGUAGE OverloadedLists #-}
 
 module Lang where
@@ -8,22 +9,23 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
 import Control.Monad.Zip
+import Data.Aeson                 qualified as Aeson
 import Data.Foldable
 import Data.Functor
 import Data.IntMap                (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
 import Data.IORef
 import Data.Map.Strict            (Map)
--- import Data.Map.Strict                qualified as Map
+import Data.Map.Strict            qualified as Map
+import Data.Maybe                 (isJust)
 import Data.Sequence              (Seq (..))
 import Data.Sequence              qualified as Seq
 import Data.Set                   (Set)
--- import Data.Set                   qualified as Set
-import Data.Aeson                 qualified as Aeson
-import Data.Maybe                 (isJust)
+import Data.Set                   qualified as Set
 import Data.String                (IsString (..))
 import Data.Text                  qualified as Text
 import Data.Text.Short            (ShortText)
+import Data.Text.Short            qualified as TextS
 import Data.Typeable
 import GHC.Exts                   (oneShot)
 import GHC.Generics               (Generic)
@@ -107,9 +109,9 @@ pattern Global x i = Name (TrivialOrd GlobalName) (TrivialEq x) i
 {-# COMPLETE Local, Global, Bound #-}
 
 instance Show Name where
-  show (Bound x  i)  = "%" <> show x <> show i
-  show (Local x  i)  = "$" <> show x <> show i
-  show (Global x  i) = "@" <> show x <> show i
+  show (Bound x  i)  = "%" <> TextS.toString x <> "." <> show i
+  show (Local x  i)  = "$" <> TextS.toString x <> "." <> show i
+  show (Global x  i) = "@" <> TextS.toString x <> "." <> show i
 
 nameSource :: IORef Int
 nameSource = unsafePerformIO (newIORef 0)
@@ -128,6 +130,8 @@ freshGlobalName x =
 newtype NameMap x
   = NameMap { nameMap :: IntMap x }
   deriving (Foldable, Functor, Monoid, Semigroup, Traversable)
+  deriving (Show)
+    via (IntMap x)
 
 type instance Index (NameMap a) = Name
 type instance IxValue (NameMap a) = a
@@ -395,15 +399,16 @@ tyUnify x y = do
       elabError (ErrTypeUnify x y)
 
 data Context = Context
-  { dataCons    :: NameMap (DataTag, Type, Name)
+  { dataCons    :: NameMap (DataTag, Type)
   , typeCons    :: NameMap (Set Name)
   , rawNames    :: Map RawName Var
     -- _, args, ret type
   , rawPrims    :: Map RawName (PrimOp, [Type], Type)
     -- tags, args, ret type
-  , rawDataCons :: Map RawName (DataTag, [Type], Name)
+  , rawDataCons :: Map RawName (DataTag, [Type])
   , rawTypeCons :: Map RawName Name
   }
+  deriving (Show)
 
 data ElabT = Elab
   { ctx   :: Context
@@ -546,14 +551,15 @@ elabTerm (RData rc xs) t k = do
   Context{..} <- elabContext
   case rawDataCons ^. at rc of
     Nothing           -> elabError (ErrConUnknown rc)
-    Just (c, ts, t') -> do
+    Just (tag, ts) -> do
       unless (length ts == length xs) $
         elabError (ErrConArity rc (length ts) (length xs))
       elabTerms xs ts \vs -> do
-        tyUnify t (TyCon t')
-        x <- freshLocal "d" (TyCon t')
+        let t' = TyCon tag.name
+        tyUnify t t'
+        x <- freshLocal "d" t'
         e <- applyCont k x
-        pure $ TLetV x (VData c vs) e
+        pure $ TLetV x (VData tag vs) e
 elabTerm (RLambda (Seq.fromList -> xs) e) t k = do
   f <- freshLocal "f" t
   j <- elabShiftLevel1 \ik -> elabShiftLevel (length xs) \ixs -> do
@@ -582,7 +588,7 @@ elabTerm (RLambda (Seq.fromList -> xs) e) t k = do
 --           Just . (,e) <$> freshLocal x t
 --   todo
 elabTerm (RLetRec _ _) _t _k = todo
-elabTerm (RLet xs e) t k = do
+elabTerm (RLet xs _e) _t _k = do
   -- TODO: we need to modify the local env somehow for annotations
   _xs <- flip witherM xs \case
     RTDAnno x t -> do
@@ -728,81 +734,88 @@ elabTerm (RVar x) t k = do
 --         Just q -> goHead v acc q
 --         _      -> pure acc
 
--- data Context = Context
---   { dataCons    :: NameMap (DataTag, Type, Name)
---   , typeCons    :: NameMap (Set Name)
---   , rawNames    :: Map RawName Var
---     -- _, args, ret type
---   , rawPrims    :: Map RawName (PrimOp, [Type], Type)
---     -- tags, args, ret type
---   , rawDataCons :: Map RawName (DataTag, [Type], Name)
---   , rawTypeCons :: Map RawName Name
---   }
-
--- data ElabT = Elab
---   { ctx   :: Context
---   , level :: Int
---   }
-
 data RawContext = RawContext
-  { rawDataCons :: Map RawName (Name, RawType)
-  , rawTypeCons :: Map RawName Name
-  , rawTerms    :: Map RawName (Name, RawType, Raw)
-  , rawPrims    :: Map RawName (Name, RawType)
+  { dataCons :: Map RawName (DataTag, RawName, RawType)
+  , typeCons :: Map RawName (Name, Set Name)
+  , terms    :: Map RawName (Name, RawType, Raw)
+  , prims    :: Map RawName (Name, RawType)
   }
+  deriving (Show)
 
 rawContext :: MonadIO m => [RawDef] -> m RawContext
 rawContext = foldM fDef (RawContext
-  { rawDataCons = mempty
-  , rawTypeCons = mempty
-  , rawTerms = mempty
-  , rawPrims = mempty
+  { dataCons = mempty
+  , typeCons = mempty
+  , terms = mempty
+  , prims = mempty
   })
   where
-    checkDup thing m x =
+    checkDup thing m x = do
       when (isJust $ m ^. at x) $ do
         elabError (ErrDuplicate thing x)
+      freshGlobalName x
 
-    -- RDTerm :: RawName -> RawType -> Raw -> RawDef
+    fCon t (conSet, dataCons) (raw, args) = do
+      name <- checkDup "data constructor" dataCons raw
+      let
+        conSet' = Set.insert name conSet
+        index   = Set.findIndex name conSet'
+      pure ( conSet'
+           , dataCons & at raw ?~ (DataTag name index, t, args)
+           )
 
-    -- fDef RawContext{..} (RDData raw True _) = do
-    --   checkDup "primitive type" rawPrims raw
-    --   name <- freshGlobalName raw
-    --   pure RawContext{ rawPrims = rawPrims & at raw ?~ name, .. }
     fDef RawContext{..} (RDData raw xs) = do
-      checkDup "type constructor" rawTypeCons raw
-      name <- freshGlobalName raw
-      foldM fCon
-        RawContext{ rawTypeCons = rawTypeCons & at raw ?~ name, .. }
-        xs
+      name <- checkDup "type constructor" typeCons raw
+      (conSet, dataCons) <- foldM (fCon raw) (mempty, dataCons) xs
+      pure RawContext
+        { typeCons = typeCons & at raw ?~ (name, conSet)
+        , dataCons = dataCons
+        , ..
+        }
     fDef RawContext{..} (RDPrim raw t) = do
-      checkDup "primitive function" rawPrims raw
-      name <- freshGlobalName raw
-      pure RawContext{ rawPrims = rawPrims & at raw ?~ (name, t), .. }
+      name <- checkDup "primitive function" prims raw
+      pure RawContext{ prims = prims & at raw ?~ (name, t), .. }
     fDef RawContext{..} (RDTerm raw t e) = do
-      checkDup "top-level" rawTerms raw
-      name <- freshGlobalName raw
-      pure RawContext{ rawTerms = rawTerms & at raw ?~ (name, t, e), .. }
+      name <- checkDup "top-level" terms raw
+      pure RawContext{ terms = terms & at raw ?~ (name, t, e), .. }
 
-    fCon RawContext{..} (raw, t) = do
-      checkDup "data constructor" rawDataCons raw
-      name <- freshGlobalName raw
-      pure RawContext{ rawDataCons = rawDataCons & at raw ?~ (name, t), .. }
+-- data Context = Context
+--   { dataCons    :: NameMap (DataTag, Type)
+--   , typeCons    :: NameMap (Set Name)
+--   , rawNames    :: Map RawName Var
+--   , rawPrims    :: Map RawName (PrimOp, [Type], Type)
+--   , rawDataCons :: Map RawName (DataTag, [Type])
+--   , rawTypeCons :: Map RawName Name
+--   }
 
--- genContext :: MonadIO m => [RawDef] -> m (Context)
--- genContext = foldM f (Context
---   { dataCons = mempty
---   , typeCons = mempty
---   , rawNames = mempty
---   , rawPrims = mempty
---   , rawDataCons = mempty
---   , rawTypeCons = mempty
---   })
---   where
---   -- RDTerm :: RawName -> RawType -> Raw -> RawDef
---   -- RDData :: RawName -> Bool -> [(RawName, RawType)] -> RawDef
+-- data RawContext = RawContext
+--   { dataCons :: Map RawName (DataTag, RawName, RawType)
+--   , typeCons :: Map RawName (Name, Set Name)
+--   , terms    :: Map RawName (Name, RawType, Raw)
+--   , prims    :: Map RawName (Name, RawType)
+--   }
 
---     f Context{..} (RDData name True _) = do
---       pure Context{..}
---     -- f acc (RDData name isPrim cons) = pure acc
---     f acc x = pure acc
+-- NOTE: since we
+genContext :: RawContext -> IO Context
+genContext ctx = do
+  let runElab m = runReaderT m (Elab init 0)
+  (dataCons, rawDataCons) <- runElab do
+    forM_ (Map.toList ctx.dataCons) \(rn, (tag, rParent, rArgs)) -> do
+      let (parent, _) = ctx.typeCons Map.! rParent
+      args <- elabType rArgs
+      todo
+    todo
+  pure init
+  where
+    nameMap = NameMap . IntMap.fromAscList
+    init = Context
+      { dataCons    = mempty
+      , typeCons    = nameMap $ Map.elems ctx.typeCons <&> _1 %~ (.id)
+      , rawNames    = mempty
+      , rawPrims    = mempty
+      , rawDataCons = mempty
+      , rawTypeCons = fst <$> ctx.typeCons
+      }
+
+
+    -- rawTypeCons = fst <$> typeCons

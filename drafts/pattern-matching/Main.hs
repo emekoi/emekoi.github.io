@@ -6,6 +6,7 @@ import Data.Aeson           qualified as Aeson
 import Data.Aeson.Encoding  qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text.IO         qualified as Text
+import Lang qualified
 import Parser
 import System.Environment   (getArgs)
 import Text.Megaparsec      qualified as Mega
@@ -18,5 +19,7 @@ main = getArgs >>= \case
       Left  x -> putStrLn (Mega.errorBundlePretty x)
       Right x | "-json" `elem` rest ->
         BSL.putStr . Aeson.encodingToLazyByteString $ Aeson.toEncoding x
-      Right x -> print x
+      Right x -> do
+        m <- Lang.rawContext x >>= Lang.genContext
+        print m
   _ -> putStrLn "bad input"
