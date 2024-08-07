@@ -1,6 +1,5 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase     #-}
-{-# LANGUAGE MultiWayIf     #-}
 
 module Parser
     ( parse

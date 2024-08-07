@@ -1,7 +1,5 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
-{-# LANGUAGE DeriveGeneric   #-}
-{-# LANGUAGE NamedFieldPuns  #-}
-{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Orphans
     (
