@@ -3,10 +3,12 @@
 {-# LANGUAGE NamedFieldPuns  #-}
 {-# LANGUAGE OverloadedLists #-}
 
-module Orphans () where
+module Orphans
+    (
+    ) where
 
-import Data.Aeson                 qualified as Aeson
-import GHC.Generics               (Generic)
+import Data.Aeson   qualified as Aeson
+import GHC.Generics (Generic)
 import Lang
 
 deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialEq r))

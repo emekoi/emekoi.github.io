@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE NamedFieldPuns  #-}
 {-# LANGUAGE OverloadedLists #-}
 
@@ -156,6 +157,13 @@ data RawType where
   RTyFun :: RawType -> RawType -> RawType
   deriving (Eq, Ord, Show)
 
+rawTypeSplit :: RawType -> (Seq RawType, RawType)
+rawTypeSplit = go Empty
+  where
+    go acc (RTyFun a b) = do
+      go (acc :|> a) b
+    go acc t = (acc, t)
+
 -- data PatternKind
 --   = Low
 --   | High
@@ -219,7 +227,7 @@ data Raw where
 data RawDef where
   RDPrim :: RawName -> RawType -> RawDef
   RDTerm :: RawName -> RawType -> Raw -> RawDef
-  RDData :: RawName -> [(RawName, RawType)] -> RawDef
+  RDData :: RawName -> [(RawName, [RawType], RawType)] -> RawDef
   deriving (Eq, Show)
 
 --- LOWERED AST
@@ -242,6 +250,10 @@ data Type where
 pattern TyMeta :: IORef TyMeta -> Type
 pattern TyMeta t = TyMeta' (TrivialShow t)
 
+typeSplit :: Type -> ([Type], Type)
+typeSplit (TyFun xs t) = (toList xs, t)
+typeSplit t            = ([], t)
+
 data Var = MkVar Name (TrivialEq Type)
   deriving (Eq, Ord, Show)
 
@@ -262,7 +274,7 @@ type PrimOp = Name
 
 data DataTag = DataTag
   { name :: Name
-  , tag  :: Int
+  , tag  :: TrivialOrd Int
   }
   deriving (Eq, Ord, Show)
 
@@ -375,16 +387,6 @@ tyUnify x y = do
       y <- tyZonk y
       elabError (ErrTypeUnify x y)
 
-data Context = Context
-  { rawTerms    :: Map RawName Var
-    -- _, args, ret type
-  , rawPrims    :: Map RawName (PrimOp, [Type], Type)
-    -- tags, args, ret type
-  , rawDataCons :: Map RawName (DataTag, [Type], Type)
-  , rawTypeCons :: Map RawName Name
-  }
-  deriving (Show)
-
 data ElabT = Elab
   { ctx   :: Context
   , level :: Int
@@ -419,14 +421,14 @@ elabBindName x v k = local (\Elab{..} -> Elab{ctx = ctxBindName ctx x v, ..}) k
 elabBindNames ::(MonadZip m, Foldable m) => m RawName -> m Var -> Elab r -> Elab r
 elabBindNames xs vs k = local (\Elab{..} -> Elab{ctx = ctxBindNames ctx xs vs, ..}) k
 
-elabType' :: (HasCallStack, MonadIO m) => Context -> RawType -> m Type
-elabType' ctx@Context{..} t = go Empty t
+elabTypeRaw :: (HasCallStack, MonadIO m) => Map RawName Name -> RawType -> m Type
+elabTypeRaw ctx t = go ctx Empty t
   where
-    go acc (RTyFun a b) = do
-      a <- elabType' ctx a
-      go (acc :|> a) b
-    go acc r@(RTyCon c) =
-      case rawTypeCons ^. at c of
+    go ctx acc (RTyFun a b) = do
+      a' <- go ctx Empty a
+      go ctx (acc :|> a') b
+    go ctx acc r@(RTyCon c) =
+      case ctx ^. at c of
         Nothing            -> elabError (ErrTypeUnkown r)
         Just t  | null acc -> pure $ TyCon t
         Just t             -> pure $ TyFun acc (TyCon t)
@@ -434,7 +436,7 @@ elabType' ctx@Context{..} t = go Empty t
 elabType :: HasCallStack => RawType -> Elab Type
 elabType t = do
   ctx <- elabContext
-  elabType' ctx t
+  elabTypeRaw ctx.rawTypeCons t
 
 freshLocal :: MonadIO m => RawName -> Type -> m Var
 freshLocal x t = flip Var t <$> freshLocalName x
@@ -711,20 +713,43 @@ elabTerm (RVar x) t k = do
 --         Just q -> goHead v acc q
 --         _      -> pure acc
 
+data Context = Context
+  { rawTerms    :: Map RawName Var
+  , rawPrims    :: Map RawName (PrimOp, [Type], Type)
+  , rawDataCons :: Map RawName (DataTag, [Type], Type)
+  , rawTypeCons :: Map RawName Name
+  }
+  deriving (Show)
+
 data RawContext = RawContext
-  { dataCons :: Map RawName (DataTag, RawType, RawName)
-  , typeCons :: Map RawName (Name, Set Name)
+  { dataCons :: Map RawName (DataTag, [RawType], Name, RawType)
+  , typeCons :: Map RawName (Name, Set DataTag)
   , terms    :: Map RawName (Name, RawType, Raw)
   , prims    :: Map RawName (PrimOp, RawType)
   }
   deriving (Show)
 
+data RawModule = RawModule
+  { dataCons :: Map RawName (DataTag, [Type], Type)
+  , prims    :: Map RawName (PrimOp, [Type], Type)
+  , terms    :: Map RawName Var
+  , typeCons :: Map RawName (Name, Set DataTag)
+  }
+  deriving (Show)
+
+data Module = Module
+  { dataCons :: NameMap (Int, Type)
+  , prims    :: NameMap Type
+  , terms    :: NameMap (Term, Type)
+  , typeCons :: NameMap (Set Name)
+  }
+
 rawContext :: (HasCallStack, MonadIO m) => [RawDef] -> m RawContext
 rawContext = foldM fDef (RawContext
   { dataCons = mempty
   , typeCons = mempty
-  , terms = mempty
-  , prims = mempty
+  , terms    = mempty
+  , prims    = mempty
   })
   where
     checkDup thing m x = do
@@ -732,21 +757,20 @@ rawContext = foldM fDef (RawContext
         elabError (ErrDuplicate thing x)
       freshLocalName x
 
-    fCon ret (conSet, dataCons) (raw, args) = do
+    fCon (conSet, dataCons) (raw, args, ret) = do
       name <- checkDup "data constructor" dataCons raw
       let
-        conSet' = Set.insert name conSet
-        index   = Set.findIndex name conSet'
-      pure ( conSet'
-           , dataCons & at raw ?~ (DataTag name index, args, ret)
-           )
+        tag = DataTag name (TrivialOrd $ length conSet)
+        conSet' = Set.insert tag conSet
+        result  = (tag, args, name, ret)
+      pure (conSet', dataCons & at raw ?~ result)
 
     fDef RawContext{..} (RDData raw xs) = do
       name <- checkDup "type constructor" typeCons raw
-      (conSet, dataCons) <- foldM (fCon raw) (mempty, dataCons) xs
+      (conSet, dataCons') <- foldM fCon (mempty, dataCons) xs
       pure RawContext
         { typeCons = typeCons & at raw ?~ (name, conSet)
-        , dataCons = dataCons
+        , dataCons = dataCons'
         , ..
         }
     fDef RawContext{..} (RDPrim raw t) = do
@@ -756,53 +780,134 @@ rawContext = foldM fDef (RawContext
       name <- checkDup "top-level" terms raw
       pure RawContext{ terms = terms & at raw ?~ (name, t, e), .. }
 
--- data Context = Context
---   { rawTerms    :: Map RawName Var
---   , rawPrims    :: Map RawName (PrimOp, [Type], Type)
---   , rawDataCons :: Map RawName (DataTag, [Type], Type)
---   , rawTypeCons :: Map RawName Name
---   }
+genContext1 :: (HasCallStack, MonadIO m) => [RawDef] -> m (RawModule)
+genContext1 xs = do
+  typeCons <- foldM `flip` mempty `flip` xs $ \cases
+    typeCons (RDData raw _) -> do
+      name <- checkDup "type constructor" typeCons raw
+      pure $ typeCons & at raw ?~ name
+    typeCons _ -> pure typeCons
 
--- data RawContext = RawContext
---   { dataCons :: Map RawName (DataTag, RawType, RawName)
---   , typeCons :: Map RawName (Name, Set Name)
---   , terms    :: Map RawName (Name, RawType, Raw)
---   , prims    :: Map RawName (PrimOp, RawType)
---   }
-
-genContext :: HasCallStack => RawContext -> IO Context
-genContext ctx = do
-  let rawTypeCons = fst <$> ctx.typeCons
-  rawTerms <- forM ctx.terms \(n, t, _) ->
-    Var n <$> elabType' init t
-  rawPrims <- forM ctx.prims \(n, t) ->
-    elabType' init t <&> \case
-      TyFun ts t -> (n, toList ts, t)
-      t -> (n, [], t)
-  rawDataCons <- forM ctx.dataCons \(tag, rArgs, rParent) -> do
-    let
-      (TyCon -> tParent, _) = ctx.typeCons Map.! rParent
-    elabType' init rArgs >>= \case
-      TyFun ts t | t == tParent -> pure (tag, toList ts, tParent)
-      t | t == tParent -> pure (tag, [], tParent)
-      _ -> elabError "bad data constructor"
-  pure Context
-    { rawTerms
-    , rawPrims
-    , rawDataCons
-    , rawTypeCons
-    }
-  where
-    _nameMap = NameMap . IntMap.fromAscList
-    init = Context
-      { rawTerms    = mempty
-      , rawPrims    = mempty
-      , rawDataCons = mempty
-      , rawTypeCons = fst <$> ctx.typeCons
+  foldM (fDef typeCons) `flip` xs $ RawModule
+      { dataCons = mempty
+      , prims    = mempty
+      , terms    = mempty
+      , typeCons = mempty
       }
 
-data Module = Module
-  { dataCons :: NameMap (DataTag, Type)
-  , typeCons :: NameMap (Set Name)
-  , terms    :: NameMap Term
-  }
+  where
+    checkDup thing m x = do
+      when (isJust $ m ^. at x) $ do
+        elabError (ErrDuplicate thing x)
+      freshLocalName x
+
+    fCon tCon tParent (conSet, dataCons) (raw, rArgs, rRet) = do
+      name <- checkDup "data constructor" dataCons raw
+      args <- mapM (elabTypeRaw tCon) rArgs
+      ret <- elabTypeRaw tCon rRet
+      unless (ret == tParent) $
+        elabError "bad data constructor"
+      let
+        tag = DataTag name (TrivialOrd $ length conSet)
+        conSet' = Set.insert tag conSet
+        result  = (tag, args, ret)
+      pure (conSet', dataCons & at raw ?~ result)
+
+    fDef tCon RawModule{..} (RDData raw xs) = do
+      let name = tCon Map.! raw
+      (conSet, dataCons) <- foldM
+        (fCon tCon (TyCon name))
+        (mempty, dataCons)
+        xs
+      pure RawModule
+        { typeCons = typeCons & at raw ?~ (name, conSet)
+        , dataCons
+        , ..
+        }
+    fDef tCons RawModule{..} (RDPrim raw t) = do
+      name <- checkDup "primitive function" prims raw
+      (args, ret) <- typeSplit <$> elabTypeRaw tCons t
+      pure RawModule{ prims = prims & at raw ?~ (name, args, ret), .. }
+    fDef tCons RawModule{..} (RDTerm raw t _) = do
+      name <- checkDup "top-level" terms raw
+      var <- Var name <$> elabTypeRaw tCons t
+      pure RawModule{ terms = terms & at raw ?~ var, .. }
+
+genContext :: (HasCallStack, MonadIO m) => RawContext -> m ([(Var, Raw)], RawModule)
+genContext raw = do
+  let
+    typeCons = fst <$> raw.typeCons
+    elabType = elabTypeRaw typeCons
+  rawTerms <- forM raw.terms \(name, t, e) ->
+    (, e) . Var name <$> elabType t
+  prims <- forM raw.prims \(name, t) -> do
+    (args, ret) <- typeSplit <$> elabType t
+    pure (name, args, ret)
+  dataCons <- forM raw.dataCons \(tag, rArgs, nParent, rRet) -> do
+    args <- mapM elabType rArgs
+    ret <- elabType rRet
+    unless (ret == TyCon nParent) $
+      elabError "bad data constructor"
+    pure (tag, args, ret)
+
+  pure ([], RawModule
+    { terms = fst <$> rawTerms
+    , prims
+    , dataCons
+    , typeCons = raw.typeCons
+    })
+  where
+    _nameMap = NameMap . IntMap.fromAscList
+    -- init = Context
+    --   { rawTerms    = mempty
+    --   , rawPrims    = mempty
+    --   , rawDataCons = mempty
+    --   , rawTypeCons = fst <$> ctx.typeCons
+    --   }
+
+
+-- rawContext' :: HasCallStack => [RawDef] -> IO Context
+-- rawContext' = foldM fDef (Context
+--   { rawTerms = mempty
+--   , rawPrims = mempty
+--   , rawDataCons = mempty
+--   , rawTypeCons = mempty
+--   })
+--   where
+--     fnSplit (TyFun xs t) = (toList xs, t)
+--     fnSplit t            = ([], t)
+
+--     checkDup thing m x = do
+--       when (isJust $ m ^. at x) $ do
+--         elabError (ErrDuplicate thing x)
+--       freshLocalName x
+
+--     fCon tyCons tParent (conSet, dataCons) (raw, args, ret) = do
+--       name <- checkDup "data constructor" dataCons raw
+--       let
+--         conSet' = Set.insert name conSet
+--         index   = Set.findIndex name conSet'
+--       ret <- elabTypeRaw tyCons ret
+--       unless (ret == tParent) $
+--         elabError "bad data constructor"
+--       args <- mapM (elabTypeRaw tyCons) args
+--       pure
+--         ( conSet'
+--         , dataCons & at raw
+--                 ?~ (DataTag name index, args, ret)
+--         )
+--     fDef Context{..} (RDData raw (xs)) = do
+--       name <- checkDup "type constructor" rawTypeCons raw
+--       let tyCons = rawTypeCons & at raw ?~ name
+--       (_, rawDataCons) <- foldM (fCon tyCons (TyCon name)) (mempty, rawDataCons) xs
+--       pure Context
+--         { rawDataCons, rawTypeCons = tyCons, .. }
+--     fDef ctx@Context{..} (RDPrim raw t) = do
+--       name <- checkDup "primitive function" rawPrims raw
+--       (ts, t) <- fnSplit <$> elabTypeRaw ctx.rawTypeCons t
+--       pure Context{ rawPrims = rawPrims & at raw ?~ (name, ts, t), .. }
+--     fDef ctx@Context{..} (RDTerm raw t _) = do
+--       name <- checkDup "top-level" rawTerms raw
+--       var <- Var name <$> elabTypeRaw ctx.rawTypeCons t
+--       pure Context{ rawTerms = rawTerms & at raw ?~ var, .. }
+

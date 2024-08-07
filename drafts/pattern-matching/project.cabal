@@ -15,6 +15,8 @@ common base
     BangPatterns
     BlockArguments
     DataKinds
+    FlexibleContexts
+    FlexibleInstances
     DerivingVia
     DuplicateRecordFields
     GADTs

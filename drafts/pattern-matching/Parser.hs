@@ -13,6 +13,7 @@ import Control.Monad
 import Control.Monad.Combinators.Expr           (Operator (..), makeExprParser)
 import Control.Monad.Reader
 import Data.Char                                qualified as Char
+import Data.Foldable
 import Data.Functor
 import Data.List.NonEmpty                       (NonEmpty (..))
 import Data.List.NonEmpty                       qualified as NList
@@ -248,8 +249,8 @@ pDef = MegaL.nonIndented space (pData <|> pTerm <|> pPrim)
 
     pCons c = rsymbol "where" $> MegaL.IndentSome (Just (Mega.mkPos 3)) (pure . RDData c) do
       c <- pCon <* symbol ":"
-      t <- nblexeme pType
-      pure (c, t)
+      (ts, t) <- rawTypeSplit <$> nblexeme pType
+      pure (c, toList ts, t)
 
     pTerm = do
       x <- pVar <* symbol ":"
