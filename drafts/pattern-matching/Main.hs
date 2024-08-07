@@ -2,16 +2,21 @@ module Main
     ( main
     ) where
 
-import Data.Text.IO       qualified as Text
+import Data.Aeson           qualified as Aeson
+import Data.Aeson.Encoding  qualified as Aeson
+import Data.ByteString.Lazy qualified as BSL
+import Data.Text.IO         qualified as Text
 import Parser
-import System.Environment (getArgs)
-import Text.Megaparsec    qualified as Mega
+import System.Environment   (getArgs)
+import Text.Megaparsec      qualified as Mega
 
 main :: IO ()
 main = getArgs >>= \case
-  [file] -> do
+  file : rest -> do
     input <- Text.readFile file
     case parse file input of
-      Right x -> print x
       Left  x -> putStrLn (Mega.errorBundlePretty x)
+      Right x | "-json" `elem` rest ->
+        BSL.putStr . Aeson.encodingToLazyByteString $ Aeson.toEncoding x
+      Right x -> print x
   _ -> putStrLn "bad input"

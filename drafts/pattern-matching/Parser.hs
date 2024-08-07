@@ -16,7 +16,6 @@ import Data.Char                                qualified as Char
 import Data.Functor
 import Data.List.NonEmpty                       (NonEmpty (..))
 import Data.List.NonEmpty                       qualified as NList
-import Data.Maybe                               (isJust)
 import Data.Set                                 qualified as Set
 import Data.Text                                qualified as Text
 import Data.Text.Short                          qualified as TextS
@@ -96,17 +95,31 @@ ident :: Parsec Char -> Parsec RawName
 ident first = fmap TextS.fromText . nblexeme . Mega.try $ (name >>= check)
   where
     firstChar = first <|> Mega.char '_'
-    keywords = Set.fromList ["let", "in", "_", "case", "data", "rec", "where", "of"]
+    keywords = Set.fromList ["let", "in", "_", "case", "data", "rec", "where", "of", "primitive"]
     name = Mega.lookAhead firstChar *> Mega.takeWhileP Nothing identChar
     check x
       | x `Set.member` keywords = fail $ show x ++ " cannot be an identifier"
       | otherwise = pure x
 
+pChar :: Parsec Char
+pChar = Mega.between (Mega.char '\'') (Mega.char '\'') MegaL.charLiteral Mega.<?> "character literal"
+
+pString :: Parsec StrictText
+pString = Text.pack <$> (Mega.char '"' *> Mega.manyTill MegaL.charLiteral (Mega.char '"')) Mega.<?> "string literal"
+
 pVar :: Parsec RawName
-pVar = ident Mega.lowerChar Mega.<?> "variable"
+pVar =  Mega.label "variable" $ Mega.choice
+  [ TextS.fromText <$> escape
+  , ident Mega.lowerChar
+  ]
+  where escape = Mega.char '@' *> pString
 
 pCon :: Parsec RawName
-pCon = ident Mega.upperChar Mega.<?> "constructor"
+pCon = Mega.label "consructor" $ Mega.choice
+  [ TextS.fromText <$> escape
+  , ident Mega.upperChar
+  ]
+  where escape = Mega.char '@' *> Mega.char '@' *> pString
 
 pType :: Parsec RawType
 pType =
@@ -116,8 +129,8 @@ pType =
 
 pLit :: Parsec Literal
 pLit = Mega.label "literal" . nblexeme $ Mega.choice
-  [ LChar <$> Mega.between (Mega.char '\'') (Mega.char '\'') MegaL.charLiteral Mega.<?> "character literal"
-  , LString . Text.pack <$> (Mega.char '"' *> Mega.manyTill MegaL.charLiteral (Mega.char '"')) Mega.<?> "string literal"
+  [ LChar <$> pChar
+  , LString <$> pString
   , pInt
   ]
   where
@@ -227,23 +240,31 @@ pRaw = do
 --          | otherwise  -> MegaL.incorrectIndent EQ lvl pos
 
 pDef :: Parsec RawDef
-pDef = MegaL.nonIndented space (pData <|> pTerm)
+pDef = MegaL.nonIndented space (pData <|> pTerm <|> pPrim)
   where
     pData = MegaL.indentBlock space do
-      rsymbol "data"
-      isPrim <- isJust <$> Mega.optional (Mega.char '@')
-      c <- pCon <* rsymbol "where"
-      pure $ MegaL.IndentMany (Just (Mega.mkPos 3)) (pure . RDData c isPrim) do
-        c <- pCon <* symbol ":"
-        t <- nblexeme pType
-        pure (c, t)
+      c <- rsymbol "data" *> pCon
+      pCons c <|> pure (MegaL.IndentNone (RDData c []))
+
+    pCons c = rsymbol "where" $> MegaL.IndentSome (Just (Mega.mkPos 3)) (pure . RDData c) do
+      c <- pCon <* symbol ":"
+      t <- nblexeme pType
+      pure (c, t)
 
     pTerm = do
       x <- pVar <* symbol ":"
-      t <- MegaL.lexeme space pType
-      void . nblexeme $ Mega.chunk (TextS.toText x)
+      t <- lexeme pType
+      void . MegaL.nonIndented space . nblexeme $ Mega.chunk (TextS.toText x)
       e <- symbol "=" *> indentLocal (lexeme pRaw)
       pure $ RDTerm x t e
+
+    pPrim = do
+      rsymbol "primitive"
+      void $ Mega.char '@'
+      x <- TextS.fromText <$> nblexeme (Mega.takeWhile1P Nothing identChar)
+      void $ symbol ":"
+      t <- nblexeme pType
+      pure $ RDPrim x t
 
 parser :: Parsec [RawDef]
 parser = many (lexeme pDef) <* Mega.eof

@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric   #-}
 {-# LANGUAGE OverloadedLists #-}
 
 module Lang where
@@ -18,11 +19,14 @@ import Data.Sequence              (Seq (..))
 import Data.Sequence              qualified as Seq
 import Data.Set                   (Set)
 -- import Data.Set                   qualified as Set
+import Data.Aeson                 qualified as Aeson
+import Data.Maybe                 (isJust)
 import Data.String                (IsString (..))
 import Data.Text                  qualified as Text
 import Data.Text.Short            (ShortText)
 import Data.Typeable
 import GHC.Exts                   (oneShot)
+import GHC.Generics               (Generic)
 import GHC.IO.Unsafe              (unsafePerformIO)
 import Lens.Micro.GHC
 import Lens.Micro.Internal
@@ -123,7 +127,7 @@ freshGlobalName x =
 
 newtype NameMap x
   = NameMap { nameMap :: IntMap x }
-  deriving (Foldable, Functor, Traversable)
+  deriving (Foldable, Functor, Monoid, Semigroup, Traversable)
 
 type instance Index (NameMap a) = Name
 type instance IxValue (NameMap a) = a
@@ -212,9 +216,32 @@ data Raw where
   deriving (Eq, Show)
 
 data RawDef where
+  RDPrim :: RawName -> RawType -> RawDef
   RDTerm :: RawName -> RawType -> Raw -> RawDef
-  RDData :: RawName -> Bool -> [(RawName, RawType)] -> RawDef
+  RDData :: RawName -> [(RawName, RawType)] -> RawDef
   deriving (Eq, Show)
+
+deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialEq r))
+deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialOrd r))
+deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialShow r))
+
+deriving instance (Generic NameKind)
+deriving instance (Generic Name)
+deriving instance (Generic Literal)
+deriving instance (Generic RawType)
+deriving instance (Generic RawTermDef)
+deriving instance (Generic RawPattern)
+deriving instance (Generic Raw)
+deriving instance (Generic RawDef)
+
+instance Aeson.ToJSON NameKind where
+instance Aeson.ToJSON Name where
+instance Aeson.ToJSON Literal where
+instance Aeson.ToJSON RawType where
+instance Aeson.ToJSON RawTermDef where
+instance Aeson.ToJSON RawPattern where
+instance Aeson.ToJSON Raw where
+instance Aeson.ToJSON RawDef where
 
 --- LOWERED AST
 
@@ -294,6 +321,7 @@ data ElabErrorMsg
   | ErrPrimUnknown RawName
   | ErrPrimArity RawName Int Int
   | ErrInvalidAnnotation RawName
+  | ErrDuplicate String RawName
   | ErrOther String
   deriving (Show)
 
@@ -480,22 +508,22 @@ litType (LString _) = do
     Nothing -> elabError "String# not defined"
     Just t  -> pure (TyCon t)
 
-elabAll
+elabTerms
   :: (Foldable f)
   => f Raw -> f Type -> (Seq Var -> Elab Term)
   -> Elab Term
-elabAll xs ts k = foldr2 c k xs ts Empty
+elabTerms xs ts k = foldr2 c k xs ts Empty
   where
     {-# INLINE c #-}
-    c x t k zs = elab x t (Wrap \z -> k (zs :|> z))
+    c x t k zs = elabTerm x t (Wrap \z -> k (zs :|> z))
 
-elab :: Raw -> Type -> Cont -> Elab Term
-elab (RAnnot x t') t k = do
+elabTerm :: Raw -> Type -> Cont -> Elab Term
+elabTerm (RAnnot x t') t k = do
   elabType t' >>= tyUnify t
-  elab x t k
-elab (RApp f (Seq.fromList -> xs)) t k = do
+  elabTerm x t k
+elabTerm (RApp f (Seq.fromList -> xs)) t k = do
   ts <- mapM (const freshMeta) xs
-  elab f (TyFun ts t) $ Wrap \v -> elabAll xs ts \vs ->
+  elabTerm f (TyFun ts t) $ Wrap \v -> elabTerms xs ts \vs ->
     case k of
       Abstract k -> do
         tyUnify (varType k) (TyNeg ts)
@@ -505,7 +533,7 @@ elab (RApp f (Seq.fromList -> xs)) t k = do
         kx <- k x
         k <- freshLabel "k" [t]
         pure $ TLetK [(k, [x], kx)] (TApp v k vs)
-elab (RCase _x _es) _t _k = do
+elabTerm (RCase _x _es) _t _k = do
   -- t' <- freshMeta
   -- elab x t $ Wrap \v ->
   --   case k of
@@ -514,19 +542,19 @@ elab (RCase _x _es) _t _k = do
   -- where
   --   mkRow k (p, e) = _
   todo
-elab (RData rc xs) t k = do
+elabTerm (RData rc xs) t k = do
   Context{..} <- elabContext
   case rawDataCons ^. at rc of
     Nothing           -> elabError (ErrConUnknown rc)
     Just (c, ts, t') -> do
       unless (length ts == length xs) $
         elabError (ErrConArity rc (length ts) (length xs))
-      elabAll xs ts \vs -> do
+      elabTerms xs ts \vs -> do
         tyUnify t (TyCon t')
         x <- freshLocal "d" (TyCon t')
         e <- applyCont k x
         pure $ TLetV x (VData c vs) e
-elab (RLambda (Seq.fromList -> xs) e) t k = do
+elabTerm (RLambda (Seq.fromList -> xs) e) t k = do
   f <- freshLocal "f" t
   j <- elabShiftLevel1 \ik -> elabShiftLevel (length xs) \ixs -> do
     t' <- freshMeta
@@ -534,7 +562,7 @@ elab (RLambda (Seq.fromList -> xs) e) t k = do
     vs <- Seq.traverseWithIndex
       (\i x -> Var (Bound x (ixs + i)) <$> freshMeta) xs
     e <- elabBindNames xs vs $
-      elab e t' (Abstract k)
+      elabTerm e t' (Abstract k)
     tyUnify t (TyFun (varType <$> vs) t')
     pure $ TLetF [(f, k, vs, e)]
   j <$> applyCont k f
@@ -553,8 +581,8 @@ elab (RLambda (Seq.fromList -> xs) e) t k = do
 --           t <- freshMeta
 --           Just . (,e) <$> freshLocal x t
 --   todo
-elab (RLetRec _ _) _t _k = todo
-elab (RLet xs e) t k = do
+elabTerm (RLetRec _ _) _t _k = todo
+elabTerm (RLet xs e) t k = do
   -- TODO: we need to modify the local env somehow for annotations
   _xs <- flip witherM xs \case
     RTDAnno x t -> do
@@ -577,24 +605,24 @@ elab (RLet xs e) t k = do
   --   -- that may include functions, so we split them up into a group of funcions
   --   -- and a group of values
   todo
-elab (RLit l) t k = do
+elabTerm (RLit l) t k = do
   litType l >>= tyUnify t
   x <- freshLocal "l" t
   e <- applyCont k x
   pure $ TLetV x (VLit l) e
-elab (RPrim rp xs) t k = do
+elabTerm (RPrim rp xs) t k = do
   Context{..} <- elabContext
   case rawPrims ^. at rp of
     Nothing          -> elabError (ErrPrimUnknown rp)
     Just (p, ts, t') -> do
       unless (length ts == length xs) $
         elabError (ErrPrimArity rp (length ts) (length xs))
-      elabAll xs ts \vs -> do
+      elabTerms xs ts \vs -> do
         tyUnify t t'
         x <- freshLocal "p" t'
         e <- applyCont k x
         pure $ TLetP x p vs e
-elab (RVar x) t k = do
+elabTerm (RVar x) t k = do
   Context{..} <- elabContext
   case rawNames ^. at x of
     Nothing -> elabError (ErrVarUnknown x)
@@ -699,3 +727,82 @@ elab (RVar x) t k = do
 --       case Map.lookup v r.cols of
 --         Just q -> goHead v acc q
 --         _      -> pure acc
+
+-- data Context = Context
+--   { dataCons    :: NameMap (DataTag, Type, Name)
+--   , typeCons    :: NameMap (Set Name)
+--   , rawNames    :: Map RawName Var
+--     -- _, args, ret type
+--   , rawPrims    :: Map RawName (PrimOp, [Type], Type)
+--     -- tags, args, ret type
+--   , rawDataCons :: Map RawName (DataTag, [Type], Name)
+--   , rawTypeCons :: Map RawName Name
+--   }
+
+-- data ElabT = Elab
+--   { ctx   :: Context
+--   , level :: Int
+--   }
+
+data RawContext = RawContext
+  { rawDataCons :: Map RawName (Name, RawType)
+  , rawTypeCons :: Map RawName Name
+  , rawTerms    :: Map RawName (Name, RawType, Raw)
+  , rawPrims    :: Map RawName (Name, RawType)
+  }
+
+rawContext :: MonadIO m => [RawDef] -> m RawContext
+rawContext = foldM fDef (RawContext
+  { rawDataCons = mempty
+  , rawTypeCons = mempty
+  , rawTerms = mempty
+  , rawPrims = mempty
+  })
+  where
+    checkDup thing m x =
+      when (isJust $ m ^. at x) $ do
+        elabError (ErrDuplicate thing x)
+
+    -- RDTerm :: RawName -> RawType -> Raw -> RawDef
+
+    -- fDef RawContext{..} (RDData raw True _) = do
+    --   checkDup "primitive type" rawPrims raw
+    --   name <- freshGlobalName raw
+    --   pure RawContext{ rawPrims = rawPrims & at raw ?~ name, .. }
+    fDef RawContext{..} (RDData raw xs) = do
+      checkDup "type constructor" rawTypeCons raw
+      name <- freshGlobalName raw
+      foldM fCon
+        RawContext{ rawTypeCons = rawTypeCons & at raw ?~ name, .. }
+        xs
+    fDef RawContext{..} (RDPrim raw t) = do
+      checkDup "primitive function" rawPrims raw
+      name <- freshGlobalName raw
+      pure RawContext{ rawPrims = rawPrims & at raw ?~ (name, t), .. }
+    fDef RawContext{..} (RDTerm raw t e) = do
+      checkDup "top-level" rawTerms raw
+      name <- freshGlobalName raw
+      pure RawContext{ rawTerms = rawTerms & at raw ?~ (name, t, e), .. }
+
+    fCon RawContext{..} (raw, t) = do
+      checkDup "data constructor" rawDataCons raw
+      name <- freshGlobalName raw
+      pure RawContext{ rawDataCons = rawDataCons & at raw ?~ (name, t), .. }
+
+-- genContext :: MonadIO m => [RawDef] -> m (Context)
+-- genContext = foldM f (Context
+--   { dataCons = mempty
+--   , typeCons = mempty
+--   , rawNames = mempty
+--   , rawPrims = mempty
+--   , rawDataCons = mempty
+--   , rawTypeCons = mempty
+--   })
+--   where
+--   -- RDTerm :: RawName -> RawType -> Raw -> RawDef
+--   -- RDData :: RawName -> Bool -> [(RawName, RawType)] -> RawDef
+
+--     f Context{..} (RDData name True _) = do
+--       pure Context{..}
+--     -- f acc (RDData name isPrim cons) = pure acc
+--     f acc x = pure acc
