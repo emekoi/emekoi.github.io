@@ -21,5 +21,5 @@ main = getArgs >>= \case
       Right x | "-json" `elem` rest ->
         BSL.putStr . Aeson.encodingToLazyByteString $ Aeson.toEncoding x
       Right x -> do
-        Lang.rawModule x >>= print
+        Lang.elaborate x >>= print
   _ -> putStrLn "bad input"

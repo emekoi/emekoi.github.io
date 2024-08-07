@@ -25,6 +25,7 @@ import Data.String                (IsString (..))
 import Data.Text                  qualified as Text
 import Data.Text.Short            (ShortText)
 import Data.Text.Short            qualified as TextS
+import Data.Traversable
 import Data.Typeable              (Typeable)
 import GHC.Exts                   (oneShot)
 import GHC.IO.Unsafe              (unsafePerformIO)
@@ -68,16 +69,18 @@ newtype RecFold a b
 
 pattern RecFold :: (a -> (RecFold a b -> b) -> b) -> RecFold a b
 pattern RecFold f <- MkRecFold f
-  where RecFold f = MkRecFold (oneShot f)
+  where
+    RecFold f = MkRecFold (oneShot f)
 
 foldr2 :: (Foldable f, Foldable g) => (a -> b -> c -> c) -> c -> f a -> g b -> c
 foldr2 c i xs =
-  foldr f (const i) xs . RecFold . foldr g (\_ _ -> i) where
+  foldr f (const i) xs . RecFold . foldr g (\_ _ -> i)
+  where
     g e2 r2 e1 r1 = c e1 e2 (r1 (RecFold r2))
     f e r (MkRecFold x) = x e r
 {-# INLINEABLE foldr2 #-}
 
-todo :: HasCallStack => a
+todo :: (HasCallStack) => a
 todo = error "TODO"
 
 type StrictText = Text.Text
@@ -104,23 +107,24 @@ pattern Bound, Local, Global :: ShortText -> Int -> Name
 pattern Bound x i = Name (TrivialOrd BoundName) (TrivialEq x) i
 pattern Local x i = Name (TrivialOrd LocalName) (TrivialEq x) i
 pattern Global x i = Name (TrivialOrd GlobalName) (TrivialEq x) i
+
 {-# COMPLETE Local, Global, Bound #-}
 
 instance Show Name where
-  show (Bound x  i)  = "%" <> TextS.toString x <> "." <> show i
-  show (Local x  i)  = "$" <> TextS.toString x <> "." <> show i
-  show (Global x  i) = "@" <> TextS.toString x <> "." <> show i
+  show (Bound x i)  = "%" <> TextS.toString x <> "." <> show i
+  show (Local x i)  = "$" <> TextS.toString x <> "." <> show i
+  show (Global x i) = "@" <> TextS.toString x <> "." <> show i
 
 nameSource :: IORef Int
 nameSource = unsafePerformIO (newIORef 0)
 {-# NOINLINE nameSource #-}
 
-freshLocalName :: MonadIO m => ShortText -> m Name
+freshLocalName :: (MonadIO m) => ShortText -> m Name
 freshLocalName x =
   liftIO $ atomicModifyIORef' nameSource \i ->
     let !z = i + 1 in (z, Local x z)
 
-freshGlobalName :: MonadIO m => ShortText -> m Name
+freshGlobalName :: (MonadIO m) => ShortText -> m Name
 freshGlobalName x =
   liftIO $ atomicModifyIORef' nameSource \i ->
     let !z = i + 1 in (z, Global x z)
@@ -132,12 +136,13 @@ newtype NameMap x
     via (IntMap x)
 
 type instance Index (NameMap a) = Name
+
 type instance IxValue (NameMap a) = a
 
 instance Ixed (NameMap m) where
   ix k f (NameMap m) = case IntMap.lookup k.id m of
-     Just v  -> f v <&> NameMap . flip (IntMap.insert k.id) m
-     Nothing -> pure (NameMap m)
+    Just v  -> f v <&> NameMap . flip (IntMap.insert k.id) m
+    Nothing -> pure (NameMap m)
   {-# INLINE ix #-}
 
 --- PRIMITIVE TYPES
@@ -240,11 +245,9 @@ data TyMeta where
 type TyCon = Name
 
 data Type where
-  -- TyPrim :: PrimTy -> Type
   TyCon :: TyCon -> Type
   TyMeta' :: TrivialShow (IORef TyMeta) -> Type
   TyFun :: Seq Type -> Type -> Type
-  TyNeg :: Seq Type -> Type
   deriving (Eq, Show)
 
 pattern TyMeta :: IORef TyMeta -> Type
@@ -262,13 +265,33 @@ varType (Var _ t) = t
 
 pattern Var :: Name -> Type -> Var
 pattern Var n t = MkVar n (TrivialEq t)
+
 {-# COMPLETE Var :: Var #-}
 
-type Label = Var
+freshLocal :: (MonadIO m) => RawName -> Type -> m Var
+freshLocal x t = flip Var t <$> freshLocalName x
+
+freshGlobal :: (MonadIO m) => RawName -> Type -> m Var
+freshGlobal x t = flip Var t <$> freshGlobalName x
+
+data Label = MkLabel Name (TrivialEq (Seq Type))
+  deriving (Eq, Ord, Show)
+
 pattern Label :: Name -> Seq Type -> Label
-pattern Label n t <- Var n (TyNeg t)
-  where Label n t = Var n (TyNeg t)
-{-# COMPLETE Label #-}
+pattern Label n t <- MkLabel n (TrivialEq t)
+  where
+    Label n t = MkLabel n (TrivialEq t)
+
+{-# COMPLETE Label :: Label #-}
+
+labelTypes :: Label -> Seq Type
+labelTypes (Label _ ts) = ts
+
+freshLabel :: (MonadIO m) => RawName -> Seq Type -> m Label
+freshLabel x ts = flip Label ts <$> freshLocalName x
+
+labelReturn :: Type -> Label
+labelReturn t = Label (Bound "return" 0) [t]
 
 type PrimOp = Name
 
@@ -314,7 +337,8 @@ data ElabErrorMsg
   | ErrPrimUnknown RawName
   | ErrPrimArity RawName Int Int
   | ErrInvalidAnnotation RawName
-  | ErrDuplicate String RawName
+  | ErrDefDuplicate String RawName
+  | ErrDefOther String
   | ErrOther String
   deriving (Show)
 
@@ -328,46 +352,44 @@ newtype ElabError
 instance Exception ElabError where
   displayException p = show p.msg
 
-elabError ::(HasCallStack, MonadIO m) => ElabErrorMsg -> m a
+elabError :: (HasCallStack, MonadIO m) => ElabErrorMsg -> m a
 elabError = liftIO . throwIO . ElabError
 
 metaSource :: IORef Int
 metaSource = unsafePerformIO (newIORef 0)
 {-# NOINLINE metaSource #-}
 
-freshMeta :: MonadIO m => m Type
+freshMeta :: (MonadIO m) => m Type
 freshMeta = liftIO do
   m <- atomicModifyIORef' nameSource \i ->
     let !z = i + 1 in (z, MUnsolved z)
   TyMeta <$> newIORef m
 
-tyForce :: MonadIO m => Type -> m Type
+tyForce :: (MonadIO m) => Type -> m Type
 tyForce (TyMeta m) = liftIO $ go m
   where
-    go m = readIORef m >>= \case
-      MSolved (TyMeta m') -> do
-        m' <- go m'
-        writeIORef m (MSolved m')
-        pure m'
-      MSolved m -> pure m
-      _ -> pure (TyMeta m)
+    go m =
+      readIORef m >>= \case
+        MSolved (TyMeta m') -> do
+          m' <- go m'
+          writeIORef m (MSolved m')
+          pure m'
+        MSolved m -> pure m
+        _ -> pure (TyMeta m)
 tyForce t = pure t
 
-tyZonk :: MonadIO m => Type -> m Type
-tyZonk t = tyForce t >>= \case
-  TyFun as b  -> TyFun <$> traverse tyZonk as <*> tyZonk b
-  TyNeg t     -> TyNeg <$> traverse tyZonk t
-  x           -> pure x
+tyZonk :: (MonadIO m) => Type -> m Type
+tyZonk t =
+  tyForce t >>= \case
+    TyFun as b -> TyFun <$> traverse tyZonk as <*> tyZonk b
+    x -> pure x
 
 tySolve :: (HasCallStack, MonadIO m) => IORef TyMeta -> Type -> m ()
-tySolve m t = liftIO $
-  readIORef m >>= \case
-    MUnsolved _ -> tyForce t >>= go
-    _ -> error "solved meta passed to `tySolve`"
-  where
-    go (TyFun as b) = traverse_ go as >> go b
-    go (TyNeg t)    = traverse_ go t
-    go _            = undefined
+tySolve m t =
+  liftIO $
+    readIORef m >>= \case
+      MUnsolved _ -> writeIORef m (MSolved t)
+      _ -> error "solved meta passed to `tySolve`"
 
 tyUnify :: (HasCallStack, MonadIO m) => Type -> Type -> m ()
 tyUnify x y = do
@@ -378,14 +400,19 @@ tyUnify x y = do
     go x y | x == y = pure ()
     go (TyMeta m) t = tySolve m t
     go t (TyMeta m) = tySolve m t
-    go (TyFun as b) (TyFun as' b') | length as == length as' =
-      sequence_ (mzipWith go as as') >> go b b'
-    go (TyNeg t) (TyNeg t') | length t == length t' =
-      sequence_ (mzipWith go t t')
+    go (TyFun as b) (TyFun as' b')
+      | length as == length as' =
+          sequence_ (mzipWith go as as') >> go b b'
     go x y = do
       x <- tyZonk x
       y <- tyZonk y
       elabError (ErrTypeUnify x y)
+
+tyUnifyLabel :: (HasCallStack, MonadIO m) => Label -> Label -> m ()
+tyUnifyLabel (Label _ xs) (Label _ ys)
+  | length xs == length ys =
+      sequence_ (mzipWith tyUnify xs ys)
+  | otherwise = todo
 
 data RawModule = RawModule
   { dataCons :: Map RawName (DataTag, [Type], Type)
@@ -396,10 +423,15 @@ data RawModule = RawModule
   deriving (Show)
 
 rawBindName :: RawModule -> RawName -> Var -> RawModule
-rawBindName RawModule{..} x v =
-  RawModule { terms = terms & (at x ?~ v), ..}
+rawBindName RawModule {..} x v =
+  RawModule {terms = terms & (at x ?~ v), ..}
 
-rawBindNames :: (MonadZip m, Foldable m) => RawModule -> m RawName -> m Var -> RawModule
+rawBindNames ::
+  (MonadZip m, Foldable m) =>
+  RawModule ->
+  m RawName ->
+  m Var ->
+  RawModule
 rawBindNames raw xs vs =
   foldl' (\raw (x, v) -> rawBindName raw x v) raw (mzip xs vs)
 
@@ -412,27 +444,59 @@ data ElabT = Elab
   }
 
 type Elab r = ReaderT ElabT IO r
+
 elabContext :: Elab RawModule
 elabContext = asks (.raw)
 
-elabShiftLevel1 :: (Int -> Elab r) -> Elab r
-elabShiftLevel1 = elabShiftLevel 1
+-- elabShiftLevel1 :: (Int -> Elab r) -> Elab r
+-- elabShiftLevel1 = elabShiftLevel 1
 
-elabShiftLevel :: Int -> (Int -> Elab r) -> Elab r
-elabShiftLevel by k = ReaderT \Elab{..} ->
-  runReaderT (k level) Elab { level = level + by, ..}
+-- elabShiftLevel :: Int -> (Int -> Elab r) -> Elab r
+-- elabShiftLevel by k = ReaderT \Elab {..} ->
+--   runReaderT (k level) Elab {level = level + by, ..}
 
-elabSetLevel :: Int -> Elab r -> Elab r
-elabSetLevel l k = ReaderT \Elab{..} ->
-  runReaderT k Elab { level = l, ..}
+-- elabSetLevel :: Int -> Elab r -> Elab r
+-- elabSetLevel l k = ReaderT \Elab {..} ->
+--   runReaderT k Elab {level = l, ..}
 
-elabBindName :: RawName -> Var -> Elab r -> Elab r
-elabBindName x v = local (\Elab{..} -> Elab{raw = rawBindName raw x v, ..})
+-- elabBindName :: RawName -> Var -> Elab r -> Elab r
+-- elabBindName x v = local \Elab {..} ->
+--   Elab {raw = rawBindName raw x v, ..}
 
-elabBindNames ::(MonadZip m, Foldable m) => m RawName -> m Var -> Elab r -> Elab r
-elabBindNames xs vs = local (\Elab{..} -> Elab{raw = rawBindNames raw xs vs, ..})
+elabBindName :: RawName -> Type -> (Var -> Elab r) -> Elab r
+elabBindName x t k = do
+  Elab{..} <- ask
+  let v = Var (Bound x level) t
+  flip local (k v) \Elab {..} ->
+    Elab {raw = rawBindName raw x v, ..}
 
-elabTypeRaw :: (HasCallStack, MonadIO m) => Map RawName (Name, Set DataTag) -> RawType -> m Type
+elabBindNames
+  :: (MonadZip m, Foldable m, Traversable m)
+  => m RawName -> m Type -> (m Var -> Elab r) -> Elab r
+elabBindNames xs ts k = do
+  Elab{..} <- ask
+  let
+    (_, vs) = mapAccumL
+      (\i (x, t) -> (i + 1, Var (Bound x i) t))
+      level
+      (mzip xs ts)
+  flip local (k vs) \Elab {..} ->
+    Elab {raw = rawBindNames raw xs vs, ..}
+
+-- elabBindNames ::
+--   (MonadZip m, Foldable m) =>
+--   m RawName ->
+--   m Var ->
+--   Elab r ->
+--   Elab r
+-- elabBindNames xs vs = local \Elab {..} ->
+--   Elab {raw = rawBindNames raw xs vs, ..}
+
+elabTypeRaw ::
+  (HasCallStack, MonadIO m) =>
+  Map RawName (Name, Set DataTag) ->
+  RawType ->
+  m Type
 elabTypeRaw ctx t = go ctx Empty t
   where
     go ctx acc (RTyFun a b) = do
@@ -442,30 +506,21 @@ elabTypeRaw ctx t = go ctx Empty t
       case ctx ^. at c of
         Nothing -> elabError (ErrTypeUnkown r)
         Just (t, _)
-          | null acc  -> pure $ TyCon t
+          | null acc -> pure $ TyCon t
           | otherwise -> pure $ TyFun acc (TyCon t)
 
-elabType :: HasCallStack => RawType -> Elab Type
+elabType :: (HasCallStack) => RawType -> Elab Type
 elabType t = do
   ctx <- elabContext
   elabTypeRaw ctx.typeCons t
-
-freshLocal :: MonadIO m => RawName -> Type -> m Var
-freshLocal x t = flip Var t <$> freshLocalName x
-
-freshGlobal :: MonadIO m => RawName -> Type -> m Var
-freshGlobal x t = flip Var t <$> freshGlobalName x
-
-freshLabel :: MonadIO m => RawName -> Seq Type -> m Label
-freshLabel x ts = flip Label ts <$> freshLocalName x
 
 data Cont where
   Abstract :: Label -> Cont
   Wrap :: (Var -> Elab Term) -> Cont
 
-applyCont :: HasCallStack => Cont -> Var -> Elab Term
-applyCont (Abstract k) x = pure $ TJmp k (pure x)
-applyCont (Wrap k) x     = k x
+contApply :: (HasCallStack) => Cont -> Var -> Elab Term
+contApply (Abstract k) x = pure $ TJmp k (pure x)
+contApply (Wrap k) x     = k x
 
 {-
 freshBound :: CPS.Type s -> Cont s -> Infer s (CPS.Var s, CPS.Term s)
@@ -481,49 +536,56 @@ freshBound t k = do
         }) (k v <&> _1 .~ v)
 -}
 
-lookupRaw :: HasCallStack => RawName -> Elab Var
+lookupRaw :: (HasCallStack) => RawName -> Elab Var
 lookupRaw x = do
-  RawModule{..} <- elabContext
+  RawModule {..} <- elabContext
   case terms ^. at x of
     Nothing -> elabError (ErrVarUnknown x)
     Just v  -> pure v
 
-litType :: HasCallStack => Literal -> Elab Type
-litType (LInt _)    = do
-  Elab{..} <- ask
-  pure tInt
-litType (LChar _)   = do
-  Elab{..} <- ask
-  pure tChar
-litType (LString _) = do
-  Elab{..} <- ask
-  pure tString
+litType :: (HasCallStack) => Literal -> Elab Type
+litType x = do
+  Elab {..} <- ask
+  pure case x of
+    LInt _    -> tInt
+    LChar _   -> tChar
+    LString _ -> tString
 
-elabTerms
-  :: (HasCallStack, Foldable f)
-  => f Raw -> f Type -> (Seq Var -> Elab Term)
-  -> Elab Term
+-- abstractCont k = do
+--   case k of
+--     Abstract _ -> pure k
+--     Wrap k -> elabShiftLevel1 \i -> do
+--       let x = Var (Bound "x" i) t
+--       kx <- k x
+--       k <- freshLabel "k" [t]
+--       pure Wrap $ TLetK [(k, [x], kx)] (TApp v k vs)
+
+elabTerms ::
+  (HasCallStack, Foldable f) =>
+  f Raw ->
+  f Type ->
+  (Seq Var -> Elab Term) ->
+  Elab Term
 elabTerms xs ts k = foldr2 c k xs ts Empty
   where
     {-# INLINE c #-}
     c x t k zs = elabTerm x t (Wrap \z -> k (zs :|> z))
 
-elabTerm :: HasCallStack => Raw -> Type -> Cont -> Elab Term
+elabTerm :: (HasCallStack) => Raw -> Type -> Cont -> Elab Term
 elabTerm (RAnnot x t') t k = do
   elabType t' >>= tyUnify t
   elabTerm x t k
-elabTerm (RApp f (Seq.fromList -> xs)) t k = do
-  ts <- mapM (const freshMeta) xs
-  elabTerm f (TyFun ts t) $ Wrap \v -> elabTerms xs ts \vs ->
+elabTerm (RApp f (Seq.fromList -> rArgs)) t k = do
+  tArgs <- mapM (const freshMeta) rArgs
+  elabTerm f (TyFun tArgs t) $ Wrap \vFun -> elabTerms rArgs tArgs \vArgs ->
     case k of
       Abstract k -> do
-        tyUnify (varType k) (TyNeg ts)
-        pure $ TApp v k vs
-      Wrap k -> elabShiftLevel1 \i -> do
-        let x = Var (Bound "x" i) t
+        -- tyUnify (varType k) (TyNeg [t])
+        pure $ TApp vFun k vArgs
+      Wrap k -> elabBindName "x" t \x -> do
         kx <- k x
         k <- freshLabel "k" [t]
-        pure $ TLetK [(k, [x], kx)] (TApp v k vs)
+        pure $ TLetK [(k, [x], kx)] (TApp vFun k vArgs)
 elabTerm (RCase _x _es) _t _k = do
   -- t' <- freshMeta
   -- elab x t $ Wrap \v ->
@@ -533,30 +595,31 @@ elabTerm (RCase _x _es) _t _k = do
   -- where
   --   mkRow k (p, e) = _
   todo
-elabTerm (RData rc xs) t k = do
+elabTerm (RData rCon rArgs) t k = do
   raw <- elabContext
-  case raw.dataCons  ^. at rc of
-    Nothing           -> elabError (ErrConUnknown rc)
-    Just (tag, ts, t') -> do
-      unless (length ts == length xs) $
-        elabError (ErrConArity rc (length ts) (length xs))
-      elabTerms xs ts \vs -> do
-        tyUnify t t'
-        x <- freshLocal "d" t'
-        e <- applyCont k x
-        pure $ TLetV x (VData tag vs) e
-elabTerm (RLambda (Seq.fromList -> xs) e) t k = do
+  case raw.dataCons ^. at rCon of
+    Nothing -> elabError (ErrConUnknown rCon)
+    Just (dTag, tArgs, tRet) -> do
+      let
+        nParams = length tArgs
+        nArgs   = length rArgs
+      unless (nParams == nArgs) $
+        elabError (ErrConArity rCon nParams nArgs)
+      elabTerms rArgs tArgs \vArgs -> do
+        tyUnify t tRet
+        x <- freshLocal "d" tRet
+        e <- contApply k x
+        pure $ TLetV x (VData dTag vArgs) e
+elabTerm (RLambda (Seq.fromList -> rArgs) e) t k = do
   f <- freshLocal "f" t
-  j <- elabShiftLevel1 \ik -> elabShiftLevel (length xs) \ixs -> do
-    t' <- freshMeta
-    let k = Label (Bound "k" ik) [t']
-    vs <- Seq.traverseWithIndex
-      (\i x -> Var (Bound x (ixs + i)) <$> freshMeta) xs
-    e <- elabBindNames xs vs $
-      elabTerm e t' (Abstract k)
-    tyUnify t (TyFun (varType <$> vs) t')
-    pure $ TLetF [(f, k, vs, e)]
-  j <$> applyCont k f
+  tArgs <- mapM (const freshMeta) rArgs
+  tRet  <- freshMeta
+  tyUnify t (TyFun tArgs tRet)
+  j <-elabBindNames rArgs tArgs \vArgs -> do
+    let kRet = labelReturn tRet
+    e <- elabTerm e tRet (Abstract kRet)
+    pure $ TLetF [(f, kRet, vArgs, e)]
+  j <$> contApply k f
 -- elab (RLet False xs e) t k = do
 --   elabCtx <- ask
 --   -- TODO: we need to modify the local env somehow for annotations
@@ -582,7 +645,7 @@ elabTerm (RLet xs _e) _t _k = do
     RTDTerm x e -> do
       raw <- elabContext
       case raw.terms ^. at x of
-        Just v  -> pure $ Just (v, e)
+        Just v -> pure $ Just (v, e)
         Nothing -> do
           t <- freshMeta
           Just . (,e) <$> freshLocal x t
@@ -599,27 +662,30 @@ elabTerm (RLet xs _e) _t _k = do
 elabTerm (RLit l) t k = do
   litType l >>= tyUnify t
   x <- freshLocal "l" t
-  e <- applyCont k x
+  e <- contApply k x
   pure $ TLetV x (VLit l) e
-elabTerm (RPrim rp xs) t k = do
+elabTerm (RPrim rPrim rArgs) t k = do
   raw <- elabContext
-  case raw.prims ^. at rp of
-    Nothing          -> elabError (ErrPrimUnknown rp)
-    Just (p, ts, t') -> do
-      unless (length ts == length xs) $
-        elabError (ErrPrimArity rp (length ts) (length xs))
-      elabTerms xs ts \vs -> do
-        tyUnify t t'
-        x <- freshLocal "p" t'
-        e <- applyCont k x
-        pure $ TLetP x p vs e
+  case raw.prims ^. at rPrim of
+    Nothing -> elabError (ErrPrimUnknown rPrim)
+    Just (prim, tArgs, tRet) -> do
+      let
+        nParams = length tArgs
+        nArgs   = length rArgs
+      unless (nParams == nArgs) $
+        elabError (ErrPrimArity rPrim nParams nArgs)
+      elabTerms rArgs tArgs \vArgs -> do
+        tyUnify t tRet
+        x <- freshLocal "p" tRet
+        e <- contApply k x
+        pure $ TLetP x prim vArgs e
 elabTerm (RVar x) t k = do
-  RawModule{..} <- elabContext
-  case terms ^. at x of
+  raw <- elabContext
+  case raw.terms ^. at x of
     Nothing -> elabError (ErrVarUnknown x)
-    Just v  -> do
+    Just v -> do
       tyUnify t (varType v)
-      applyCont k v
+      contApply k v
 
 -- data MatchRow = Row
 --   { cols :: Map Var (Pattern 'Low)
@@ -727,6 +793,7 @@ data Module = Module
   , terms    :: NameMap (Term, Type)
   , typeCons :: NameMap (Set DataTag)
   }
+  deriving (Show)
 
 rawModule :: (HasCallStack, MonadIO m) => [RawDef] -> m ([(Var, Raw)], RawModule)
 rawModule xs = do
@@ -736,51 +803,57 @@ rawModule xs = do
       pure $ typeCons & at raw ?~ (name, [])
     typeCons _ -> pure typeCons
 
-  foldM fDef `flip` xs $ ([], RawModule
-      { dataCons = mempty
-      , prims    = mempty
-      , terms    = mempty
-      , typeCons = typeCons
-      })
+  foldM fDef `flip` xs $
+    ( [],
+      RawModule
+        { dataCons = mempty,
+          prims = mempty,
+          terms = mempty,
+          typeCons = typeCons
+        }
+    )
   where
     checkDup thing m x = do
       when (isJust $ m ^. at x) $ do
-        elabError (ErrDuplicate thing x)
-      freshLocalName x
+        elabError (ErrDefDuplicate thing x)
+      freshGlobalName x
 
     fCon tCon tParent (conSet, dataCons) (raw, rArgs, rRet) = do
       name <- checkDup "data constructor" dataCons raw
       args <- mapM (elabTypeRaw tCon) rArgs
       ret <- elabTypeRaw tCon rRet
       unless (ret == tParent) $
-        elabError "bad data constructor"
-      let
-        tag = DataTag name (TrivialOrd $ length conSet)
-        conSet' = Set.insert tag conSet
-        result  = (tag, args, ret)
+        elabError (ErrDefOther "bad data constructor")
+      let tag = DataTag name (TrivialOrd $ length conSet)
+          conSet' = Set.insert tag conSet
+          result = (tag, args, ret)
       pure (conSet', dataCons & at raw ?~ result)
 
-    fDef (acc, RawModule{..}) (RDData raw xs) = do
+    fDef (acc, RawModule {..}) (RDData raw xs) = do
       let (name, _) = typeCons Map.! raw
-      (conSet, dataCons) <- foldM
-        (fCon typeCons (TyCon name))
-        (mempty, dataCons)
-        xs
-      pure (acc, RawModule
-        { typeCons = typeCons & at raw ?~ (name, conSet)
-        , dataCons
-        , ..
-        })
-    fDef (acc, RawModule{..}) (RDPrim raw t) = do
+      (conSet, dataCons) <-
+        foldM
+          (fCon typeCons (TyCon name))
+          (mempty, dataCons)
+          xs
+      pure
+        ( acc,
+          RawModule
+            { typeCons = typeCons & at raw ?~ (name, conSet),
+              dataCons,
+              ..
+            }
+        )
+    fDef (acc, RawModule {..}) (RDPrim raw t) = do
       name <- checkDup "primitive function" prims raw
       (args, ret) <- typeSplit <$> elabTypeRaw typeCons t
-      pure (acc, RawModule{ prims = prims & at raw ?~ (name, args, ret), .. })
-    fDef (acc, RawModule{..}) (RDTerm raw t e) = do
+      pure (acc, RawModule {prims = prims & at raw ?~ (name, args, ret), ..})
+    fDef (acc, RawModule {..}) (RDTerm raw t e) = do
       name <- checkDup "top-level" terms raw
       var <- Var name <$> elabTypeRaw typeCons t
-      pure ((var, e) : acc, RawModule{ terms = terms & at raw ?~ var, .. })
+      pure ((var, e) : acc, RawModule {terms = terms & at raw ?~ var, ..})
 
-elaborate :: MonadIO m => [RawDef] -> m Module
+elaborate :: (MonadIO m) => [RawDef] -> m Module
 elaborate xs = do
   (xs, raw) <- rawModule xs
 
@@ -789,22 +862,22 @@ elaborate xs = do
   tChar <- getType raw.typeCons "Char"
   let elab = Elab {level = 1, ..}
   terms <- fmap (NameMap . IntMap.fromList) . liftIO $ forM xs \(v, e) -> do
-    let
-      Var n t = v
-      (_, ret) = typeSplit t
-      retK = Abstract $ Label (Bound "k" 0) [ret]
+    let Var n t = v
+        (_, ret) = typeSplit t
+        retK = Abstract $ Label (Bound "k" 0) [ret]
     x <- runReaderT (elabTerm e t retK) elab
     pure (n.id, (x, t))
-  pure Module
-    { dataCons = convert raw.dataCons \(t, _, ret) -> (t.name.id, (t, ret))
-    , prims    = convert raw.prims \(p, args, ret) -> (p.id, (args, ret))
-    , terms    = terms
-    , typeCons = convert raw.typeCons \(t, cons) -> (t.id, cons)
-    }
+  pure
+    Module
+      { dataCons = convert raw.dataCons \(t, _, ret) -> (t.name.id, (t, ret)),
+        prims = convert raw.prims \(p, args, ret) -> (p.id, (args, ret)),
+        terms = terms,
+        typeCons = convert raw.typeCons \(t, cons) -> (t.id, cons)
+      }
   where
     convert x f = NameMap . IntMap.fromAscList $ (Map.elems x) <&> f
 
     getType typeCons t =
       case fst <$> (typeCons ^. at t) of
-        Nothing -> elabError (ErrOther $ TextS.toString t ++ " not defined")
+        Nothing -> elabError (ErrTypeUnkown (RTyCon t))
         Just t  -> pure (TyCon t)
