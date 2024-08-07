@@ -56,3 +56,4 @@ executable pattern
   other-modules:
     Parser
     Lang
+    Orphans

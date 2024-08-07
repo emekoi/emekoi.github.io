@@ -8,6 +8,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Text.IO         qualified as Text
 import Lang qualified
 import Parser
+import Orphans ()
 import System.Environment   (getArgs)
 import Text.Megaparsec      qualified as Mega
 
