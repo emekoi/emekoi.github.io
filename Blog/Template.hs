@@ -1,98 +1,65 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
-{-# LANGUAGE CPP          #-}
-{-# LANGUAGE TypeFamilies #-}
-
 module Blog.Template
     ( Template (..)
     , compileDir
-    , empty
     , preprocess
     , preprocessFile
     , renderPage
     ) where
 
 import Blog.Type
+import Control.Concurrent.MVar    qualified as MVar
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson                 (Value (..), (.=))
 import Data.Aeson                 qualified as Aeson
-import Data.Foldable
-import Data.Function              (fix)
-import Data.List.NonEmpty         (NonEmpty (..))
 import Data.Map.Strict            qualified as Map
 import Data.Maybe
-import Data.Semigroup
 import Data.Set                   qualified as Set
 import Data.Text                  qualified as Text
 import Data.Text.IO               qualified as Text
 import Data.Text.Lazy             qualified as TextL
 import Development.Shake
-import Development.Shake.Classes
 import Development.Shake.FilePath ((<.>), (</>))
+import Development.Shake.FilePath qualified as Shake
 import Text.Megaparsec.Error      qualified as Mega
-import Text.Megaparsec.Pos        qualified as Mega
 import Text.Mustache              qualified as Stache
 import Text.Mustache.Parser       qualified as Stache
 import Text.Mustache.Type         (Node (..), Template (..))
 
-instance NFData Node
-instance NFData Template
-
-instance Binary Mega.Pos
-instance Binary Stache.Key
-instance Binary Node
-instance Binary Stache.PName
-instance Binary Template
-
-instance Hashable Mega.Pos
-instance Hashable Stache.Key
-instance Hashable Node
-instance Hashable Stache.PName
-instance Hashable Template
-
-newtype TemplateQ
-  = TemplateQ FilePath
-  deriving (Binary, Eq, Hashable, NFData, Show, Typeable)
-
-newtype TemplateA
-  = TemplateA Template
-  deriving (Binary, Eq, Hashable, NFData, Typeable)
-
-instance Show TemplateA where
-  show = const "Template{..}"
-
-type instance RuleResult TemplateQ = TemplateA
-
-templateAnswer :: TemplateA -> Template
-templateAnswer (TemplateA t) = t
-
-empty :: Template
-empty = Template undefined mempty
-
 compileDir :: FilePath -> Rules (FilePath -> Action Template)
-compileDir dir = fmap wrap . addOracleCache $ fix \loop (TemplateQ tName) -> do
-  let
-    mInputFile = dir </> tName <.> "mustache"
-    pName = Stache.PName (Text.pack tName)
+compileDir dir = do
+  templateMap <- liftIO $ MVar.newMVar mempty
 
-  putInfo $ unwords ["TEMPLATE", tName]
+  dir </> "*.mustache" %> \mInputFile -> do
+    let
+      tName = Shake.takeBaseName mInputFile
+      pName = Stache.PName (Text.pack tName)
 
-  need [mInputFile]
-  mInput <- liftIO $ Text.readFile mInputFile
+    putInfo $ unwords ["TEMPLATE", tName]
 
-  case Stache.parseMustache tName mInput of
-    Left err -> fileError (Just mInputFile) $
-      Mega.errorBundlePretty err
-    Right nodes -> do
-      -- template [Text.unpack $ Stache.unPName p | Partial p _ <- nodes]
-      ts <- forP (snd $ foldl' getPartials (mempty, []) nodes) (wrap loop)
-      pure . TemplateA $
-        sconcat (Template pName (Map.singleton pName nodes) :| ts)
+    mInput <- liftIO $ Text.readFile mInputFile
+
+    case Stache.parseMustache tName mInput of
+      Left err -> fileError (Just mInputFile) $
+        Mega.errorBundlePretty err
+      Right nodes -> do
+        let partials = foldMap getPartials nodes
+
+        need . fmap (getInputFile . Text.unpack . Stache.unPName) $
+          Set.toList partials
+
+        liftIO $ MVar.modifyMVar_ templateMap \ts ->
+          let ts' = Map.insert pName nodes ts
+          in pure ts'
+
+  pure $ \tName -> do
+    need [dir </> tName <.> "mustache"]
+    Template (Stache.PName (Text.pack tName))
+      <$> liftIO (MVar.readMVar templateMap)
   where
-    wrap x = fmap templateAnswer . x . TemplateQ
-    getPartials (c, r) (Partial p _)
-      | p `Set.notMember` c = (Set.insert p c, Text.unpack (Stache.unPName p) : r)
-    getPartials acc _ = acc
+    getInputFile tName = dir </> tName <.> "mustache"
+    getPartials (Partial p _) = Set.singleton p
+    getPartials _             = mempty
 
 preprocess :: Aeson.Value -> Template -> Maybe FilePath -> StrictText -> Action StrictText
 preprocess site (Template _ tc) file input = do

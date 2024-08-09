@@ -356,7 +356,8 @@ build b = do
     deps <- if length (Shake.splitPath inDir) == 1
       then pure [input]
       else do
-        fmap (inDir </>) <$> getDirectoryContents inDir
+        files <- getDirectoryFiles inDir ["*"]
+        pure $ (inDir </>) <$> files
 
     forP deps \file -> do
       copyFileChanged file (Shake.replaceDirectory file outDir)

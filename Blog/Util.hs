@@ -1,5 +1,8 @@
+{-# LANGUAGE RankNTypes   #-}
+
 module Blog.Util
-    ( jsonInsert
+    ( Fold (..)
+    , jsonInsert
     , liftAction
     , titleSlug
     ) where
@@ -52,3 +55,21 @@ jsonInsert :: ToJSON v =>  Key -> v -> Value -> Value
 jsonInsert key val (Object obj) =
   Object (Aeson.insert key (toJSON val) obj)
 jsonInsert _ _ x = x
+
+data Fold a b = forall r. Fold
+  { seed :: r
+  , step :: r -> a -> r
+  , done :: r -> b
+  }
+
+instance Functor (Fold a) where
+  fmap f Fold{..} = Fold{done = f . done, ..}
+
+instance Applicative (Fold a) where
+  pure x = Fold {seed = (), step = const, done = const x}
+
+  liftA2 k (Fold fX fF fE) (Fold gX gF gE) = Fold
+    { seed = let (!a, !b) = (fX, gX) in (a, b)
+    , step = \(!a, !b) x ->let (!a', !b') = (fF a x, gF b x) in (a', b')
+    , done = \(!a, !b) -> let (!a', !b') = (fE a, gE b) in k a' b'
+    }

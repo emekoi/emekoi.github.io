@@ -144,9 +144,13 @@ baseBlockRender stateRef blockRender = \case
           nl
       nl
     nl
-  Div attrs blocks -> do
-    div_ (lucidAttributes attrs) (nl <* mapM_ blockRender blocks)
-    nl
+  Div attrs blocks
+    | "ignore" `elem` attrs.classes -> pure ()
+    | otherwise -> do
+      div_ (lucidAttributes attrs) do
+        nl
+        mapM_ blockRender blocks
+      nl
   Note label blocks -> do
     liftIO $ IORef.modifyIORef' stateRef \RenderState{..} -> do
       case List.unsnoc blocks of
@@ -278,6 +282,7 @@ renderMarkdown exts input source = do
 renderMarkdownIO :: (MonadFail m, MonadIO m) => [Extension m] -> FilePath -> m Page
 renderMarkdownIO exts file = do
   input <- liftIO $ Text.readFile file
+  liftIO . putStrLn $ unwords [ "READ", file ]
   renderMarkdown exts file input
 
 -- scuffed implementation of description lists
