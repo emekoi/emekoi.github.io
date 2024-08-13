@@ -1,0 +1,43 @@
+cabal-version:      3.0
+
+author:             Emeka Nkurumeh
+build-type:         Simple
+homepage:           https://emekoi.github.io
+license:            BSD-3-Clause
+maintainer:         emekankurumeh@outlook.com
+name:               rows
+version:            0.1.0.0
+
+
+common base
+  ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing -fsplit-sections
+  default-language: GHC2021
+  default-extensions:
+    BlockArguments
+    DataKinds
+    DeriveFunctor
+    DeriveTraversable
+    DerivingVia
+    DuplicateRecordFields
+    GADTs
+    GeneralizedNewtypeDeriving
+    LambdaCase
+    NoFieldSelectors
+    OverloadedRecordDot
+    OverloadedStrings
+    PatternSynonyms
+    RecordWildCards
+    TypeFamilies
+    ViewPatterns
+
+  build-depends:
+    , base               ^>= 4.19
+    , containers         ^>= 0.6
+    , transformers       ^>= 0.6
+
+executable rows
+  import:      base
+  main-is:     Main.hs
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is Main
+  other-modules:
+    Poly
