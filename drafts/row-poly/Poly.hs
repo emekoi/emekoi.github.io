@@ -4,12 +4,6 @@
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RecordWildCards #-}
 
-#if defined(POLY_SUB)
-#define TYPE_UNIFY typeSub
-#else
-#define TYPE_UNIFY typeUnify
-#endif
-
 module Poly
     ( main
     ) where
@@ -18,6 +12,7 @@ import Control.Exception          (Exception (..), handle, throwIO)
 import Control.Monad
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
 import Data.Functor               (($>))
 import Data.IORef                 (IORef, atomicModifyIORef', newIORef,
                                    readIORef, writeIORef)
@@ -191,9 +186,6 @@ typeHole x l = do
   u <- uniqueNew
   liftIO $ VTHole <$> newIORef (Empty x u l)
 
-typeSub :: VType -> VType -> Check ()
-typeSub = error "TODO"
-
 typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   t t' | t == t' -> pure ()
@@ -213,18 +205,6 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       t  <- typeEval (VTVar l : e) t
       t' <- typeEval (VTVar l : e') t'
       typeUnify t t'
-#if 1
-  (VTForall x e t) t' -> do
-    l <- asks typeLevel
-    typeBind x do
-      t  <- typeEval (VTVar l : e) t
-      typeUnify t t'
-  t (VTForall x e' t') -> do
-    l <- asks typeLevel
-    typeBind x do
-      t' <- typeEval (VTVar l : e') t'
-      typeUnify t t'
-#endif
   t1 t2 -> do
     s1 <- typePrint t1
     s2 <- typePrint t2
@@ -350,7 +330,7 @@ exprCheck e t = typeForce t >>= \case
   VTArrow s t | ELambda x (Just s') e <- e -> do
     s' <- typeCheck' s'
     -- NOTE: the order of s s' is due to the contravariace of of function types
-    TYPE_UNIFY s s'
+    typeUnify s s'
     exprBind x s' (exprCheck e t)
   t | ELet x Nothing e1 e2 <- e -> do
     t1 <- exprInfer e1
@@ -360,8 +340,18 @@ exprCheck e t = typeForce t >>= \case
     exprCheck e1 t1
     exprBind x t1 (exprCheck e2 t)
   t -> do
-    t' <- exprInfer e
-    TYPE_UNIFY t' t
+    t' <- exprInferInst e
+    typeUnify t' t
+
+exprInferInst :: Dbg => Expr -> Check VType
+exprInferInst e = do
+  l <- asks typeLevel
+  exprInfer e >>= instAll l
+  where
+    instAll l (VTForall x env t) = do
+      h <- typeHole x l
+      typeEval (h : env) t >>= instAll l
+    instAll _ t = pure t
 
 exprInfer :: Dbg => Expr -> Check VType
 exprInfer EUnit = do
@@ -373,12 +363,31 @@ exprInfer (EVar v) = do
 exprInfer (EAnnot e t) = do
   t <- typeCheck' t
   exprCheck e t $> t
-exprInfer (ELambda x (Just t) e) = do
-  t <- typeCheck' t
+exprInfer (ELambda x t e) = do
+  l <- asks typeLevel
+  t <- maybe (typeHole x l) typeCheck' t
+  -- t <- VTArrow t <$> exprBind x t (exprInferInst e)
   VTArrow t <$> exprBind x t (exprInfer e)
-exprInfer (ELambda x Nothing e) = do
-  t <- asks typeLevel >>= typeHole x
-  VTArrow t <$> exprBind x t (exprInfer e)
+  -- v <- runStateT (gen l (succ l) t) []
+  where
+    gen :: (Dbg, MonadIO m) => Level -> Level -> VType -> StateT [(String,Unique)] m TType
+    gen b l t = typeForce t >>= \case
+      VTVar x -> pure $ TTVar (lvl2idx l x)
+      VTCon c i -> pure $ TTCon c i
+      VTArrow s t -> TTArrow
+        <$> gen b l s
+        <*> gen b l t
+      VTForall x env t -> do
+        t' <- typeEval (VTVar l : env) t
+        TTForall x <$> gen b (succ l) t'
+      VTHole h ->
+        liftIO (readIORef h) >>= \case
+          Empty n x l | l > b -> do
+            modify' ((n,x) :)
+            liftIO $ writeIORef h (Empty n x b)
+            pure $ TTHole h
+          Full t -> gen b l t
+          _ -> pure $ TTHole h
 exprInfer (EApply f x) = do
   tf <- exprInfer f
   exprApply f tf x
@@ -387,13 +396,8 @@ exprInfer (ELet x Nothing e1 e2) = do
   exprBind x t1 (exprInfer e2)
 exprInfer (ELet x (Just t1) e1 e2) = do
   t1 <- typeCheck' t1
-  t1' <- exprInfer e1
-  TYPE_UNIFY t1' t1
+  exprCheck e1 t1
   exprBind x t1 (exprInfer e2)
--- exprInfer (ELet x (Just t1) e1 e2) = do
---   t1 <- typeCheck' t1
---   exprCheck e1 t1
---   exprBind x t1 (exprInfer e2)
 
 exprApply :: Dbg => Expr -> VType -> Expr -> Check VType
 exprApply f t e = typeForce t >>= \case
@@ -419,16 +423,19 @@ main = runCheck do
   let idT x = RTForall x (RTArrow (RTVar x) (RTVar x))
   -- go $ ELambda "x" Nothing (EVar "x")
   -- go $ ELambda "x" (Just (idT "a")) (EApply (EVar "x") (EVar "x"))
+  -- go $ ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EVar "z")) (EApply (EVar "x") EUnit)
   go $ ELambda "y" (Just (idT "a")) (ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
   go $ ELambda "y" Nothing (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
   go $ ELambda "y" (Just (idT "b")) (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
   go $ ELambda "y" Nothing (ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
 
   liftIO $ putStrLn "--------------\n"
+
   go $ ELambda "y" (Just (idT "a")) (ELet "x" (Just (idT "b")) (EVar "y") (EApply (EVar "x") EUnit))
   go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (EVar "y") (EApply (EVar "x") EUnit))
   go $ ELambda "y" (Just (idT "a")) (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
   go $ ELambda "y" Nothing (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
+
   pure ()
   where
     go x = ReaderT \r -> handle @TypeError (\x -> print x *> putChar '\n') $ flip runReaderT r do
