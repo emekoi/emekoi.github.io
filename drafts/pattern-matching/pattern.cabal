@@ -8,36 +8,32 @@ maintainer:         emekankurumeh@outlook.com
 name:               pattern
 version:            0.1.0.0
 
+flag json
+  description: enable json dumping
+  default:     False
+
 common base
   ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing -fsplit-sections
-  default-language: Haskell2010
+  default-language: GHC2021
   default-extensions:
-    BangPatterns
     BlockArguments
     DataKinds
-    FlexibleContexts
-    FlexibleInstances
+    DeriveFunctor
+    DeriveTraversable
     DerivingVia
     DuplicateRecordFields
     GADTs
+    GeneralizedNewtypeDeriving
     LambdaCase
     NoFieldSelectors
     OverloadedRecordDot
     OverloadedStrings
     PatternSynonyms
     RecordWildCards
-    TupleSections
     TypeFamilies
-    ImportQualifiedPost
-    ScopedTypeVariables
-    StandaloneDeriving
-    GeneralizedNewtypeDeriving
-    DeriveFunctor
-    DeriveTraversable
     ViewPatterns
 
   build-depends:
-    , aeson              ^>= 2.2
     , base               ^>= 4.19
     , bytestring         ^>= 0.12
     , containers         ^>= 0.6
@@ -49,7 +45,11 @@ common base
     , text               ^>= 2.1
     , text-short         ^>= 0.1
     , transformers       ^>= 0.6
-    , witherable         ^>= 0.4
+    -- , witherable         ^>= 0.5
+
+  if flag(json)
+    cpp-options: -DENABLE_JSON
+    build-depends: aeson ^>= 2.2
 
 executable pattern
   import:      base
@@ -58,4 +58,6 @@ executable pattern
   other-modules:
     Parser
     Lang
-    Orphans
+
+  if flag(json)
+    other-modules: Orphans

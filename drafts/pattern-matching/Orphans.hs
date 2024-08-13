@@ -9,9 +9,11 @@ import Data.Aeson   qualified as Aeson
 import GHC.Generics (Generic)
 import Lang
 
-deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialEq r))
-deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialOrd r))
-deriving via r instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialShow r))
+import Data.Kind    qualified as Hask
+
+deriving via (r :: Hask.Type) instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialEq r))
+deriving via (r :: Hask.Type) instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialOrd r))
+deriving via (r :: Hask.Type) instance (Aeson.ToJSON r) => (Aeson.ToJSON (TrivialShow r))
 
 deriving instance (Generic NameKind)
 deriving instance (Generic Name)

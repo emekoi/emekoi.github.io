@@ -14,6 +14,7 @@ import Data.Functor
 import Data.IntMap                (IntMap)
 import Data.IntMap.Strict         qualified as IntMap
 import Data.IORef
+import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (isJust)
@@ -31,7 +32,7 @@ import GHC.Exts                   (oneShot)
 import GHC.IO.Unsafe              (unsafePerformIO)
 import Lens.Micro.GHC
 import Lens.Micro.Internal
-import Witherable
+-- import Witherable
 
 --- UTILITIES
 
@@ -151,7 +152,12 @@ data Literal where
   LInt :: Integer -> Literal
   LChar :: Char -> Literal
   LString :: StrictText -> Literal
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance Show Literal where
+  show (LInt l)    = show l
+  show (LChar c)   = show c
+  show (LString s) = show s
 
 --- RAW AST
 
@@ -168,38 +174,6 @@ rawTypeSplit = go Empty
     go acc (RTyFun a b) = do
       go (acc :|> a) b
     go acc t = (acc, t)
-
--- data PatternKind
---   = Low
---   | High
-
--- data RawConstructor where
---   RCLit :: Literal -> RawConstructor
---   RCData :: RawName -> RawConstructor
---   deriving (Eq, Ord, Show)
-
--- data Pattern (l :: PatternKind) where
---   PAnnot :: Pattern l -> RawType -> Pattern l
---   PAs :: Pattern 'High -> RawName -> Pattern 'High
---   PCon :: RawConstructor -> Seq (Pattern 'High) -> Pattern l
---   POr :: Seq (Pattern 'Low) -> Pattern 'High -> Pattern l
---   PWild :: Pattern 'High
-
--- deriving instance Show (Pattern l)
--- deriving instance Eq (Pattern l)
--- -- deriving instance Ord (Pattern l)
-
--- pattern PVar :: RawName -> Pattern 'High
--- pattern PVar x = PAs PWild x
-
--- lowerPattern :: Pattern 'High -> (Maybe (Pattern 'Low), Maybe RawName)
--- lowerPattern (PAnnot p t) =
---   let (p', x) = lowerPattern p in
---     (flip PAnnot t <$> p', x)
--- lowerPattern (PAs p x)   = lowerPattern p $>  Just x
--- lowerPattern (PCon c ps) = (Just (PCon c ps), Nothing)
--- lowerPattern (POr qs p)  = (Just (POr qs p), Nothing)
--- lowerPattern PWild       = (Nothing, Nothing)
 
 data RawTermDef where
   RTDAnno :: RawName -> RawType -> RawTermDef
@@ -246,12 +220,15 @@ type TyCon = Name
 
 data Type where
   TyCon :: TyCon -> Type
-  TyMeta' :: TrivialShow (IORef TyMeta) -> Type
+  TyMeta :: IORef TyMeta -> Type
   TyFun :: Seq Type -> Type -> Type
-  deriving (Eq, Show)
+  deriving (Eq)
 
-pattern TyMeta :: IORef TyMeta -> Type
-pattern TyMeta t = TyMeta' (TrivialShow t)
+instance Show Type where
+  show (TyCon t) = show t
+  show (TyFun args ret) =
+    List.intercalate "->" (toList $ (show <$> args) :|> show ret)
+  show (TyMeta _) = "?"
 
 typeSplit :: Type -> ([Type], Type)
 typeSplit (TyFun xs t) = (toList xs, t)
@@ -304,7 +281,6 @@ data DataTag = DataTag
 data Value where
   VLit :: Literal -> Value
   VData :: DataTag -> Seq Var -> Value
-  -- VClos ::
   deriving (Show)
 
 data Constructor
@@ -325,6 +301,44 @@ data Term where
   TLetP :: Var -> PrimOp -> Seq Var -> Term -> Term
   TLetV :: Var -> Value -> Term -> Term
   deriving (Show)
+
+dump :: Term -> String
+dump = dumpTerm
+  where
+    dumpVar (Var x _) = show x
+    dumpLabel (Label k _) = show k
+    dumpValue (VLit l) = show l
+    dumpValue (VData t xs) =
+      "(" ++ unwords (show t.name : toList (dumpVar <$> xs)) ++ ")"
+    dumpTerm (TAbsurd Nothing) = "absurd"
+    dumpTerm (TAbsurd (Just msg)) = "(absurd " ++ show msg ++ ")"
+    dumpTerm (TApp (dumpVar -> f) (dumpLabel -> k) xs) =
+      "(" ++ unwords (f : k : toList (dumpVar <$> xs)) ++ ")"
+    dumpTerm TCase{} = "TODO"
+    dumpTerm (TJmp (dumpLabel -> k) xs) =
+      "(jump " ++ unwords (k : toList (dumpVar <$> xs)) ++ ")"
+    dumpTerm (TLetK xs e) =
+      let
+        f (k, xs, e) = "(label " ++ unwords
+          [ dumpLabel k
+          , "(" ++ unwords (toList $ dumpVar <$> xs) ++ ")"
+          , dumpTerm e
+          ] ++")"
+      in "(" ++ unwords (toList (f <$> xs) ++[dumpTerm e]) ++ ")"
+    dumpTerm (TLetF xs e) =
+      let
+        f (f, k, xs, e) = "(func " ++ unwords
+          [ dumpVar f
+          , dumpLabel k
+          , "(" ++ unwords (toList $ dumpVar <$> xs) ++ ")"
+          , dumpTerm e
+          ] ++")"
+      in "(" ++ unwords (toList (f <$> xs) ++[dumpTerm e]) ++ ")"
+    dumpTerm (TLetP x p xs e) =
+      let r = "(" ++ unwords (show p : toList (dumpVar <$> xs)) ++ ")" in
+      "(value " ++ unwords [dumpVar x, r, dumpTerm e] ++ ")"
+    dumpTerm (TLetV x v e) =
+      "(value " ++ unwords [dumpVar x, dumpValue v, dumpTerm e] ++ ")"
 
 --- ELABORATION
 
@@ -634,30 +648,26 @@ elabTerm (RLambda (Seq.fromList -> rArgs) e) t k = do
 --           t <- freshMeta
 --           Just . (,e) <$> freshLocal x t
 --   todo
-elabTerm (RLetRec _ _) _t _k = todo
 elabTerm (RLet xs _e) _t _k = do
   -- TODO: we need to modify the local env somehow for annotations
-  _xs <- flip witherM xs \case
-    RTDAnno x t -> do
-      t <- elabType t
-      freshLocal x t $> Nothing
-    RTDTerm x e -> do
-      raw <- elabContext
-      case raw.terms ^. at x of
-        Just v -> pure $ Just (v, e)
-        Nothing -> do
-          t <- freshMeta
-          Just . (,e) <$> freshLocal x t
-  -- if rec then do
-  --   -- since we don't have recursive values, this means that all the variables
-  --   -- must be functions
-  --   -- fs <- forM xs undefined
-  --   TLetF todo <$> elab e t k
-  -- else do
+  -- _xs <- flip witherM xs \case
+  --   RTDAnno x t -> do
+  --     t <- elabType t
+  --     freshLocal x t $> Nothing
+  --   RTDTerm x e -> do
+  --     raw <- elabContext
+  --     case raw.terms ^. at x of
+  --       Just v -> pure $ Just (v, e)
+  --       Nothing -> do
+  --         t <- freshMeta
+  --         Just . (,e) <$> freshLocal x t
   --   -- since this isn't a block of recursive functions, it is a block of values
   --   -- that may include functions, so we split them up into a group of funcions
   --   -- and a group of values
   todo
+  where
+    go acc = acc
+elabTerm (RLetRec _ _) _t _k = todo
 elabTerm (RLit l) t k = do
   litType l >>= tyUnify t
   x <- freshLocal "l" t
@@ -684,6 +694,38 @@ elabTerm (RVar x) t k = do
     Just v -> do
       tyUnify t (varType v)
       contApply k v
+
+-- data PatternKind
+--   = Low
+--   | High
+
+-- data RawConstructor where
+--   RCLit :: Literal -> RawConstructor
+--   RCData :: RawName -> RawConstructor
+--   deriving (Eq, Ord, Show)
+
+-- data Pattern (l :: PatternKind) where
+--   PAnnot :: Pattern l -> RawType -> Pattern l
+--   PAs :: Pattern 'High -> RawName -> Pattern 'High
+--   PCon :: RawConstructor -> Seq (Pattern 'High) -> Pattern l
+--   POr :: Seq (Pattern 'Low) -> Pattern 'High -> Pattern l
+--   PWild :: Pattern 'High
+
+-- deriving instance Show (Pattern l)
+-- deriving instance Eq (Pattern l)
+-- -- deriving instance Ord (Pattern l)
+
+-- pattern PVar :: RawName -> Pattern 'High
+-- pattern PVar x = PAs PWild x
+
+-- lowerPattern :: Pattern 'High -> (Maybe (Pattern 'Low), Maybe RawName)
+-- lowerPattern (PAnnot p t) =
+--   let (p', x) = lowerPattern p in
+--     (flip PAnnot t <$> p', x)
+-- lowerPattern (PAs p x)   = lowerPattern p $>  Just x
+-- lowerPattern (PCon c ps) = (Just (PCon c ps), Nothing)
+-- lowerPattern (POr qs p)  = (Just (POr qs p), Nothing)
+-- lowerPattern PWild       = (Nothing, Nothing)
 
 -- data MatchRow = Row
 --   { cols :: Map Var (Pattern 'Low)
@@ -788,7 +830,7 @@ elabTerm (RVar x) t k = do
 data Module = Module
   { dataCons :: NameMap (DataTag, Type)
   , prims    :: NameMap ([Type], Type)
-  , terms    :: NameMap (Term, Type)
+  , terms    :: NameMap (Term, Var)
   , typeCons :: NameMap (Set DataTag)
   }
   deriving (Show)
@@ -871,7 +913,7 @@ elaborate xs = liftIO do
         (_, ret) = typeSplit t
         retK     = Abstract $ Label (Bound "k" 0) [ret]
     x <- runReaderT (elabTerm e t retK) elab
-    pure (n.id, (x, t))
+    pure (n.id, (x, v))
   pure
     Module
       { dataCons = convert raw.dataCons \(t, _, ret) -> (t.name.id, (t, ret))
