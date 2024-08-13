@@ -14,11 +14,13 @@ import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Data.Functor               (($>))
+import Data.IntMap                qualified as IntMap
 import Data.IORef                 (IORef, atomicModifyIORef', newIORef,
                                    readIORef, writeIORef)
 import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
+import Data.Foldable
 import Data.Typeable              (Typeable)
 import GHC.Stack
 import Prelude                    hiding ((!!))
@@ -101,7 +103,6 @@ instance Exception TypeError where
 
 throw :: (Dbg, MonadIO m) => TypeErrorKind -> m a
 throw x = liftIO . throwIO $ withFrozenCallStack (TypeError x)
-{-# INLINE throw #-}
 
 data Context = Context
   { unique        :: IORef Int
@@ -149,9 +150,6 @@ typeEval env (TTVar i)      = pure $ env !! i
 typeEval _ (TTCon c i)      = pure $ VTCon c i
 typeEval env (TTArrow a b)  = VTArrow <$> typeEval env a <*> typeEval env b
 typeEval env (TTForall x t) = pure $ VTForall x env t
--- typeEval _ (TTHole h)       = liftIO (readIORef h) >>= \case
---   Empty{} -> pure (VTHole h)
---   Full t  -> pure t
 typeEval _ (TTHole h)       = typeForce (VTHole h)
 
 typeQuote :: (Dbg, MonadIO m) => Level -> VType -> m TType
@@ -164,16 +162,16 @@ typeQuote l t = typeForce t >>= \case
     TTForall x <$> typeQuote (succ l) t'
   VTHole h -> pure $ TTHole h
 
-typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
-typeQuote' b l t = typeForce t >>= \case
+_typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
+_typeQuote' b l t = typeForce t >>= \case
   VTVar x -> pure $ TTVar (lvl2idx l x)
   VTCon c i -> pure $ TTCon c i
   VTArrow s t -> TTArrow
-    <$> typeQuote' b l s
-    <*> typeQuote' b l t
+    <$> _typeQuote' b l s
+    <*> _typeQuote' b l t
   VTForall x env t -> do
     t' <- typeEval (VTVar l : env) t
-    TTForall x <$> typeQuote' b (succ l) t'
+    TTForall x <$> _typeQuote' b (succ l) t'
   VTHole h -> do
     liftIO $ readIORef h >>= \case
       Empty n x l | l > b ->
@@ -343,16 +341,6 @@ exprCheck e t = typeForce t >>= \case
     t' <- exprInferInst e
     typeUnify t' t
 
-exprInferInst :: Dbg => Expr -> Check VType
-exprInferInst e = do
-  l <- asks typeLevel
-  exprInfer e >>= instAll l
-  where
-    instAll l (VTForall x env t) = do
-      h <- typeHole x l
-      typeEval (h : env) t >>= instAll l
-    instAll _ t = pure t
-
 exprInfer :: Dbg => Expr -> Check VType
 exprInfer EUnit = do
   pure (VTCon "UNIT" (Unique (-1)))
@@ -368,29 +356,21 @@ exprInfer (ELambda x t e) = do
   t <- maybe (typeHole x l) typeCheck' t
   -- t <- VTArrow t <$> exprBind x t (exprInferInst e)
   VTArrow t <$> exprBind x t (exprInfer e)
-  -- v <- runStateT (gen l (succ l) t) []
-  where
-    gen :: (Dbg, MonadIO m) => Level -> Level -> VType -> StateT [(String,Unique)] m TType
-    gen b l t = typeForce t >>= \case
-      VTVar x -> pure $ TTVar (lvl2idx l x)
-      VTCon c i -> pure $ TTCon c i
-      VTArrow s t -> TTArrow
-        <$> gen b l s
-        <*> gen b l t
-      VTForall x env t -> do
-        t' <- typeEval (VTVar l : env) t
-        TTForall x <$> gen b (succ l) t'
-      VTHole h ->
-        liftIO (readIORef h) >>= \case
-          Empty n x l | l > b -> do
-            modify' ((n,x) :)
-            liftIO $ writeIORef h (Empty n x b)
-            pure $ TTHole h
-          Full t -> gen b l t
-          _ -> pure $ TTHole h
 exprInfer (EApply f x) = do
-  tf <- exprInfer f
-  exprApply f tf x
+  exprInferInst f >>= typeForce >>= apply
+  where
+    apply (VTHole h) = liftIO (readIORef h) >>= \case
+      Empty n _ l -> do
+        t1 <- typeHole n l
+        t2 <- typeHole n l
+        liftIO (writeIORef h (Full (VTArrow t1 t2)))
+        exprCheck x t1 $> t2
+      Full t -> apply t
+    apply (VTArrow s t) = do
+      exprCheck x s $> t
+    apply t = do
+      s <- typePrint t
+      throw $ TypeErrorNonFunction f s
 exprInfer (ELet x Nothing e1 e2) = do
   t1 <- exprInfer e1
   exprBind x t1 (exprInfer e2)
@@ -399,50 +379,135 @@ exprInfer (ELet x (Just t1) e1 e2) = do
   exprCheck e1 t1
   exprBind x t1 (exprInfer e2)
 
-exprApply :: Dbg => Expr -> VType -> Expr -> Check VType
-exprApply f t e = typeForce t >>= \case
-  VTHole h -> liftIO (readIORef h) >>= \case
-    Full t -> exprApply f t e
-    Empty x _ l -> do
-      t1 <- typeHole x l
-      t2 <- typeHole x l
-      liftIO (writeIORef h (Full (VTArrow t1 t2)))
-      exprCheck e t1 $> t2
-  VTForall x env t -> do
-    h <- asks typeLevel >>= typeHole x
-    t <- typeEval (h : env) t
-    exprApply f t e
-  VTArrow s t      -> do
-    exprCheck e s $> t
-  _                -> do
-    s <- typePrint t
-    throw $ TypeErrorNonFunction f s
+exprInferInst :: Dbg => Expr -> Check VType
+exprInferInst e = do
+  l <- asks typeLevel
+  exprInfer e >>= instAll l
+  where
+    instAll l (VTForall x env t) = do
+      h <- typeHole x l
+      typeEval (h : env) t >>= instAll l
+    instAll _ t = pure t
+
+-- _exprInferGen :: Dbg => Expr -> Check VType
+-- _exprInferGen e = do
+--   l <- asks typeLevel
+--   t <- exprInfer e
+--   xs <- gen l (succ l) t []
+--   liftIO $ print xs
+--   pure t
+--   where
+--     succBy n 0 = n
+--     succBy n m = succBy (succ n) (m - 1)
+
+--     -- NOTE: since we do not know how many foralls will be inserted, we need to
+--     -- make 2 passes over the type to count the variables to generralize and to do the
+--     -- gen :: (Dbg, MonadIO m) => Level -> Level -> VType -> [(String,Unique)] -> m [(String,Unique)]
+--     gen b l t vs = typeForce t >>= \case
+--       VTArrow s t -> gen b l s vs >>= gen b l t
+--       VTForall _ env t -> do
+--         t' <- typeEval (VTVar l : env) t
+--         gen b (succ l) t' vs
+--       VTHole h ->
+--         liftIO (readIORef h) >>= \case
+--           Empty n x l | l >= b -> do
+--             let vs' = (n,x) : vs
+--             liftIO $ writeIORef h (Full (VTVar (succBy b (length vs))))
+--             pure vs'
+--           Full t -> gen b l t vs
+--           Empty n x l -> do
+--             liftIO $ print (n, x, l)
+--             pure vs
+--       _ -> pure vs
+
+_exprInferGen :: Dbg => Expr -> Check TType
+_exprInferGen e = do
+  l <- asks typeLevel
+  -- t <- local (\Context{..} -> Context {typeLevel = succ typeLevel,..}) $
+  --   exprInfer e
+  t <- exprInfer e
+  -- (_, xs) <- gen l (succ l) t (l, mempty)
+  (_, (l', xs)) <- runStateT (go l l t) (l, [])
+  z <- foldl' (\t (n, x) -> TTForall n t) <$> typeQuote l' t <*> pure xs
+  -- liftIO $ print xs
+  -- t' <- typeQuote (succBy l (length xs)) t
+  -- foldM `flip` t' `flip` xs $ \t (h, x, l) -> do
+  --   liftIO $ writeIORef h (Full (VTVar l))
+  --   pure
+  -- forAccumM (l, t) (xs )
+
+  pure z
+  where
+    succBy n 0 = n
+    succBy n m = succBy (succ n) (m - 1)
+
+    go b l t = typeForce t >>= \case
+      VTArrow s t -> go b l s *> go b l t
+      VTForall _ env t -> typeEval (VTVar l : env) t >>= go b (succ l)
+      VTHole h -> do
+        liftIO (readIORef h) >>= \case
+          Empty n x l | l >= b -> StateT \(vl, vs) -> do
+            liftIO $ writeIORef h (Full (VTVar vl))
+            pure ((), (succ vl, (n, x) : vs))
+          _ -> pure ()
+      _ -> pure ()
+
+    -- NOTE: since we do not know how many foralls will be inserted, we need to
+    -- make 2 passes
+
+    gen b l t acc@(vl, vm) = typeForce t >>= \case
+      VTArrow s t -> gen b l s acc >>= gen b l t
+      VTForall _ env t -> do
+        t' <- typeEval (VTVar l : env) t
+        gen b (succ l) t' acc
+      VTHole h ->
+        liftIO (readIORef h) >>= \case
+          Empty n x l | l > b, Nothing <- IntMap.lookup (unUnique x) vm ->
+            pure (succ vl, IntMap.insert (unUnique x) (h, n, vl) vm)
+          _ -> pure acc
+      _ -> pure acc
+
+    -- go b l t = typeForce t >>= \case
+    --   VTVar x -> pure $ TTVar (lvl2idx l x)
+    --   VTCon c i -> pure $ TTCon c i
+    --   VTArrow s t -> TTArrow
+    --     <$> go b l s
+    --     <*> go b l t
+    --   VTForall x env t -> do
+    --     t' <- typeEval (VTVar l : env) t
+    --     TTForall x <$> go b (succ l) t'
+    --   VTHole h -> do
+    --     liftIO (readIORef h) >>= \case
+    --       Empty n x l | l > b -> StateT \(vl, vs) -> do
+    --         liftIO $ writeIORef h (Full (VTVar vl))
+    --         pure ((), (succ vl, (n,x) : vs))
+    --       _ -> pure ()
+    --     pure $ TTHole h
 
 main :: IO ()
 main = runCheck do
   let idT x = RTForall x (RTArrow (RTVar x) (RTVar x))
-  -- go $ ELambda "x" Nothing (EVar "x")
-  -- go $ ELambda "x" (Just (idT "a")) (EApply (EVar "x") (EVar "x"))
-  -- go $ ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EVar "z")) (EApply (EVar "x") EUnit)
+
   go $ ELambda "y" (Just (idT "a")) (ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
-  go $ ELambda "y" Nothing (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
-  go $ ELambda "y" (Just (idT "b")) (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
-  go $ ELambda "y" Nothing (ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
-
-  liftIO $ putStrLn "--------------\n"
-
   go $ ELambda "y" (Just (idT "a")) (ELet "x" (Just (idT "b")) (EVar "y") (EApply (EVar "x") EUnit))
-  go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (EVar "y") (EApply (EVar "x") EUnit))
-  go $ ELambda "y" (Just (idT "a")) (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
+
+  go $ ELambda "y" Nothing (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
   go $ ELambda "y" Nothing (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
+
+  go $ ELambda "y" (Just (idT "a")) (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
+  go $ ELambda "y" (Just (idT "a")) (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
+
+  go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
+  go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (EVar "y") (EApply (EVar "x") EUnit))
+  go $ foldl' (\x n -> ELambda n Nothing x) (EVar "x") ["x", "y", "z", "w"]
 
   pure ()
   where
     go x = ReaderT \r -> handle @TypeError (\x -> print x *> putChar '\n') $ flip runReaderT r do
-      t  <- exprInfer x
-      t' <- typeQuote (Level 0) t
-      typePrint t >>= liftIO . putStrLn
-      typePrint' t' >>= liftIO . putStrLn
+      t  <- _exprInferGen x
+      -- t' <- typeQuote (Level 0) t
+      -- typePrint t >>= liftIO . putStrLn
+      typePrint' t >>= liftIO . putStrLn
       liftIO $ putChar '\n'
 
   --   g x = do
