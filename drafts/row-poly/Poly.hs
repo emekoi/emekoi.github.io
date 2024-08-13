@@ -1,8 +1,8 @@
-{-# LANGUAGE BlockArguments      #-}
-{-# LANGUAGE CPP                 #-}
-{-# LANGUAGE FieldSelectors      #-}
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE RecordWildCards     #-}
+{-# LANGUAGE BlockArguments  #-}
+{-# LANGUAGE CPP             #-}
+{-# LANGUAGE FieldSelectors  #-}
+{-# LANGUAGE LambdaCase      #-}
+{-# LANGUAGE RecordWildCards #-}
 
 #if defined(POLY_SUB)
 #define TYPE_UNIFY typeSub
@@ -10,9 +10,11 @@
 #define TYPE_UNIFY typeUnify
 #endif
 
-module Poly where
+module Poly
+    ( main
+    ) where
 
-import Control.Exception          (Exception (..), throwIO)
+import Control.Exception          (Exception (..), handle, throwIO)
 import Control.Monad
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
@@ -23,16 +25,13 @@ import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Typeable              (Typeable)
-import GHC.Stack.Types            (HasCallStack)
+import GHC.Stack
 import Prelude                    hiding ((!!))
 
 type Dbg = HasCallStack
 
 bind2 :: Monad m => m a -> m b -> (a -> b -> m c) -> m c
 bind2 x y k = x >>= ((y >>=) . k)
-
-throw :: (Dbg, Exception e, MonadIO m) => e -> m a
-throw = liftIO . throwIO
 
 newtype Unique
   = Unique { unUnique :: Int }
@@ -81,6 +80,7 @@ data VType where
   deriving (Eq)
 
 data Expr where
+  EUnit :: Expr
   EVar :: String -> Expr
   EApply :: Expr -> Expr -> Expr
   ELambda :: String -> Maybe RType -> Expr -> Expr
@@ -88,7 +88,7 @@ data Expr where
   EAnnot :: Expr -> RType -> Expr
   deriving (Eq, Show)
 
-data TypeError
+data TypeErrorKind
   = TypeErrorMismatch String String
   | TypeErrorOccursCheck String String
   | TypeErrorTypeVariableEscape String
@@ -97,7 +97,16 @@ data TypeError
   | TypeErrorNonFunction Expr String
   deriving (Show, Typeable)
 
+data TypeError where TypeError :: Dbg => TypeErrorKind -> TypeError
+
+instance Show TypeError where
+  show (TypeError x) = show x ++ "\n" ++ prettyCallStack callStack
+
 instance Exception TypeError where
+
+throw :: (Dbg, MonadIO m) => TypeErrorKind -> m a
+throw x = liftIO . throwIO $ withFrozenCallStack (TypeError x)
+{-# INLINE throw #-}
 
 data Context = Context
   { unique        :: IORef Int
@@ -128,7 +137,7 @@ uniqueNew = do
   liftIO $ atomicModifyIORef' uniqueSource \i ->
     let !z = i + 1 in (z, Unique z)
 
-typeForce :: MonadIO m => VType -> m VType
+typeForce :: (Dbg, MonadIO m) => VType -> m VType
 typeForce (VTHole h) = liftIO $ go h
   where
     go h = readIORef h >>= \case
@@ -150,7 +159,7 @@ typeEval env (TTForall x t) = pure $ VTForall x env t
 --   Full t  -> pure t
 typeEval _ (TTHole h)       = typeForce (VTHole h)
 
-typeQuote :: MonadIO m => Level -> VType -> m TType
+typeQuote :: (Dbg, MonadIO m) => Level -> VType -> m TType
 typeQuote l t = typeForce t >>= \case
   VTVar x -> pure $ TTVar (lvl2idx l x)
   VTCon c i -> pure $ TTCon c i
@@ -160,7 +169,7 @@ typeQuote l t = typeForce t >>= \case
     TTForall x <$> typeQuote (succ l) t'
   VTHole h -> pure $ TTHole h
 
-typeQuote' :: MonadIO m => Level -> Level -> VType -> m TType
+typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
 typeQuote' b l t = typeForce t >>= \case
   VTVar x -> pure $ TTVar (lvl2idx l x)
   VTCon c i -> pure $ TTCon c i
@@ -188,21 +197,34 @@ typeSub = error "TODO"
 typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   t t' | t == t' -> pure ()
-  (VTVar l) (VTVar l') | l == l' -> pure ()
-  (VTCon _ u) (VTCon _ u') | u == u' -> pure ()
-  (VTArrow t1 t2) (VTArrow t1' t2') ->
-    typeUnify t1 t1' *> typeUnify t2 t2'
-  (VTForall x e t) (VTForall _ e' t') ->
-    typeBind x do
-      t  <- typeEval e t
-      t' <- typeEval e' t'
-      typeUnify t t'
   (VTHole t1) t2 -> liftIO (readIORef t1) >>= \case
     Empty _ _ l -> fillHole l t1 t2
     Full t1 -> typeUnify t1 t2
   t1 (VTHole t2) -> liftIO (readIORef t2) >>= \case
     Empty _ _ l -> fillHole l t2 t1
     Full t2 -> typeUnify t1 t2
+  (VTVar l) (VTVar l') | l == l' -> pure ()
+  (VTCon _ u) (VTCon _ u') | u == u' -> pure ()
+  (VTArrow t1 t2) (VTArrow t1' t2') ->
+    typeUnify t1 t1' *> typeUnify t2 t2'
+  (VTForall x e t) (VTForall _ e' t') -> do
+    l <- asks typeLevel
+    typeBind x do
+      t  <- typeEval (VTVar l : e) t
+      t' <- typeEval (VTVar l : e') t'
+      typeUnify t t'
+#if 1
+  (VTForall x e t) t' -> do
+    l <- asks typeLevel
+    typeBind x do
+      t  <- typeEval (VTVar l : e) t
+      typeUnify t t'
+  t (VTForall x e' t') -> do
+    l <- asks typeLevel
+    typeBind x do
+      t' <- typeEval (VTVar l : e') t'
+      typeUnify t t'
+#endif
   t1 t2 -> do
     s1 <- typePrint t1
     s2 <- typePrint t2
@@ -246,7 +268,7 @@ typeBind x = local \Context{..} -> Context
   , ..
   }
 
-typePrint' :: TType -> Check String
+typePrint' :: Dbg => TType -> Check String
 typePrint' t = do
   go False t
   where
@@ -342,6 +364,8 @@ exprCheck e t = typeForce t >>= \case
     TYPE_UNIFY t' t
 
 exprInfer :: Dbg => Expr -> Check VType
+exprInfer EUnit = do
+  pure (VTCon "UNIT" (Unique (-1)))
 exprInfer (EVar v) = do
   asks rawTermTypes >>= flip (.) (Map.lookup v) \case
     Nothing -> throw $ TypeErrorVariableUnbound v
@@ -358,13 +382,18 @@ exprInfer (ELambda x Nothing e) = do
 exprInfer (EApply f x) = do
   tf <- exprInfer f
   exprApply f tf x
-exprInfer (ELet x (Just t1) e1 e2) = do
-  t1 <- typeCheck' t1
-  exprCheck e1 t1
-  exprBind x t1 (exprInfer e2)
 exprInfer (ELet x Nothing e1 e2) = do
   t1 <- exprInfer e1
   exprBind x t1 (exprInfer e2)
+exprInfer (ELet x (Just t1) e1 e2) = do
+  t1 <- typeCheck' t1
+  t1' <- exprInfer e1
+  TYPE_UNIFY t1' t1
+  exprBind x t1 (exprInfer e2)
+-- exprInfer (ELet x (Just t1) e1 e2) = do
+--   t1 <- typeCheck' t1
+--   exprCheck e1 t1
+--   exprBind x t1 (exprInfer e2)
 
 exprApply :: Dbg => Expr -> VType -> Expr -> Check VType
 exprApply f t e = typeForce t >>= \case
@@ -387,15 +416,22 @@ exprApply f t e = typeForce t >>= \case
 
 main :: IO ()
 main = runCheck do
-  go $ ELambda "x" Nothing (EVar "x")
-  go $ ELambda "x" (Just (RTForall "x" (RTArrow (RTVar "x") (RTVar "x")))) (EApply (EVar "x") (EVar "x"))
-  go $ ELambda "x" Nothing (EApply (EAnnot (EVar "x") (RTForall "x" (RTArrow (RTVar "x") (RTVar "x")))) (EVar "x"))
-  -- g $ RTForall "x" (RTArrow (RTForall "y" (RTArrow (RTCon "C") (RTArrow (RTVar "x") (RTVar "y")))) (RTVar "x"))
-  -- g $ RTForall "x" (RTForall "x" (RTForall "x" (RTVar "x")))
-  -- g $ RTForall "x" (RTVar "x")
-  -- pure ()
+  let idT x = RTForall x (RTArrow (RTVar x) (RTVar x))
+  -- go $ ELambda "x" Nothing (EVar "x")
+  -- go $ ELambda "x" (Just (idT "a")) (EApply (EVar "x") (EVar "x"))
+  go $ ELambda "y" (Just (idT "a")) (ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
+  go $ ELambda "y" Nothing (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
+  go $ ELambda "y" (Just (idT "b")) (ELet "x" Nothing (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
+  go $ ELambda "y" Nothing (ELet "x" (Just (idT "b")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
+
+  liftIO $ putStrLn "--------------\n"
+  go $ ELambda "y" (Just (idT "a")) (ELet "x" (Just (idT "b")) (EVar "y") (EApply (EVar "x") EUnit))
+  go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (EVar "y") (EApply (EVar "x") EUnit))
+  go $ ELambda "y" (Just (idT "a")) (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
+  go $ ELambda "y" Nothing (ELet "x" Nothing (EVar "y") (EApply (EVar "x") EUnit))
+  pure ()
   where
-    go x = do
+    go x = ReaderT \r -> handle @TypeError (\x -> print x *> putChar '\n') $ flip runReaderT r do
       t  <- exprInfer x
       t' <- typeQuote (Level 0) t
       typePrint t >>= liftIO . putStrLn
