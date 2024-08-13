@@ -2,8 +2,6 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE FieldSelectors      #-}
 {-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE NoOverloadedStrings #-}
-{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 
 #if defined(POLY_SUB)
@@ -15,6 +13,7 @@
 module Poly where
 
 import Control.Exception          (Exception (..), throwIO)
+import Control.Monad
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
 import Data.Functor               (($>))
@@ -186,54 +185,57 @@ typeHole x l = do
 typeSub :: VType -> VType -> Check ()
 typeSub = error "TODO"
 
--- typeMetaSolve :: IORef MetaVar -> Type -> Check ()
--- typeMetaSolve m (TyArrow a b) = do
---   typeMetaSolve m a
---   typeMetaSolve m b
--- typeMetaSolve m (TyApply a b) = do
---   typeMetaSolve m a
---   typeMetaSolve m b
--- typeMetaSolve m (TyMeta m') = do
---   when (m == m') $ do
---     sM <- typeDisplay (TyMeta m)
---     sM' <- typeDisplay (TyMeta m')
---     checkThrow (ErrTypeOccursCheck sM sM')
---   liftIO (readIORef m') >>= \case
---     Solved t      -> typeMetaSolve m t
---     Unsolved x l' -> liftIO (readIORef m) >>= \case
---       Solved{}     -> pure ()
---       Unsolved _ l -> liftIO $
---         writeIORef m' (Unsolved x (min l l'))
--- typeMetaSolve _ _            = pure ()
-
 typeUnify :: Dbg => VType -> VType -> Check ()
-typeUnify t1 t2 = bind2 (typeForce t1) (typeForce t2) \cases
-  _ _ -> pure ()
---   (TyMeta t1) (TyMeta t2) -> pure ()
---   (TyMeta t1) t2 -> pure ()
---   t1 (TyMeta t2) -> pure ()
---   (TyCon i1 k1 _) (TyCon i2 k2 _) | i1 == i2 && k1 == k2 -> pure ()
---   (TyArrow t1 t2) (TyArrow t1' t2') ->
---     typeUnify t1 t1' *> typeUnify t2 t2'
---   (TyApply t1 t2) (TyApply t1' t2') ->
---     typeUnify t1 t1' *> typeUnify t2 t2'
---   _ _ -> do
---     s1 <- typeDisplay t1
---     s2 <- typeDisplay t2
---     checkThrow (ErrTypeMismatch s1 s2)
+typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
+  t t' | t == t' -> pure ()
+  (VTVar l) (VTVar l') | l == l' -> pure ()
+  (VTCon _ u) (VTCon _ u') | u == u' -> pure ()
+  (VTArrow t1 t2) (VTArrow t1' t2') ->
+    typeUnify t1 t1' *> typeUnify t2 t2'
+  (VTForall x e t) (VTForall _ e' t') ->
+    typeBind x do
+      t  <- typeEval e t
+      t' <- typeEval e' t'
+      typeUnify t t'
+  (VTHole t1) t2 -> liftIO (readIORef t1) >>= \case
+    Empty _ _ l -> fillHole l t1 t2
+    Full t1 -> typeUnify t1 t2
+  t1 (VTHole t2) -> liftIO (readIORef t2) >>= \case
+    Empty _ _ l -> fillHole l t2 t1
+    Full t2 -> typeUnify t1 t2
+  t1 t2 -> do
+    s1 <- typePrint t1
+    s2 <- typePrint t2
+    throw $ TypeErrorMismatch s1 s2
+  where
+    fillHole :: Dbg => Level -> IORef Hole -> VType -> Check ()
+    fillHole l h t = do
+      l' <- asks typeLevel
+      scopeCheck l l' h t
+      liftIO $ writeIORef h (Full t)
 
--- -- typeUnify
--- -- typeUnify t1 t2 = do
--- --   t1' <- readMeta t1
--- --   t2' <- readMeta t2
--- --   case (t1', t2') of
--- --     (Just (Solved t1, _), _) -> typeUnify t1 t2
--- --     (_, Just (Solved t2, _)) -> typeUnify t1 t2
--- --     (Just (_, u), _)         -> occurs u t2 *> writeIORef u (Solved t2)
--- --     (_, Just (_, u))         -> occurs u t1 *> writeIORef u (Solved t1)
--- --     _                        -> throwIO TypeUnifyError
---   where
---     bind2 x y k = x >>= ((y >>=) . k)
+    scopeCheck :: Dbg => Level -> Level -> IORef Hole -> VType -> Check ()
+    scopeCheck l l' _ t@(VTVar x) =
+      when (l <= x && x < l') do
+        s <- typePrint t
+        throw (TypeErrorTypeVariableEscape s)
+    scopeCheck _ _ _ VTCon{} = pure ()
+    scopeCheck l l' h (VTArrow a b) = do
+      typeForce a >>= scopeCheck l l' h
+      typeForce b >>= scopeCheck l l' h
+    scopeCheck l l' h (VTForall x env t) = do
+      v <- VTVar <$> asks typeLevel
+      typeBind x $ typeEval (v : env) t
+        >>= scopeCheck l l' h
+    scopeCheck l l' h (VTHole h') = do
+      when (h == h') do
+        s1 <- typePrint _t1
+        s2 <- typePrint _t2
+        throw (TypeErrorOccursCheck s1 s2)
+      liftIO (readIORef h') >>= \case
+        Empty x u s -> when (s > l) do
+          liftIO $ writeIORef h' (Empty x u l)
+        Full t -> scopeCheck l l' h t
 
 typeBind :: Dbg => String -> Check r -> Check r
 typeBind x = local \Context{..} -> Context
@@ -243,12 +245,6 @@ typeBind x = local \Context{..} -> Context
   , typeEnv       = VTVar typeLevel : typeEnv
   , ..
   }
-
-  -- TTVar :: Index -> TType
-  -- TTCon :: String -> Unique -> TType
-  -- TTArrow :: TType -> TType -> TType
-  -- TTForall :: String -> TType -> TType
-  -- TTHole :: IORef Hole -> TType
 
 typePrint' :: TType -> Check String
 typePrint' t = do
@@ -267,12 +263,9 @@ typePrint' t = do
       pure $ parens p (a ++ " -> " ++ b)
     go p (TTForall x t) = do
       t <- typeBind x $ go False t
-      -- VTForall x env t -> do
-      --   t <- typeEval (VTVar l : env) t
-      --     >>=
       pure $ parens p ("forall " ++ x ++ ". " ++ t)
     go p (TTHole h) = liftIO (readIORef h) >>= \case
-      Empty x u l -> pure $ "?" ++ x ++ show (unUnique u) ++ "@" ++ show (unLevel l)
+      Empty x u l -> pure $ "?" ++ x ++ "." ++ show (unUnique u) ++ "@" ++ show (unLevel l)
       Full t -> do
         l <- asks typeLevel
         t <- typeQuote l t
@@ -300,7 +293,7 @@ typePrint t = do
           >>= typeBind x . go (succ l) False
         pure $ parens p ("forall " ++ x ++ ". " ++ t)
       VTHole h -> liftIO (readIORef h) >>= \case
-        Empty x u l -> pure $ "?" ++ x ++ show (unUnique u) ++ "@" ++ show (unLevel l)
+        Empty x u l -> pure $ "?" ++ x ++ "." ++ show (unUnique u) ++ "@" ++ show (unLevel l)
         Full t -> go l p t
 
 typeCheck :: Dbg => RType -> Check TType
@@ -394,17 +387,27 @@ exprApply f t e = typeForce t >>= \case
 
 main :: IO ()
 main = runCheck do
-  g $ RTForall "x" (RTArrow (RTForall "y" (RTArrow (RTCon "C") (RTArrow (RTVar "x") (RTVar "y")))) (RTVar "x"))
-  g $ RTForall "x" (RTForall "x" (RTForall "x" (RTVar "x")))
-  g $ RTForall "x" (RTVar "x")
-  pure ()
+  go $ ELambda "x" Nothing (EVar "x")
+  go $ ELambda "x" (Just (RTForall "x" (RTArrow (RTVar "x") (RTVar "x")))) (EApply (EVar "x") (EVar "x"))
+  go $ ELambda "x" Nothing (EApply (EAnnot (EVar "x") (RTForall "x" (RTArrow (RTVar "x") (RTVar "x")))) (EVar "x"))
+  -- g $ RTForall "x" (RTArrow (RTForall "y" (RTArrow (RTCon "C") (RTArrow (RTVar "x") (RTVar "y")))) (RTVar "x"))
+  -- g $ RTForall "x" (RTForall "x" (RTForall "x" (RTVar "x")))
+  -- g $ RTForall "x" (RTVar "x")
+  -- pure ()
   where
-    g x = do
-      v <- typeCheck' x
-      t <- typeQuote (Level 0) v
-      typePrint v >>= liftIO . putStrLn
-      typePrint' t >>= liftIO . putStrLn
+    go x = do
+      t  <- exprInfer x
+      t' <- typeQuote (Level 0) t
+      typePrint t >>= liftIO . putStrLn
+      typePrint' t' >>= liftIO . putStrLn
       liftIO $ putChar '\n'
+
+  --   g x = do
+  --     v <- typeCheck' x
+  --     t <- typeQuote (Level 0) v
+  --     typePrint v >>= liftIO . putStrLn
+  --     typePrint' t >>= liftIO . putStrLn
+  --     liftIO $ putChar '\n'
 
 #if 0
 data List a
