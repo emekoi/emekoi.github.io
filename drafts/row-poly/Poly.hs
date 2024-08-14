@@ -10,17 +10,17 @@ module Poly
 
 import Control.Exception          (Exception (..), handle, throwIO)
 import Control.Monad
+import Control.Monad.Fix
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
+import Data.Foldable
 import Data.Functor               (($>))
-import Data.IntMap                qualified as IntMap
 import Data.IORef                 (IORef, atomicModifyIORef', newIORef,
                                    readIORef, writeIORef)
 import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
-import Data.Foldable
 import Data.Typeable              (Typeable)
 import GHC.Stack
 import Prelude                    hiding ((!!))
@@ -389,100 +389,32 @@ exprInferInst e = do
       typeEval (h : env) t >>= instAll l
     instAll _ t = pure t
 
--- _exprInferGen :: Dbg => Expr -> Check VType
--- _exprInferGen e = do
---   l <- asks typeLevel
---   t <- exprInfer e
---   xs <- gen l (succ l) t []
---   liftIO $ print xs
---   pure t
---   where
---     succBy n 0 = n
---     succBy n m = succBy (succ n) (m - 1)
+exprTop :: Dbg => Expr -> Check TType
+exprTop e = do
+  -- NOTE: uses laziness to compute the number of binders that we will insert at
+  -- the start of the final type at the same time as we quote the type
+  (t', vs) <- mfix \(~(_, a)) -> do
+    t <- exprInfer e
+    runStateT (go (Level (length a)) t) []
 
---     -- NOTE: since we do not know how many foralls will be inserted, we need to
---     -- make 2 passes over the type to count the variables to generralize and to do the
---     -- gen :: (Dbg, MonadIO m) => Level -> Level -> VType -> [(String,Unique)] -> m [(String,Unique)]
---     gen b l t vs = typeForce t >>= \case
---       VTArrow s t -> gen b l s vs >>= gen b l t
---       VTForall _ env t -> do
---         t' <- typeEval (VTVar l : env) t
---         gen b (succ l) t' vs
---       VTHole h ->
---         liftIO (readIORef h) >>= \case
---           Empty n x l | l >= b -> do
---             let vs' = (n,x) : vs
---             liftIO $ writeIORef h (Full (VTVar (succBy b (length vs))))
---             pure vs'
---           Full t -> gen b l t vs
---           Empty n x l -> do
---             liftIO $ print (n, x, l)
---             pure vs
---       _ -> pure vs
-
-_exprInferGen :: Dbg => Expr -> Check TType
-_exprInferGen e = do
-  l <- asks typeLevel
-  -- t <- local (\Context{..} -> Context {typeLevel = succ typeLevel,..}) $
-  --   exprInfer e
-  t <- exprInfer e
-  -- (_, xs) <- gen l (succ l) t (l, mempty)
-  (_, (l', xs)) <- runStateT (go l l t) (l, [])
-  z <- foldl' (\t (n, x) -> TTForall n t) <$> typeQuote l' t <*> pure xs
-  -- liftIO $ print xs
-  -- t' <- typeQuote (succBy l (length xs)) t
-  -- foldM `flip` t' `flip` xs $ \t (h, x, l) -> do
-  --   liftIO $ writeIORef h (Full (VTVar l))
-  --   pure
-  -- forAccumM (l, t) (xs )
-
-  pure z
+  pure $ foldl' (flip TTForall) t' vs
   where
-    succBy n 0 = n
-    succBy n m = succBy (succ n) (m - 1)
-
-    go b l t = typeForce t >>= \case
-      VTArrow s t -> go b l s *> go b l t
-      VTForall _ env t -> typeEval (VTVar l : env) t >>= go b (succ l)
+    go l t = typeForce t >>= \case
+      VTVar x -> pure $ TTVar (lvl2idx l x)
+      VTCon c i -> pure $ TTCon c i
+      VTArrow s t -> TTArrow
+        <$> go l s
+        <*> go l t
+      VTForall x env t -> do
+        t' <- typeEval (VTVar l : env) t
+        TTForall x <$> go (succ l) t'
       VTHole h -> do
         liftIO (readIORef h) >>= \case
-          Empty n x l | l >= b -> StateT \(vl, vs) -> do
+          Empty n (Unique x) _ -> StateT \vs -> do
+            let vl = Level (length vs)
             liftIO $ writeIORef h (Full (VTVar vl))
-            pure ((), (succ vl, (n, x) : vs))
-          _ -> pure ()
-      _ -> pure ()
-
-    -- NOTE: since we do not know how many foralls will be inserted, we need to
-    -- make 2 passes
-
-    gen b l t acc@(vl, vm) = typeForce t >>= \case
-      VTArrow s t -> gen b l s acc >>= gen b l t
-      VTForall _ env t -> do
-        t' <- typeEval (VTVar l : env) t
-        gen b (succ l) t' acc
-      VTHole h ->
-        liftIO (readIORef h) >>= \case
-          Empty n x l | l > b, Nothing <- IntMap.lookup (unUnique x) vm ->
-            pure (succ vl, IntMap.insert (unUnique x) (h, n, vl) vm)
-          _ -> pure acc
-      _ -> pure acc
-
-    -- go b l t = typeForce t >>= \case
-    --   VTVar x -> pure $ TTVar (lvl2idx l x)
-    --   VTCon c i -> pure $ TTCon c i
-    --   VTArrow s t -> TTArrow
-    --     <$> go b l s
-    --     <*> go b l t
-    --   VTForall x env t -> do
-    --     t' <- typeEval (VTVar l : env) t
-    --     TTForall x <$> go b (succ l) t'
-    --   VTHole h -> do
-    --     liftIO (readIORef h) >>= \case
-    --       Empty n x l | l > b -> StateT \(vl, vs) -> do
-    --         liftIO $ writeIORef h (Full (VTVar vl))
-    --         pure ((), (succ vl, (n,x) : vs))
-    --       _ -> pure ()
-    --     pure $ TTHole h
+            pure (TTVar (lvl2idx l vl), (n <> show x) : vs)
+          Full t -> go l t
 
 main :: IO ()
 main = runCheck do
@@ -499,14 +431,12 @@ main = runCheck do
 
   go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (ELambda "z" Nothing (EApply (EVar "y") (EVar "z"))) (EApply (EVar "x") EUnit))
   go $ ELambda "y" Nothing (ELet "x" (Just (idT "a")) (EVar "y") (EApply (EVar "x") EUnit))
-  go $ foldl' (\x n -> ELambda n Nothing x) (EVar "x") ["x", "y", "z", "w"]
+  go $ foldr (`ELambda` Nothing) (EVar "x") ["x", "y", "z", "w"]
 
   pure ()
   where
     go x = ReaderT \r -> handle @TypeError (\x -> print x *> putChar '\n') $ flip runReaderT r do
-      t  <- _exprInferGen x
-      -- t' <- typeQuote (Level 0) t
-      -- typePrint t >>= liftIO . putStrLn
+      t  <- exprTop x
       typePrint' t >>= liftIO . putStrLn
       liftIO $ putChar '\n'
 
