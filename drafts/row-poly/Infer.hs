@@ -1,28 +1,39 @@
-{-# LANGUAGE BlockArguments  #-}
-{-# LANGUAGE CPP             #-}
-{-# LANGUAGE FieldSelectors  #-}
-{-# LANGUAGE LambdaCase      #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE CPP            #-}
+{-# LANGUAGE LambdaCase     #-}
 
-module Poly
-    ( Expr (..)
-    , RType (..)
-    , TType (..)
-    , TypeError (..)
+-- module Infer
+--     ( Expr (..)
+--     , RType (..)
+--     , TType (..)
+--     , TypeError (..)
+--     , TypeErrorKind (..)
+--     , VType (..)
+--     , exprCheck
+--     , exprInfer
+--     , exprInferInst
+--     , exprTopCheck
+--     , exprTopInfer
+--     , runCheck
+--     , typeCheck
+--     , typeCheck'
+--     , typeEval
+--     , typePrint
+--     , typePrint'
+--     , typeQuote
+--     ) where
+
+module Infer
+    ( TypeError (..)
     , TypeErrorKind (..)
-    , VType (..)
     , exprCheck
     , exprInfer
     , exprInferInst
     , exprTopCheck
     , exprTopInfer
     , runCheck
-    , typeCheck
-    , typeCheck'
-    , typeEval
     , typePrint
     , typePrint'
-    , typeQuote
     ) where
 
 import Control.Exception          (Exception (..), throwIO)
@@ -33,76 +44,16 @@ import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Data.Foldable
 import Data.Functor               (($>))
-import Data.IORef                 (IORef, atomicModifyIORef', newIORef,
-                                   readIORef, writeIORef)
-import Data.List                  qualified as List
-import Data.Map.Strict            (Map)
+import Data.IORef                 (IORef)
 import Data.Map.Strict            qualified as Map
 import Data.Text                  qualified as Text
 import Data.Typeable              (Typeable)
 import GHC.Stack
 import Prelude                    hiding ((!!))
-
-type StrictText = Text.Text
-type Dbg = HasCallStack
+import Syntax
 
 bind2 :: Monad m => m a -> m b -> (a -> b -> m c) -> m c
 bind2 x y k = x >>= ((y >>=) . k)
-
-newtype Unique
-  = Unique { unUnique :: Int }
-  deriving (Eq, Ord, Show)
-
-newtype Level
-  = Level { unLevel :: Int }
-  deriving (Bounded, Enum, Eq, Ord, Show)
-
-newtype Index
-  = Index { unIndex :: Int }
-  deriving (Bounded, Enum, Eq, Ord, Show)
-
-lvl2idx :: Level -> Level -> Index
-lvl2idx (Level l) (Level x) = Index (l - x - 1)
-
-(!!) :: Dbg => [a] -> Index -> a
-xs !! (Index i) = xs List.!! i
-
-data RType where
-  RTVar :: StrictText -> RType
-  RTCon :: StrictText -> RType
-  RTArrow :: RType -> RType -> RType
-  RTForall :: StrictText -> RType -> RType
-  deriving (Eq, Show)
-
-data Hole where
-  Empty :: StrictText -> Unique -> Level -> Hole
-  Full :: VType -> Hole
-  deriving (Eq)
-
-data TType where
-  TTVar :: Index -> TType
-  TTCon :: StrictText -> Unique -> TType
-  TTArrow :: TType -> TType -> TType
-  TTForall :: StrictText -> TType -> TType
-  TTHole :: IORef Hole -> TType
-  deriving (Eq)
-
-data VType where
-  VTVar :: Level -> VType
-  VTCon :: StrictText -> Unique -> VType
-  VTArrow :: VType -> VType -> VType
-  VTForall :: StrictText -> [VType] -> TType -> VType
-  VTHole :: IORef Hole -> VType
-  deriving (Eq)
-
-data Expr where
-  EUnit :: Expr
-  EVar :: StrictText -> Expr
-  EApply :: Expr -> Expr -> Expr
-  ELambda :: StrictText -> Maybe RType -> Expr -> Expr
-  ELet :: StrictText -> Maybe RType -> Expr -> Expr -> Expr
-  EAnnot :: Expr -> RType -> Expr
-  deriving (Eq, Show)
 
 data TypeErrorKind
   = TypeErrorMismatch StrictText StrictText
@@ -123,93 +74,13 @@ instance Exception TypeError where
 throw :: (Dbg, MonadIO m) => TypeErrorKind -> m a
 throw x = liftIO . throwIO $ withFrozenCallStack (TypeError x)
 
-data Context = Context
-  { unique        :: IORef Int
-  , typeLevel     :: Level
-  , rawTypeLevels :: Map StrictText Level
-  , rawTypeNames  :: [StrictText]
-  , typeEnv       :: [VType]
-  , rawTermTypes  :: Map StrictText VType
-  }
-
-type Check = ReaderT Context IO
-
-runCheck :: Dbg => Check m -> IO m
-runCheck m = do
-  unique <- newIORef 0
-  runReaderT m Context
-    { unique        = unique
-    , typeLevel     = Level 0
-    , rawTypeLevels = mempty
-    , rawTypeNames  = mempty
-    , typeEnv       = mempty
-    , rawTermTypes  = mempty
-    }
-
-uniqueNew :: Check Unique
-uniqueNew = do
-  uniqueSource <- asks unique
-  liftIO $ atomicModifyIORef' uniqueSource \i ->
-    let !z = i + 1 in (z, Unique z)
-
-typeForce :: (Dbg, MonadIO m) => VType -> m VType
-typeForce (VTHole h) = liftIO $ go h
-  where
-    go h = readIORef h >>= \case
-      Full (VTHole h')  -> do
-        t <- go h'
-        writeIORef h (Full t)
-        pure t
-      Full t  -> pure t
-      Empty{} -> pure (VTHole h)
-typeForce t = pure t
-
-typeEval :: (Dbg, MonadIO m) => [VType] -> TType -> m VType
-typeEval env (TTVar i)      = pure $ env !! i
-typeEval _ (TTCon c i)      = pure $ VTCon c i
-typeEval env (TTArrow a b)  = VTArrow <$> typeEval env a <*> typeEval env b
-typeEval env (TTForall x t) = pure $ VTForall x env t
-typeEval _ (TTHole h)       = typeForce (VTHole h)
-
-typeQuote :: (Dbg, MonadIO m) => Level -> VType -> m TType
-typeQuote l t = typeForce t >>= \case
-  VTVar x -> pure $ TTVar (lvl2idx l x)
-  VTCon c i -> pure $ TTCon c i
-  VTArrow s t -> TTArrow <$> typeQuote l s <*> typeQuote l t
-  VTForall x env t -> do
-    t' <- typeEval (VTVar l : env) t
-    TTForall x <$> typeQuote (succ l) t'
-  VTHole h -> pure $ TTHole h
-
--- _typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
--- _typeQuote' b l t = typeForce t >>= \case
---   VTVar x -> pure $ TTVar (lvl2idx l x)
---   VTCon c i -> pure $ TTCon c i
---   VTArrow s t -> TTArrow
---     <$> _typeQuote' b l s
---     <*> _typeQuote' b l t
---   VTForall x env t -> do
---     t' <- typeEval (VTVar l : env) t
---     TTForall x <$> _typeQuote' b (succ l) t'
---   VTHole h -> do
---     liftIO $ readIORef h >>= \case
---       Empty n x l | l > b ->
---         writeIORef h (Empty n x b)
---       _ -> pure ()
---     pure $ TTHole h
-
-typeHole :: StrictText -> Level -> Check VType
-typeHole x l = do
-  u <- uniqueNew
-  liftIO $ VTHole <$> newIORef (Empty x u l)
-
 typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   t t' | t == t' -> pure ()
-  (VTHole t1) t2 -> liftIO (readIORef t1) >>= \case
+  (VTHole t1) t2 -> holeRead t1 >>= \case
     Empty _ _ l -> fillHole l t1 t2
     Full t1 -> typeUnify t1 t2
-  t1 (VTHole t2) -> liftIO (readIORef t2) >>= \case
+  t1 (VTHole t2) -> holeRead t2 >>= \case
     Empty _ _ l -> fillHole l t2 t1
     Full t2 -> typeUnify t1 t2
   (VTVar l) (VTVar l') | l == l' -> pure ()
@@ -231,7 +102,7 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     fillHole l h t = do
       l' <- asks typeLevel
       scopeCheck l l' h t
-      liftIO $ writeIORef h (Full t)
+      holeWrite h (Full t)
 
     scopeCheck :: Dbg => Level -> Level -> IORef Hole -> VType -> Check ()
     scopeCheck l l' _ t@(VTVar x) =
@@ -251,69 +122,10 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
         s1 <- typePrint _t1
         s2 <- typePrint _t2
         throw (TypeErrorOccursCheck s1 s2)
-      liftIO (readIORef h') >>= \case
+      holeRead h >>= \case
         Empty x u s -> when (s > l) do
-          liftIO $ writeIORef h' (Empty x u l)
+          holeWrite h' (Empty x u l)
         Full t -> scopeCheck l l' h t
-
-typeBind :: Dbg => StrictText -> Check r -> Check r
-typeBind x = local \Context{..} -> Context
-  { typeLevel     = succ typeLevel
-  , rawTypeLevels = Map.insert x typeLevel rawTypeLevels
-  , rawTypeNames  = x : rawTypeNames
-  , typeEnv       = VTVar typeLevel : typeEnv
-  , ..
-  }
-
-typePrint' :: Dbg => TType -> Check StrictText
-typePrint' t = do
-  go False t
-  where
-    parens True x  = "(" <> x <> ")"
-    parens False x = x
-
-    go _ (TTVar i) = do
-      x <- (!! i) <$> asks rawTypeNames
-      pure $ x <> "@" <> Text.pack (show (unIndex i))
-    go _ (TTCon c _) = pure c
-    go p (TTArrow a b) = do
-      a <- go True a
-      b <- go False b
-      pure $ parens p (a <> " -> " <> b)
-    go p (TTForall x t) = do
-      t <- typeBind x $ go False t
-      pure $ parens p ("forall " <> x <> ". " <> t)
-    go p (TTHole h) = liftIO (readIORef h) >>= \case
-      Empty x u l -> pure $ "?" <> x <> "." <> Text.pack (show (unUnique u) <> "@" <> show (unLevel l))
-      Full t -> do
-        l <- asks typeLevel
-        t <- typeQuote l t
-        go p t
-
-typePrint :: Dbg => VType -> Check StrictText
-typePrint t = do
-  l <- asks typeLevel
-  go l False t
-  where
-    parens True x  = "(" <> x <> ")"
-    parens False x = x
-
-    go l p t = typeForce t >>= \case
-      VTVar l' -> do
-        x <- (!! lvl2idx l l') <$> asks rawTypeNames
-        pure $ x <> "@" <> Text.pack (show (unLevel l'))
-      VTCon c _ -> pure c
-      VTArrow a b -> do
-        a <- go l True a
-        b <- go l False b
-        pure $ parens p (a <> " -> " <> b)
-      VTForall x env t -> do
-        t <- typeEval (VTVar l : env) t
-          >>= typeBind x . go (succ l) False
-        pure $ parens p ("forall " <> x <> ". " <> t)
-      VTHole h -> liftIO (readIORef h) >>= \case
-        Empty x u l -> pure $ "?" <> x <> "." <> Text.pack (show (unUnique u) <> "@" <> show (unLevel l))
-        Full t -> go l p t
 
 typeCheck :: Dbg => RType -> Check TType
 typeCheck t = do
@@ -331,10 +143,6 @@ typeCheck t = do
 typeCheck' :: Dbg => RType -> Check VType
 typeCheck' t = bind2 (asks typeEnv) (typeCheck t) typeEval
 
-exprBind :: Dbg => StrictText -> VType -> Check r -> Check r
-exprBind x t = local \ctx -> ctx
-  { rawTermTypes = Map.insert x t (rawTermTypes ctx)
-  }
 
 exprCheck :: Dbg => Expr -> VType -> Check ()
 exprCheck e t = typeForce t >>= \case
@@ -372,17 +180,17 @@ exprInfer (EAnnot e t) = do
   exprCheck e t $> t
 exprInfer (ELambda x t e) = do
   l <- asks typeLevel
-  t <- maybe (typeHole x l) typeCheck' t
+  t <- maybe (holeNew x l) typeCheck' t
   -- t <- VTArrow t <$> exprBind x t (exprInferInst e)
   VTArrow t <$> exprBind x t (exprInfer e)
 exprInfer (EApply f x) = do
   exprInferInst f >>= typeForce >>= apply
   where
-    apply (VTHole h) = liftIO (readIORef h) >>= \case
+    apply (VTHole h) = holeRead h >>= \case
       Empty n _ l -> do
-        t1 <- typeHole n l
-        t2 <- typeHole n l
-        liftIO (writeIORef h (Full (VTArrow t1 t2)))
+        t1 <- holeNew n l
+        t2 <- holeNew n l
+        holeWrite h (Full (VTArrow t1 t2))
         exprCheck x t1 $> t2
       Full t -> apply t
     apply (VTArrow s t) = do
@@ -404,7 +212,7 @@ exprInferInst e = do
   exprInfer e >>= instAll l
   where
     instAll l (VTForall x env t) = do
-      h <- typeHole x l
+      h <- holeNew x l
       typeEval (h : env) t >>= instAll l
     instAll _ t = pure t
 
@@ -428,10 +236,10 @@ exprTopInfer e = do
         t' <- typeEval (VTVar l : env) t
         TTForall x <$> go (succ l) t'
       VTHole h -> do
-        liftIO (readIORef h) >>= \case
+        holeRead h >>= \case
           Empty n (Unique x) _ -> StateT \vs -> do
             let vl = Level (length vs)
-            liftIO $ writeIORef h (Full (VTVar vl))
+            holeWrite h (Full (VTVar vl))
             pure (TTVar (lvl2idx l vl), (n <> Text.pack (show x)) : vs)
           Full t -> go l t
 

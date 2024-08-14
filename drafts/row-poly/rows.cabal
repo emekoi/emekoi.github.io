@@ -22,8 +22,6 @@ common base
     GADTs
     GeneralizedNewtypeDeriving
     LambdaCase
-    NoFieldSelectors
-    OverloadedRecordDot
     OverloadedStrings
     PatternSynonyms
     RecordWildCards
@@ -44,5 +42,6 @@ executable rows
   main-is:     Main.hs
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is Main
   other-modules:
+    Infer
     Parser
-    Poly
+    Syntax

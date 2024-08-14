@@ -2,27 +2,27 @@ module Main
     ( main
     ) where
 
-import Data.Text                  qualified as Text
-import Data.Text.IO               qualified as Text
-import Parser qualified
-import System.Environment         (getArgs)
-import Text.Megaparsec            qualified as Mega
 import Control.Exception          (handle)
 import Control.Monad
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
-import Poly qualified
+import Data.Text.IO               qualified as Text
+import Infer qualified
+import Parser qualified
+import Syntax
+import System.Environment         (getArgs)
+import Text.Megaparsec            qualified as Mega
 
-polyMain :: [(Text.Text, Maybe Poly.RType, Poly.Expr)] -> IO ()
-polyMain xs = Poly.runCheck $ forM_ xs \(x, t, e) -> wrap do
+polyMain :: [(Name, Maybe RType, Expr)] -> IO ()
+polyMain xs = Infer.runCheck $ forM_ xs \(x, t, e) -> wrap do
   t <- case t of
-    Just t  -> Poly.exprTopCheck e t
-    Nothing -> Poly.exprTopInfer e
-  s <- Poly.typePrint' t
+    Just t  -> Infer.exprTopCheck e t
+    Nothing -> Infer.exprTopInfer e
+  s <- Infer.typePrint' t
   liftIO . Text.putStrLn $ x <> " : " <> s
   where
     wrap m = ReaderT $
-      handle @Poly.TypeError (\x -> print x *> putChar '\n') . runReaderT m
+      handle @Infer.TypeError (\x -> print x *> putChar '\n') . runReaderT m
 
 main :: IO ()
 main = do

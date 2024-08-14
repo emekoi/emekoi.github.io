@@ -14,14 +14,12 @@ import Data.Foldable
 import Data.Functor
 import Data.List.NonEmpty                       (NonEmpty (..))
 import Data.Set                                 qualified as Set
-import Data.Text                                qualified as Text
 import Data.Void                                (Void)
-import Poly
+import Syntax
 import Text.Megaparsec                          qualified as Mega
 import Text.Megaparsec.Char                     qualified as Mega
 import Text.Megaparsec.Char.Lexer               qualified as MegaL
 
-type StrictText = Text.Text
 type Parsec = Mega.Parsec Void StrictText
 
 tabWidth :: Mega.Pos
