@@ -14,11 +14,10 @@ import System.Environment         (getArgs)
 import Text.Megaparsec            qualified as Mega
 
 polyMain :: [(Name, Maybe RType, Expr)] -> IO ()
-polyMain xs = Infer.runCheck $ forM_ xs \(x, t, e) -> wrap do
-  t <- case t of
+polyMain xs = runCheck $ forM_ xs \(x, t, e) -> wrap do
+  s <- display =<< case t of
     Just t  -> Infer.exprTopCheck e t
     Nothing -> Infer.exprTopInfer e
-  s <- Infer.typePrint' t
   liftIO . Text.putStrLn $ x <> " : " <> s
   where
     wrap m = ReaderT $

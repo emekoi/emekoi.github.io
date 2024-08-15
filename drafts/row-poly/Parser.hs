@@ -90,20 +90,40 @@ pVar =  ident Mega.lowerChar
 pCon :: Parsec StrictText
 pCon = ident Mega.upperChar
 
+pArrow :: Parsec ()
+pArrow = rsymbol "->" <|> rsymbol "→"
+
+pKind :: Parsec RKind
+pKind =
+  makeExprParser
+    (Mega.choice [parens pKind, rsymbol "Type" $> RKType])
+    [[InfixR (pArrow $> RKArrow)]]
+
 pType :: Parsec RType
 pType =
-  makeExprParser
-    (Mega.choice [parens pType, RTCon <$> nblexeme pCon, RTVar <$> pVar, pForall])
-    [[InfixR (symbol "->" $> RTArrow)]]
+  makeExprParser choices
+    [[InfixR (pArrow $> RTArrow)]]
   where
+    choices = Mega.choice
+      [ parens pType
+      , RTCon <$> nblexeme pCon
+      , RTVar <$> pVar
+      , pForall
+      ]
+
+    pVar' = (, Nothing) <$> pVar <|> parens do
+      (,) <$> pVar <*> fmap Just (rsymbol ":" *> pKind)
+
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
-      RTForall <$> pVar <*> (rsymbol "." *> pType)
+      uncurry RTForall
+        <$> pVar'
+        <*> (rsymbol "." *> pType)
 
 pExpr :: Parsec Expr
 pExpr = do
   x <- pExpr1
-  Mega.optional (symbol ":" *> pType) <&> \case
+  Mega.optional (rsymbol ":" *> pType) <&> \case
     Just t -> EAnnot x t
     Nothing -> x
   where
@@ -122,17 +142,18 @@ pExpr = do
 
     pLet = do
       rsymbol "let"
+      isRec <- Mega.option False (rsymbol "rec" $> True)
       x <- pVar
-      t <- optional (symbol ":" *> pType)
-      v <- symbol "=" *> lexeme pExpr
-      e <- symbol "in" *> pExpr
-      pure $ ELet x t v e
+      t <- optional (rsymbol ":" *> pType)
+      v <- rsymbol "=" *> lexeme pExpr
+      e <- rsymbol "in" *> pExpr
+      pure $ (if isRec then ELetRec else ELet) x t v e
 
     pLambda = do
       void . lexeme $ (Mega.char '\\' <|> Mega.char 'λ')
       k <- (flip ELambda Nothing <$> pVar) <|> parens do
-        ELambda <$> pVar <*> fmap Just (symbol ":" *> pType)
-      void $ symbol "->" <|> symbol "→"
+        ELambda <$> pVar <*> fmap Just (rsymbol ":" *> pType)
+      pArrow
       k <$> pExpr
 
 pDef :: Parsec (StrictText, Maybe RType, Expr)
