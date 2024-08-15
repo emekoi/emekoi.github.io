@@ -2,6 +2,8 @@
 {-# LANGUAGE CPP            #-}
 {-# LANGUAGE LambdaCase     #-}
 
+-- TODO: instantiate unknown kinds to KType
+
 module Infer
     ( TypeError (..)
     , TypeErrorKind (..)
@@ -18,7 +20,7 @@ import Control.Monad.Fix
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
-import Data.Foldable
+import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
 import Data.Text                  qualified as Text
@@ -33,13 +35,14 @@ bind2 x y k = x >>= ((y >>=) . k)
 data TypeErrorKind
   = TypeErrorKindMismatch StrictText StrictText
   | TypeErrorKindOccursCheck StrictText StrictText
+  | TypeErrorKindNonArrow StrictText
   | TypeErrorTypeMismatch StrictText StrictText
   | TypeErrorTypeOccursCheck StrictText StrictText
   | TypeErrorTypeVariableEscape StrictText
   | TypeErrorTypeVariableUnbound StrictText
   | TypeErrorConstructorUnknown StrictText
   | TypeErrorVariableUnbound StrictText
-  | TypeErrorNonFunction Expr StrictText
+  | TypeErrorExprNonFunction Expr StrictText
   deriving (Show, Typeable)
 
 data TypeError where TypeError :: Dbg => TypeErrorKind -> TypeError
@@ -52,6 +55,7 @@ instance Exception TypeError where
 throw :: (Dbg, MonadIO m) => TypeErrorKind -> m a
 throw x = liftIO . throwIO $ withFrozenCallStack (TypeError x)
 
+-- | unify 2 kinds
 kindUnify :: Dbg => Kind -> Kind -> Check ()
 kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
   k k' | k == k' -> pure ()
@@ -78,9 +82,10 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
         s2 <- display _k2
         throw (TypeErrorKindOccursCheck s1 s2)
       readIORef h >>= \case
-        KHEmpty -> pure ()
         KHFull t -> scopeCheck h t
+        KHEmpty -> pure ()
 
+-- | unify 2 types
 typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   t t' | t == t' -> pure ()
@@ -124,6 +129,19 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       typeForce a >>= scopeCheck l l' h >>= kindUnify KType
       typeForce b >>= scopeCheck l l' h >>= kindUnify KType
       pure KType
+    scopeCheck l l' h (VTApply a b) = do
+      (k1, k2) <- typeForce a >>= scopeCheck l l' h >>= kindForce >>= \case
+        KType -> do
+          s <- display a
+          throw $ TypeErrorKindNonArrow s
+        KArrow k1 k2 -> pure (k1, k2)
+        KHole h -> do
+          k1 <- kindHole
+          k2 <- kindHole
+          writeIORef h (KHFull (KArrow k1 k2))
+          pure (k1, k2)
+      typeForce b >>= scopeCheck l l' h >>= kindUnify k1
+      pure k2
     scopeCheck l l' h (VTForall x k env t) = do
       v <- VTVar <$> asks typeLevel
       typeBind x k $ typeEval (v k : env) t
@@ -140,23 +158,30 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
           pure k
         THFull t -> scopeCheck l l' h t
 
-typeKind :: VType -> Check Kind
-typeKind t = typeForce t >>= \case
-  VTVar _ k -> pure k
-  VTCon _ k _ -> pure k
-  VTArrow a b -> do
-    -- TODO: do we need this?
-    typeKind a >>= kindUnify KType
-    typeKind b >>= kindUnify KType
-    pure KType
-  VTForall x k e t -> do
-    v <- VTVar <$> asks typeLevel
-    typeBind x k $ typeEval (v k : e) t
-      >>= typeKind
-  VTHole h -> readIORef h >>= \case
-    THEmpty _ k _ -> pure k
-    THFull t -> typeKind t
+-- | compute the kind of a VType
+-- typeKind :: VType -> Check Kind
+-- typeKind t = typeForce t >>= \case
+--   VTVar _ k -> pure k
+--   VTCon _ k _ -> pure k
+--   VTArrow a b -> do
+--     -- TODO: do we need this?
+--     typeKind a >>= kindUnify KType
+--     typeKind b >>= kindUnify KType
+--     pure KType
+--   VTApply a b -> do
+--     -- TODO: do we need this?
+--     typeKind a >>= kindUnify KType
+--     typeKind b >>= kindUnify KType
+--     pure KType
+--   VTForall x k e t -> do
+--     v <- VTVar <$> asks typeLevel
+--     typeBind x k $ typeEval (v k : e) t
+--       >>= typeKind
+--   VTHole h -> readIORef h >>= \case
+--     THEmpty _ k _ -> pure k
+--     THFull t -> typeKind t
 
+-- | convert a RType to VType and compute its kind
 typeCheck :: Dbg => RType -> Check (VType, Kind)
 typeCheck t = do
   raw <- asks rawTypeLevels
@@ -179,18 +204,34 @@ typeCheck t = do
       (b, k2) <- go env b
       kindUnify k2 KType
       pure (TTArrow a b, KType)
+    go env (RTApply a b) = do
+      (a, k1) <- go env a
+      (k1, k2) <- kindForce k1 >>= \case
+        KType -> do
+          s <- display a
+          throw $ TypeErrorKindNonArrow s
+        KArrow k1 k2 -> pure (k1, k2)
+        KHole h -> do
+          k1 <- kindHole
+          k2 <- kindHole
+          writeIORef h (KHFull (KArrow k1 k2))
+          pure (k1, k2)
+      (b, k1') <- go env b
+      kindUnify k1 k1'
+      pure (TTApply a b, k2)
     go (env, l) (RTForall x k t) = do
       k <- maybe kindHole (pure . getKind) k
       (t, k') <- go (Map.insert x (l, k) env, succ l) t
       pure (TTForall x k t, k')
 
--- | check well-formdness and ensure the kind is type
+-- | convert a RType to VType ensure the kind is Type
 typeCheck' :: Dbg => RType -> Check VType
 typeCheck' t = do
   (t, k) <- typeCheck t
   kindUnify KType k
   pure t
 
+-- | check an Expr has a given VType
 exprCheck :: Dbg => Expr -> VType -> Check ()
 exprCheck e t = typeForce t >>= \case
   VTForall x k env t -> do
@@ -217,6 +258,7 @@ exprCheck e t = typeForce t >>= \case
     t' <- exprInferInst e
     typeUnify t' t
 
+-- | infer the VType of a given Expr
 exprInfer :: Dbg => Expr -> Check VType
 exprInfer EUnit = do
   pure (VTCon "UNIT" KType (Unique (-1)))
@@ -246,7 +288,7 @@ exprInfer (EApply f x) = do
       exprCheck x s $> t
     apply t = do
       s <- display t
-      throw $ TypeErrorNonFunction f s
+      throw $ TypeErrorExprNonFunction f s
 exprInfer (ELet x t1 e1 e2) = do
   t1 <- case t1 of
     Nothing ->
@@ -257,11 +299,11 @@ exprInfer (ELet x t1 e1 e2) = do
   exprBind x t1 (exprInfer e2)
 exprInfer (ELetRec x t1 e1 e2) = do
   t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck' t1
-  typeKind t1 >>= kindUnify KType
   exprBind x t1 do
     exprCheck e1 t1
     exprInfer e2
 
+-- | infer the VType of a given Expr, instantiating and leading VForalls
 exprInferInst :: Dbg => Expr -> Check VType
 exprInferInst e = do
   l <- asks typeLevel
@@ -272,6 +314,7 @@ exprInferInst e = do
       typeEval (h : env) t >>= instAll l
     instAll _ t = pure t
 
+-- | infer and generalize the TType of a given Expr
 exprTopInfer :: Dbg => Expr -> Check TType
 exprTopInfer e = do
   -- NOTE: uses laziness to compute the number of binders that we will insert at
@@ -288,6 +331,9 @@ exprTopInfer e = do
       VTArrow s t -> TTArrow
         <$> go l s
         <*> go l t
+      VTApply s t -> TTApply
+        <$> go l s
+        <*> go l t
       VTForall x k env t -> do
         t' <- typeEval (VTVar l k : env) t
         TTForall x k <$> go (succ l) t'
@@ -301,6 +347,7 @@ exprTopInfer e = do
                  )
           THFull t -> go l t
 
+-- | check that an Expr has a given RType and convert RType to a TType
 exprTopCheck :: Dbg => Expr -> RType -> Check TType
 exprTopCheck e t = do
   t <- typeCheck' t
@@ -329,14 +376,17 @@ toList (Cons x a xs) = (Just (x,a) :) <$> toList xs
 
 example :: IO ()
 example = do
-  _x <- ofList [("a", "Int"), ("a", "String"), ("b", "B")]
-  _y <- ofList [("b", "String"), ("a", "Int")]
-  _z <- ofList [("b", "B"), ("a", "String"), ("a", "Int")]
+  _x <- ofList' [("a", "Int")]
+  _y <- ofList' [("b", "String")]
+  -- _z <- ofList [("b", "B"), ("a", "String"), ("a", "Int")]
   -- same x x >>= print
   -- same y y >>= print
   -- same x y >>= print
   -- same y x >>= print
-  same _x _z >>= print
+  same _x _y >>= print
+  same _x _y >>= print
+  printList _x >>= putStrLn
+  printList _y >>= putStrLn
 
 {-
 <a | r1> ~ <b | r2>
@@ -373,8 +423,8 @@ same x y = go 0 x y
 
     unifyHole n h t = readIORef h >>= \case
       Nothing -> do
-        if t == Hole h then pure () else writeIORef h (Just t)
-        pure True
+        if t == Hole h then pure False
+        else writeIORef h (Just t) $> True
       Just t' -> go' n t' t
 
 printList :: Show a => List a -> IO String

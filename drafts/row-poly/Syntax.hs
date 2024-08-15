@@ -45,7 +45,6 @@ import Data.List                  qualified as List
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Text                  qualified as Text
--- import Data.Text.Lazy.Builder     qualified as Builder
 import GHC.Stack
 import Prelude                    hiding ((!!))
 
@@ -89,6 +88,7 @@ data RType where
   RTVar :: Name -> RType
   RTCon :: Name -> RType
   RTArrow :: RType -> RType -> RType
+  RTApply :: RType -> RType -> RType
   RTForall :: Name -> Maybe RKind -> RType -> RType
   deriving (Eq, Show)
 
@@ -112,6 +112,7 @@ data TType where
   TTVar :: Index -> Kind -> TType
   TTCon :: Name -> Kind -> Unique -> TType
   TTArrow :: TType -> TType -> TType
+  TTApply :: TType -> TType -> TType
   TTForall :: Name -> Kind -> TType -> TType
   TTHole :: IORef THole -> TType
   deriving (Eq)
@@ -120,6 +121,7 @@ data VType where
   VTVar :: Level -> Kind -> VType
   VTCon :: Name -> Kind -> Unique -> VType
   VTArrow :: VType -> VType -> VType
+  VTApply :: VType -> VType -> VType
   VTForall :: Name -> Kind -> [VType] -> TType -> VType
   VTHole :: IORef THole -> VType
   deriving (Eq)
@@ -224,6 +226,7 @@ typeEval :: (Dbg, MonadIO m) => [VType] -> TType -> m VType
 typeEval env (TTVar i _)      = pure $ env !! i
 typeEval _ (TTCon c k u)      = pure $ VTCon c k u
 typeEval env (TTArrow a b)    = VTArrow <$> typeEval env a <*> typeEval env b
+typeEval env (TTApply a b)    = VTApply <$> typeEval env a <*> typeEval env b
 typeEval env (TTForall x k t) = pure $ VTForall x k env t
 typeEval _ (TTHole h)         = typeForce (VTHole h)
 
@@ -232,6 +235,7 @@ typeQuote l t = typeForce t >>= \case
   VTVar x k -> pure $ TTVar (lvl2idx l x) k
   VTCon c k u -> pure $ TTCon c k u
   VTArrow s t -> TTArrow <$> typeQuote l s <*> typeQuote l t
+  VTApply s t -> TTApply <$> typeQuote l s <*> typeQuote l t
   VTForall x k env t -> do
     t' <- typeEval (VTVar l k : env) t
     TTForall x k <$> typeQuote (succ l) t'
@@ -242,6 +246,9 @@ typeQuote' b l t = typeForce t >>= \case
   VTVar x k -> pure $ TTVar (lvl2idx l x) k
   VTCon c k u -> pure $ TTCon c k u
   VTArrow s t -> TTArrow
+    <$> typeQuote' b l s
+    <*> typeQuote' b l t
+  VTApply s t -> TTApply
     <$> typeQuote' b l s
     <*> typeQuote' b l t
   VTForall x k env t -> do
@@ -285,6 +292,10 @@ instance Display Check TType where
         a <- go True a
         b <- go False b
         pure $ parens p (a <> " -> " <> b)
+      go p (TTApply a b) = do
+        a <- go False a
+        b <- go True b
+        pure $ parens p (a <> " " <> b)
       go p (TTForall x k t) = do
         t <- typeBind x k $ go False t
         x <- kindForce k >>= \case

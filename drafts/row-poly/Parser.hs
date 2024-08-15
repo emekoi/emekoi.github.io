@@ -100,25 +100,31 @@ pKind =
     [[InfixR (pArrow $> RKArrow)]]
 
 pType :: Parsec RType
-pType =
-  makeExprParser choices
-    [[InfixR (pArrow $> RTArrow)]]
+pType = pForall <|> pType2
   where
-    choices = Mega.choice
+    pAtom = Mega.choice
       [ parens pType
       , RTCon <$> nblexeme pCon
       , RTVar <$> pVar
-      , pForall
       ]
 
-    pVar' = (, Nothing) <$> pVar <|> parens do
-      (,) <$> pVar <*> fmap Just (rsymbol ":" *> pKind)
+    pType1 = do
+      xs <- lineFold1 pAtom
+      pure case xs of
+        x :| [] -> x
+        x :| xs -> foldl' RTApply x xs
+
+    pType2 = do
+      sepBy1 pType1 pArrow >>= \case
+        x :| [] -> pure x
+        x :| xs -> pure $ foldr (\x k y -> RTArrow y (k x)) id xs x
 
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
-      uncurry RTForall
-        <$> pVar'
-        <*> (rsymbol "." *> pType)
+      (x, t) <- (, Nothing) <$> pVar <|> parens do
+        (,) <$> pVar <*> fmap Just (rsymbol ":" *> pKind)
+      rsymbol "."
+      RTForall x t <$> pType
 
 pExpr :: Parsec Expr
 pExpr = do
