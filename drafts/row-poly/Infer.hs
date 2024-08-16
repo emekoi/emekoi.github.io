@@ -73,6 +73,7 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
       writeIORef h (KHFull k)
 
     scopeCheck _ KType = pure ()
+    scopeCheck _ KRow = pure ()
     scopeCheck h (KArrow a b) = do
       kindForce a >>= scopeCheck h
       kindForce b >>= scopeCheck h
@@ -95,12 +96,6 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   t1 (VTHole t2) -> readIORef t2 >>= \case
     THEmpty _ k l -> fillHole l k t2 t1
     THFull t2 -> typeUnify t1 t2
-  (VTVar l k) (VTVar l' k') | l == l' ->
-    kindUnify k k'
-  (VTCon _ k u) (VTCon _ k' u') | u == u' ->
-    kindUnify k k'
-  (VTArrow t1 t2) (VTArrow t1' t2') ->
-    typeUnify t1 t1' *> typeUnify t2 t2'
   (VTForall x k e t) (VTForall _ k' e' t') -> do
     kindUnify k k'
     l <- asks typeLevel
@@ -108,6 +103,22 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       t  <- typeEval (VTVar l k : e) t
       t' <- typeEval (VTVar l k : e') t'
       typeUnify t t'
+  (VTVar l k) (VTVar l' k') | l == l' ->
+    kindUnify k k'
+  (VTCon _ k u) (VTCon _ k' u') | u == u' ->
+    kindUnify k k'
+  (VTArrow t1 t2) (VTArrow t1' t2') ->
+    typeUnify t1 t1' *> typeUnify t2 t2'
+  (VRExtend x t r) (VRExtend x' t' r') -> do
+    if x == x' then
+      typeUnify t t' *> typeUnify r r'
+    else do
+      l <- asks typeLevel
+      q <- typeHole "r" KRow l
+      typeUnify (VRExtend x t q) r'
+      typeUnify r (VRExtend x' t' q)
+  (VRRecord r) (VRRecord r') ->
+    typeUnify r r'
   t1 t2 -> do
     s1 <- display t1
     s2 <- display t2
@@ -119,6 +130,10 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       kindUnify k k'
       writeIORef h (THFull t)
 
+    scopeCheck l l' h (VTForall x k env t) = do
+      v <- VTVar <$> asks typeLevel
+      typeBind x k $ typeEval (v k : env) t
+        >>= scopeCheck l l' h
     scopeCheck l l' _ t@(VTVar x k) = do
       when (l <= x && x < l') do
         s <- display t
@@ -131,27 +146,31 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       pure KType
     scopeCheck l l' h (VTApply a b) = do
       (k1, k2) <- typeForce a >>= scopeCheck l l' h >>= kindForce >>= \case
-        KType -> do
-          s <- display a
-          throw $ TypeErrorKindNonArrow s
         KArrow k1 k2 -> pure (k1, k2)
         KHole h -> do
           k1 <- kindHole
           k2 <- kindHole
           writeIORef h (KHFull (KArrow k1 k2))
           pure (k1, k2)
+        _ -> do
+          s <- display a
+          throw $ TypeErrorKindNonArrow s
       typeForce b >>= scopeCheck l l' h >>= kindUnify k1
       pure k2
-    scopeCheck l l' h (VTForall x k env t) = do
-      v <- VTVar <$> asks typeLevel
-      typeBind x k $ typeEval (v k : env) t
-        >>= scopeCheck l l' h
+    scopeCheck _ _ _ VREmpty = pure KRow
+    scopeCheck l l' h (VRRecord r) = do
+      scopeCheck l l' h r >>= kindUnify KRow
+      pure KType
+    scopeCheck l l' h (VRExtend _ t r) = do
+      scopeCheck l l' h t >>= kindUnify KType
+      scopeCheck l l' h r >>= kindUnify KRow
+      pure KRow
     scopeCheck l l' h (VTHole h') = do
       when (h == h') do
         s1 <- display _t1
         s2 <- display _t2
         throw (TypeErrorTypeOccursCheck s1 s2)
-      readIORef h >>= \case
+      readIORef h' >>= \case
         THEmpty x k s -> do
           when (s > l) do
             writeIORef h' (THEmpty x k l)
@@ -190,8 +209,13 @@ typeCheck t = do
   (,k) <$> (asks typeEnv >>= flip typeEval t)
   where
     getKind RKType        = KType
+    getKind RKRow         = KRow
     getKind (RKArrow a b) = KArrow (getKind a) (getKind b)
 
+    go (env, l) (RTForall x k t) = do
+      k <- maybe kindHole (pure . getKind) k
+      (t, k') <- go (Map.insert x (l, k) env, succ l) t
+      pure (TTForall x k t, k')
     go (env, l) (RTVar v) = case Map.lookup v env of
       Just (l', k) -> pure (TTVar (lvl2idx l l') k, k)
       Nothing      -> throw $ TypeErrorTypeVariableUnbound v
@@ -207,22 +231,30 @@ typeCheck t = do
     go env (RTApply a b) = do
       (a, k1) <- go env a
       (k1, k2) <- kindForce k1 >>= \case
-        KType -> do
-          s <- display a
-          throw $ TypeErrorKindNonArrow s
         KArrow k1 k2 -> pure (k1, k2)
         KHole h -> do
           k1 <- kindHole
           k2 <- kindHole
           writeIORef h (KHFull (KArrow k1 k2))
           pure (k1, k2)
+        _ -> do
+          s <- display a
+          throw $ TypeErrorKindNonArrow s
       (b, k1') <- go env b
       kindUnify k1 k1'
       pure (TTApply a b, k2)
-    go (env, l) (RTForall x k t) = do
-      k <- maybe kindHole (pure . getKind) k
-      (t, k') <- go (Map.insert x (l, k) env, succ l) t
-      pure (TTForall x k t, k')
+    go _ RREmpty = do
+      pure (TREmpty, KRow)
+    go env (RRExtend x t r) = do
+      (t, k1) <- go env t
+      kindUnify k1 KType
+      (r, k2) <- go env r
+      kindUnify k2 KRow
+      pure (TRExtend x t r, KRow)
+    go env (RRRecord r) = do
+      (r, k) <- go env r
+      kindUnify k KRow
+      pure (TRRecord r, KType)
 
 -- | convert a RType to VType ensure the kind is Type
 typeCheck' :: Dbg => RType -> Check VType
@@ -261,7 +293,9 @@ exprCheck e t = typeForce t >>= \case
 -- | infer the VType of a given Expr
 exprInfer :: Dbg => Expr -> Check VType
 exprInfer EUnit = do
-  pure (VTCon "UNIT" KType (Unique (-1)))
+  pure (VTCon "Unit" KType (Unique 0))
+exprInfer (EInt _) = do
+  pure (VTCon "Int" KType (Unique 1))
 exprInfer (EVar v) = do
   asks rawTermTypes >>= flip (.) (Map.lookup v) \case
     Nothing -> throw $ TypeErrorVariableUnbound v
@@ -302,6 +336,21 @@ exprInfer (ELetRec x t1 e1 e2) = do
   exprBind x t1 do
     exprCheck e1 t1
     exprInfer e2
+exprInfer EEmpty = do
+  pure $ VRRecord VREmpty
+exprInfer (ESelect e l) = do
+  t <- asks typeLevel >>= typeHole "t" KType
+  r <- asks typeLevel >>= typeHole "r" KRow
+  exprCheck e (VRRecord (VRExtend l t r)) $> t
+exprInfer (ERestrict e l) = do
+  t <- asks typeLevel >>= typeHole "t" KType
+  r <- asks typeLevel >>= typeHole "r" KRow
+  exprCheck e (VRRecord (VRExtend l t r)) $> VRRecord r
+exprInfer (EExtend l x e) = do
+  t <- exprInfer x
+  r <- asks typeLevel >>= typeHole "r" KRow
+  exprCheck e (VRRecord r)
+  pure $ VRRecord (VRExtend l t r)
 
 -- | infer the VType of a given Expr, instantiating and leading VForalls
 exprInferInst :: Dbg => Expr -> Check VType
@@ -326,17 +375,16 @@ exprTopInfer e = do
   pure $ foldl' (flip $ uncurry TTForall) t' vs
   where
     go l t = typeForce t >>= \case
-      VTVar x k -> pure $ TTVar (lvl2idx l x) k
-      VTCon c i k -> pure $ TTCon c i k
-      VTArrow s t -> TTArrow
-        <$> go l s
-        <*> go l t
-      VTApply s t -> TTApply
-        <$> go l s
-        <*> go l t
       VTForall x k env t -> do
         t' <- typeEval (VTVar l k : env) t
         TTForall x k <$> go (succ l) t'
+      VTVar x k -> pure $ TTVar (lvl2idx l x) k
+      VTCon c i k -> pure $ TTCon c i k
+      VTArrow s t -> TTArrow <$> go l s <*> go l t
+      VTApply s t -> TTApply <$> go l s <*> go l t
+      VREmpty -> pure TREmpty
+      VRExtend x t r -> TRExtend x <$> go l t <*> go l r
+      VRRecord r -> TRRecord <$> go l r
       VTHole h -> do
         readIORef h >>= \case
           THEmpty n k _ -> StateT \vs -> do
@@ -354,82 +402,3 @@ exprTopCheck e t = do
   exprCheck e t
   asks typeLevel >>= flip typeQuote t
 
-#if 0
-data List a
-  = Hole (IORef (Maybe (List a)))
-  | Nil
-  | Cons String a (List a)
-  deriving (Eq)
-
-ofList :: [(String, a)] -> IO (List a)
-ofList = pure . foldr (uncurry Cons) Nil
-
-ofList' :: [(String, a)] -> IO (List a)
-ofList' = foldr (fmap . uncurry Cons) (Hole <$> newIORef Nothing)
-
-toList :: List a -> IO [Maybe (String, a)]
-toList (Hole r) = readIORef r >>= \case
-  Nothing -> pure [Nothing]
-  Just l -> toList l
-toList Nil = pure []
-toList (Cons x a xs) = (Just (x,a) :) <$> toList xs
-
-example :: IO ()
-example = do
-  _x <- ofList' [("a", "Int")]
-  _y <- ofList' [("b", "String")]
-  -- _z <- ofList [("b", "B"), ("a", "String"), ("a", "Int")]
-  -- same x x >>= print
-  -- same y y >>= print
-  -- same x y >>= print
-  -- same y x >>= print
-  same _x _y >>= print
-  same _x _y >>= print
-  printList _x >>= putStrLn
-  printList _y >>= putStrLn
-
-{-
-<a | r1> ~ <b | r2>
-  <a | r3> ~ r2
-  r1 ~ <b | r3>
-
-(a :) r1 ~ (b :) r2
-  (a :) r3 ~ r2
-  r1 ~ (b :) r3
--}
-
-same :: (Show a, Eq a) => List a -> List a -> IO Bool
-same x y = go 0 x y
-  where
-    go n x y = do
-      putStr $ replicate (2 * n) ' '
-      xS <- printList x
-      yS <- printList y
-      putStrLn $ xS ++ " ~ " ++ yS
-      go' n x y
-
-    go' n (Hole h) t = unifyHole n h t
-    go' n t (Hole h) = unifyHole n h t
-    go' _ Nil Nil = pure True
-    go' n (Cons x t xs) (Cons y s ys) = do
-      if x == y then
-        if t == s then go (n + 1) xs ys
-        else pure False
-      else do
-        zs <- Hole <$> newIORef Nothing
-        a <- go (n + 1) (Cons x t zs) ys
-        if a then go (n + 1) (Cons y s zs) xs else pure a
-    go' _ _ _ = pure False
-
-    unifyHole n h t = readIORef h >>= \case
-      Nothing -> do
-        if t == Hole h then pure False
-        else writeIORef h (Just t) $> True
-      Just t' -> go' n t' t
-
-printList :: Show a => List a -> IO String
-printList xs = do
-  xs <- fmap (maybe "?" (\(x, t) -> x ++ " :: " ++ show t)) <$> toList xs
-  let r = if null xs then "" else foldr1 (\x y -> x <> ", " <> y) xs
-  pure $ "[" ++ r ++ "]"
-#endif

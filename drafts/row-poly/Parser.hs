@@ -70,6 +70,12 @@ nblexeme = MegaL.lexeme nbspace
 parens :: Parsec a -> Parsec a
 parens = Mega.between (symbol "(") (symbol ")")
 
+braces :: Parsec a -> Parsec a
+braces = Mega.between (symbol "{") (symbol "}")
+
+angle :: Parsec a -> Parsec a
+angle = Mega.between (symbol "<") (symbol ">")
+
 rsymbol :: StrictText -> Parsec ()
 rsymbol w = (nblexeme . Mega.try)
   (Mega.string w *> Mega.notFollowedBy Mega.alphaNumChar)
@@ -91,12 +97,12 @@ pCon :: Parsec StrictText
 pCon = ident Mega.upperChar
 
 pArrow :: Parsec ()
-pArrow = rsymbol "->" <|> rsymbol "→"
+pArrow = void $ symbol "->" <|> symbol "→"
 
 pKind :: Parsec RKind
 pKind =
   makeExprParser
-    (Mega.choice [parens pKind, rsymbol "Type" $> RKType])
+    (Mega.choice [parens pKind, rsymbol "Type" $> RKType, rsymbol "Row" $> RKRow])
     [[InfixR (pArrow $> RKArrow)]]
 
 pType :: Parsec RType
@@ -106,6 +112,9 @@ pType = pForall <|> pType2
       [ parens pType
       , RTCon <$> nblexeme pCon
       , RTVar <$> pVar
+      , symbol "<>" $> RREmpty
+      , pExt
+      , RRRecord <$> braces pType
       ]
 
     pType1 = do
@@ -117,28 +126,47 @@ pType = pForall <|> pType2
     pType2 = do
       sepBy1 pType1 pArrow >>= \case
         x :| [] -> pure x
-        x :| xs -> pure $ foldr (\x k y -> RTArrow y (k x)) id xs x
+        -- x :| xs -> pure $ foldr (\x k y -> RTArrow y (k x)) id xs x
+        xs -> pure $ foldr1 RTArrow xs
 
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
       (x, t) <- (, Nothing) <$> pVar <|> parens do
-        (,) <$> pVar <*> fmap Just (rsymbol ":" *> pKind)
+        (,) <$> pVar <*> fmap Just (symbol ":" *> pKind)
       rsymbol "."
       RTForall x t <$> pType
 
+    pExt = angle do
+      RRExtend
+        <$> pVar
+        <*> (symbol ":" *> pType)
+        <*> (symbol "|" *> pType)
+
 pExpr :: Parsec Expr
 pExpr = do
-  x <- pExpr1
-  Mega.optional (rsymbol ":" *> pType) <&> \case
+  x <- pExpr1 >>= pSelectRestrict
+  Mega.optional (symbol ":" *> pType) <&> \case
     Just t -> EAnnot x t
     Nothing -> x
   where
     pAtom = Mega.choice
       [ parens pExpr
+      , pEmpty
+      , pExtend
       , pLet
       , pLambda
+      , lexeme pInt
       , EVar <$> pVar
       ]
+
+    pNum = Mega.try (Mega.char '0' >> Mega.choice
+      [ Mega.char' 'b' >> MegaL.binary
+      , Mega.char' 'o' >> MegaL.octal
+      , Mega.char' 'x' >> MegaL.hexadecimal
+      ]) <|> MegaL.decimal
+
+    pInt = Mega.try do
+      EInt <$> MegaL.signed empty pNum Mega.<?> "integer literal"
 
     pExpr1 = do
       xs <- lineFold1 pAtom
@@ -150,17 +178,31 @@ pExpr = do
       rsymbol "let"
       isRec <- Mega.option False (rsymbol "rec" $> True)
       x <- pVar
-      t <- optional (rsymbol ":" *> pType)
-      v <- rsymbol "=" *> lexeme pExpr
+      t <- optional (symbol ":" *> pType)
+      v <- symbol "=" *> pExpr
       e <- rsymbol "in" *> pExpr
       pure $ (if isRec then ELetRec else ELet) x t v e
 
     pLambda = do
       void . lexeme $ (Mega.char '\\' <|> Mega.char 'λ')
       k <- (flip ELambda Nothing <$> pVar) <|> parens do
-        ELambda <$> pVar <*> fmap Just (rsymbol ":" *> pType)
+        ELambda <$> pVar <*> fmap Just (symbol ":" *> pType)
       pArrow
       k <$> pExpr
+
+    pEmpty = rsymbol "{}" $> EEmpty
+
+    pSelectRestrict x = Mega.choice
+      [ Mega.single '.' *> (ESelect x <$> pVar)
+      , symbol "~" *> (ERestrict x <$> pVar)
+      , pure x
+      ]
+
+    pExtend = braces do
+      l <- pVar
+      x <- symbol "=" *> pExpr
+      r <- symbol "|" *> pExpr
+      pure $ EExtend l x r
 
 pDef :: Parsec (StrictText, Maybe RType, Expr)
 pDef = MegaL.nonIndented space pTerm
