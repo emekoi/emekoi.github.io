@@ -40,6 +40,7 @@ data TypeErrorKind
   | TypeErrorTypeOccursCheck StrictText StrictText
   | TypeErrorTypeVariableEscape StrictText
   | TypeErrorTypeVariableUnbound StrictText
+  | TypeErrorTypeMissingLabel StrictText
   | TypeErrorConstructorUnknown StrictText
   | TypeErrorVariableUnbound StrictText
   | TypeErrorExprNonFunction Expr StrictText
@@ -109,16 +110,22 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     kindUnify k k'
   (VTArrow t1 t2) (VTArrow t1' t2') ->
     typeUnify t1 t1' *> typeUnify t2 t2'
-  (VRExtend x t r) (VRExtend x' t' r') -> do
-    if x == x' then
-      typeUnify t t' *> typeUnify r r'
-    else do
-      l <- asks typeLevel
-      q@(VTHole h) <- typeHole "r" KRow l
-      typeUnify (VRExtend x t q) r'
-      -- NOTE: ensure that q does not contain r
-      void $ scopeCheck l l h r
-      typeUnify r (VRExtend x' t' q)
+  t1@(VRExtend x t r) t2@VRExtend{} -> do
+    -- test1 = \r -> \s -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | s }
+    -- test1 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | r }
+    -- test1 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | {c = Unit | r} }
+    -- r <- typeForce r >>= rowTail
+    r' <- rewriteRow t1 x t t2
+    typeUnify r r'
+    -- if x == x' then
+    --   typeUnify t t' *> typeUnify r r'
+    -- else do
+    --   l <- asks typeLevel
+    --   q@(VTHole h) <- typeHole "r" KRow l
+    --   typeUnify (VRExtend x t q) r'
+    --   -- NOTE: ensure that q does not contain r
+    --   void $ scopeCheck l l h r
+    --   typeUnify r (VRExtend x' t' q)
   (VRRecord r) (VRRecord r') ->
     typeUnify r r'
   t1 t2 -> do
@@ -126,6 +133,26 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     s2 <- display t2
     throw $ TypeErrorTypeMismatch s1 s2
   where
+    rowTail (VRExtend _ _ r) = typeForce r >>= rowTail
+    rowTail r                = pure r
+
+    rewriteRow r x t (VRExtend x' t' r')
+      | x == x'   = typeUnify t t' $> r'
+      | otherwise = VRExtend x' t' <$> rewriteRow r x t r'
+    rewriteRow r x t (VTHole h) = do
+      readIORef h >>= \case
+        THFull t' -> rewriteRow r x t t'
+        THEmpty _ _ l _ -> do
+          tail <- typeForce r >>= rowTail
+          when (tail == VTHole h) do
+            s1 <- display r
+            s2 <- display (VTHole h)
+            throw (TypeErrorTypeOccursCheck s1 s2)
+          r' <- typeHole "r" KRow l
+          writeIORef h (THFull $ VRExtend x t r') $> r'
+    rewriteRow _ x _ VREmpty = throw (TypeErrorTypeMissingLabel x)
+    rewriteRow _ _ _ _ = error "BAD"
+
     fillHole l k h t = do
       l' <- asks typeLevel
       k' <- scopeCheck l l' h t
