@@ -91,10 +91,10 @@ typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   t t' | t == t' -> pure ()
   (VTHole t1) t2 -> readIORef t1 >>= \case
-    THEmpty _ k l -> fillHole l k t1 t2
+    THEmpty _ k l _ -> fillHole l k t1 t2
     THFull t1 -> typeUnify t1 t2
   t1 (VTHole t2) -> readIORef t2 >>= \case
-    THEmpty _ k l -> fillHole l k t2 t1
+    THEmpty _ k l _ -> fillHole l k t2 t1
     THFull t2 -> typeUnify t1 t2
   (VTForall x k e t) (VTForall _ k' e' t') -> do
     kindUnify k k'
@@ -114,8 +114,10 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       typeUnify t t' *> typeUnify r r'
     else do
       l <- asks typeLevel
-      q <- typeHole "r" KRow l
+      q@(VTHole h) <- typeHole "r" KRow l
       typeUnify (VRExtend x t q) r'
+      -- NOTE: ensure that q does not contain r
+      void $ scopeCheck l l h r
       typeUnify r (VRExtend x' t' q)
   (VRRecord r) (VRRecord r') ->
     typeUnify r r'
@@ -171,9 +173,9 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
         s2 <- display _t2
         throw (TypeErrorTypeOccursCheck s1 s2)
       readIORef h' >>= \case
-        THEmpty x k s -> do
+        THEmpty x k s u -> do
           when (s > l) do
-            writeIORef h' (THEmpty x k l)
+            writeIORef h' (THEmpty x k l u)
           pure k
         THFull t -> scopeCheck l l' h t
 
@@ -312,7 +314,7 @@ exprInfer (EApply f x) = do
   exprInferInst f >>= typeForce >>= apply
   where
     apply (VTHole h) = readIORef h >>= \case
-      THEmpty n k l -> do
+      THEmpty n k l _ -> do
         t1 <- typeHole n k l
         t2 <- typeHole n k l
         writeIORef h (THFull (VTArrow t1 t2))
@@ -387,7 +389,7 @@ exprTopInfer e = do
       VRRecord r -> TRRecord <$> go l r
       VTHole h -> do
         readIORef h >>= \case
-          THEmpty n k _ -> StateT \vs -> do
+          THEmpty n k _ _ -> StateT \vs -> do
             let vl = Level (length vs)
             writeIORef h (THFull (VTVar vl k))
             pure ( TTVar (lvl2idx l vl) k

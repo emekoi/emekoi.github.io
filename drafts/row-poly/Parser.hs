@@ -156,6 +156,7 @@ pExpr = do
       , pLet
       , pLambda
       , lexeme pInt
+      , rsymbol "Unit" $> EUnit
       , EVar <$> pVar
       ]
 

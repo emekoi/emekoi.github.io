@@ -108,7 +108,7 @@ data Kind where
   deriving (Eq)
 
 data THole where
-  THEmpty :: Name -> Kind -> Level -> THole
+  THEmpty :: Name -> Kind -> Level -> Unique -> THole
   THFull :: VType -> THole
   deriving (Eq)
 
@@ -225,8 +225,10 @@ kindForce (KHole h) = go h
 kindForce t = pure t
 
 typeHole :: Name -> Kind -> Level -> Check VType
-typeHole x k l = liftIO $
-  VTHole <$> IORef.newIORef (THEmpty x k l)
+typeHole x k l = do
+  u <- uniqueNew
+  r <- liftIO $ IORef.newIORef (THEmpty x k l u)
+  pure $ VTHole r
 
 typeForce :: (Dbg, MonadIO m) => VType -> m VType
 typeForce (VTHole h) = go h
@@ -334,9 +336,9 @@ instance Display Check TType where
         r <- go False False r
         pure $ "{" <> r <> "}"
       go p1 p2 (TTHole h) = readIORef h >>= \case
-        THEmpty x k l -> do
+        THEmpty x k _ u -> do
           k <- display k
-          pure $ Text.cons '?' k <> Text.pack (show $ unLevel l) <> "." <> x
+          pure $ Text.cons '?' k <> Text.pack (show $ unUnique u) <> "." <> x
         THFull t -> do
           l <- asks typeLevel
           t <- typeQuote l t
