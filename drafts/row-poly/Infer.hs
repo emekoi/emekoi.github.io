@@ -20,6 +20,7 @@ import Control.Monad.Fix
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
+import Data.Bifunctor
 import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
@@ -40,7 +41,7 @@ data TypeErrorKind
   | TypeErrorTypeOccursCheck StrictText StrictText
   | TypeErrorTypeVariableEscape StrictText
   | TypeErrorTypeVariableUnbound StrictText
-  | TypeErrorTypeMissingLabel StrictText
+  | TypeErrorTypeMissingLabels [StrictText]
   | TypeErrorConstructorUnknown StrictText
   | TypeErrorVariableUnbound StrictText
   | TypeErrorExprNonFunction Expr StrictText
@@ -87,6 +88,32 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
         KHFull t -> scopeCheck h t
         KHEmpty -> pure ()
 
+rowUnify
+  :: Dbg => [(Name, VType)] -> [(Name, VType)]
+  -> Maybe VType -> Maybe VType -> Check ()
+rowUnify ((x, t):xs) ys r r' = do
+  (ys, r') <- rowRewrite ys
+  rowUnify xs ys r r'
+  where
+    rowRewrite ((y, t'):ys) | x == y = typeUnify t t' $> (ys, r')
+    rowRewrite ((y, t'):ys) = first ((y, t'):) <$> rowRewrite ys
+    rowRewrite [] | Just r' <- r' = typeForce r' >>= \case
+      VTHole h -> readIORef h >>= \case
+        THFull _ -> error "IMPOSSIBLE"
+        THEmpty _ _ l _ -> do
+          forM_ r $ typeForce >=> \r -> do
+            when (r == r') do
+              s1 <- display (VTRowExt ((x,t):xs) r)
+              s2 <- display r'
+              throw (TypeErrorTypeOccursCheck s1 s2)
+          r' <- typeHole "r" KRow l
+          writeIORef h (THFull $ VTRowExt [(x,t)] r') $> ([], Just r')
+      _ -> error "TODO"
+    rowRewrite [] = throw (TypeErrorTypeMissingLabels [x])
+rowUnify [] [] Nothing r'  = mapM_ (typeUnify (VTRow [])) r'
+rowUnify [] ys (Just r) r' = typeUnify r (maybe (VTRow ys) (VTRowExt ys) r')
+rowUnify [] ys Nothing _   = throw . TypeErrorTypeMissingLabels $ fst <$> ys
+
 -- | unify 2 types
 typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
@@ -110,49 +137,21 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     kindUnify k k'
   (VTArrow t1 t2) (VTArrow t1' t2') ->
     typeUnify t1 t1' *> typeUnify t2 t2'
-  t1@(VRExtend x t r) t2@VRExtend{} -> do
-    -- test1 = \r -> \s -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | s }
-    -- test1 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | r }
-    -- test1 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | {c = Unit | r} }
-    -- r <- typeForce r >>= rowTail
-    r' <- rewriteRow t1 x t t2
-    typeUnify r r'
-    -- if x == x' then
-    --   typeUnify t t' *> typeUnify r r'
-    -- else do
-    --   l <- asks typeLevel
-    --   q@(VTHole h) <- typeHole "r" KRow l
-    --   typeUnify (VRExtend x t q) r'
-    --   -- NOTE: ensure that q does not contain r
-    --   void $ scopeCheck l l h r
-    --   typeUnify r (VRExtend x' t' q)
-  (VRRecord r) (VRRecord r') ->
-    typeUnify r r'
+  (VTRecord xs) (VTRecord xs') -> do
+    typeUnify xs xs'
+  (VTRow xs) (VTRow xs') ->
+    rowUnify xs xs' Nothing Nothing
+  (VTRowExt xs r) (VTRowExt xs' r') ->
+    rowUnify xs xs' (Just r) (Just r')
+  (VTRow xs) (VTRowExt xs' r') ->
+    rowUnify xs xs' Nothing (Just r')
+  (VTRowExt xs r) (VTRow xs') ->
+    rowUnify xs xs' (Just r) Nothing
   t1 t2 -> do
     s1 <- display t1
     s2 <- display t2
     throw $ TypeErrorTypeMismatch s1 s2
   where
-    rowTail (VRExtend _ _ r) = typeForce r >>= rowTail
-    rowTail r                = pure r
-
-    rewriteRow r x t (VRExtend x' t' r')
-      | x == x'   = typeUnify t t' $> r'
-      | otherwise = VRExtend x' t' <$> rewriteRow r x t r'
-    rewriteRow r x t (VTHole h) = do
-      readIORef h >>= \case
-        THFull t' -> rewriteRow r x t t'
-        THEmpty _ _ l _ -> do
-          tail <- typeForce r >>= rowTail
-          when (tail == VTHole h) do
-            s1 <- display r
-            s2 <- display (VTHole h)
-            throw (TypeErrorTypeOccursCheck s1 s2)
-          r' <- typeHole "r" KRow l
-          writeIORef h (THFull $ VRExtend x t r') $> r'
-    rewriteRow _ x _ VREmpty = throw (TypeErrorTypeMissingLabel x)
-    rewriteRow _ _ _ _ = error "BAD"
-
     fillHole l k h t = do
       l' <- asks typeLevel
       k' <- scopeCheck l l' h t
@@ -186,14 +185,18 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
           throw $ TypeErrorKindNonArrow s
       typeForce b >>= scopeCheck l l' h >>= kindUnify k1
       pure k2
-    scopeCheck _ _ _ VREmpty = pure KRow
-    scopeCheck l l' h (VRRecord r) = do
-      scopeCheck l l' h r >>= kindUnify KRow
-      pure KType
-    scopeCheck l l' h (VRExtend _ t r) = do
-      scopeCheck l l' h t >>= kindUnify KType
+    scopeCheck l l' h (VTRow xs) = do
+      forM_ xs \(_, t) ->
+        scopeCheck l l' h t >>= kindUnify KType
+      pure KRow
+    scopeCheck l l' h (VTRowExt xs r) = do
+      forM_ xs \(_, t) ->
+        scopeCheck l l' h t >>= kindUnify KType
       scopeCheck l l' h r >>= kindUnify KRow
       pure KRow
+    scopeCheck l l' h (VTRecord xs) = do
+      scopeCheck l l' h xs >>= kindUnify KRow
+      pure KType
     scopeCheck l l' h (VTHole h') = do
       when (h == h') do
         s1 <- display _t1
@@ -251,14 +254,14 @@ typeCheck t = do
     go _ (RTCon c) = asks rawTypeCons >>= flip (.) (Map.lookup c) \case
       Nothing -> throw $ TypeErrorConstructorUnknown c
       Just (u, k) -> pure (TTCon c k u, k)
-    go env (RTArrow a b) = do
-      (a, k1) <- go env a
+    go acc (RTArrow a b) = do
+      (a, k1) <- go acc a
       kindUnify k1 KType
-      (b, k2) <- go env b
+      (b, k2) <- go acc b
       kindUnify k2 KType
       pure (TTArrow a b, KType)
-    go env (RTApply a b) = do
-      (a, k1) <- go env a
+    go acc (RTApply a b) = do
+      (a, k1) <- go acc a
       (k1, k2) <- kindForce k1 >>= \case
         KArrow k1 k2 -> pure (k1, k2)
         KHole h -> do
@@ -269,21 +272,26 @@ typeCheck t = do
         _ -> do
           s <- display a
           throw $ TypeErrorKindNonArrow s
-      (b, k1') <- go env b
+      (b, k1') <- go acc b
       kindUnify k1 k1'
       pure (TTApply a b, k2)
-    go _ RREmpty = do
-      pure (TREmpty, KRow)
-    go env (RRExtend x t r) = do
-      (t, k1) <- go env t
-      kindUnify k1 KType
-      (r, k2) <- go env r
-      kindUnify k2 KRow
-      pure (TRExtend x t r, KRow)
-    go env (RRRecord r) = do
-      (r, k) <- go env r
-      kindUnify k KRow
-      pure (TRRecord r, KType)
+    go acc (RTRecord xs) = do
+      xs <- forM xs \(x, t) -> do
+        (t, k) <- go acc t
+        kindUnify k KType
+        pure (x, t)
+      pure (TTRecord (TTRow xs), KType)
+    go acc@(env, l) (RTRecordExt xs r) = do
+      xs <- forM xs \(x, t) -> do
+        (t, k) <- go acc t
+        kindUnify k KType
+        pure (x, t)
+      r <- case Map.lookup r env of
+        Nothing      -> throw $ TypeErrorTypeVariableUnbound r
+        Just (l', k) -> do
+          kindUnify k KRow
+          pure $ TTVar (lvl2idx l l') k
+      pure (TTRecord (TTRowExt xs r), KType)
 
 -- | convert a RType to VType ensure the kind is Type
 typeCheck' :: Dbg => RType -> Check VType
@@ -335,8 +343,7 @@ exprInfer (EAnnot e t) = do
 exprInfer (ELambda x t e) = do
   l <- asks typeLevel
   t <- maybe (typeHole x KType l) typeCheck' t
-  -- t <- VTArrow t <$> exprBind x t (exprInferInst e)
-  VTArrow t <$> exprBind x t (exprInfer e)
+  VTArrow t <$> exprBind x t (exprInferInst e)
 exprInfer (EApply f x) = do
   exprInferInst f >>= typeForce >>= apply
   where
@@ -365,21 +372,28 @@ exprInfer (ELetRec x t1 e1 e2) = do
   exprBind x t1 do
     exprCheck e1 t1
     exprInfer e2
-exprInfer EEmpty = do
-  pure $ VRRecord VREmpty
 exprInfer (ESelect e l) = do
   t <- asks typeLevel >>= typeHole "t" KType
   r <- asks typeLevel >>= typeHole "r" KRow
-  exprCheck e (VRRecord (VRExtend l t r)) $> t
+  exprCheck e (VTRecord (VTRowExt [(l, t)] r)) $> t
 exprInfer (ERestrict e l) = do
   t <- asks typeLevel >>= typeHole "t" KType
   r <- asks typeLevel >>= typeHole "r" KRow
-  exprCheck e (VRRecord (VRExtend l t r)) $> VRRecord r
-exprInfer (EExtend l x e) = do
-  t <- exprInfer x
+  exprCheck e (VTRecord (VTRowExt [(l, t)] r)) $> VTRecord r
+exprInfer (ERecord xs) = do
+  xs <- mapM (mapM exprInfer) xs
+  pure $ VTRecord (VTRow xs)
+exprInfer (ERecordExt xs e) = do
+  xs <- mapM (mapM exprInfer) xs
   r <- asks typeLevel >>= typeHole "r" KRow
-  exprCheck e (VRRecord r)
-  pure $ VRRecord (VRExtend l t r)
+  exprCheck e (VTRecord r)
+  -- TODO: normalize type. we should infer the type of e and depending on
+  -- whether it is a concrete record or a record extension, produce a new
+  -- concrete record/record extension
+  -- exprInfer e >>= typeForce >>= \case
+  --   VTRecordExt ys r -> pure ()
+  --   VTRecord ys -> pure ()
+  pure $ VTRecord (VTRowExt xs r)
 
 -- | infer the VType of a given Expr, instantiating and leading VForalls
 exprInferInst :: Dbg => Expr -> Check VType
@@ -399,6 +413,7 @@ exprTopInfer e = do
   -- the start of the final type at the same time as we quote the type
   (t', vs) <- mfix \(~(_, a)) -> do
     t <- exprInfer e
+    -- exprCheck e t
     runStateT (go (Level (length a)) t) []
 
   pure $ foldl' (flip $ uncurry TTForall) t' vs
@@ -411,9 +426,9 @@ exprTopInfer e = do
       VTCon c i k -> pure $ TTCon c i k
       VTArrow s t -> TTArrow <$> go l s <*> go l t
       VTApply s t -> TTApply <$> go l s <*> go l t
-      VREmpty -> pure TREmpty
-      VRExtend x t r -> TRExtend x <$> go l t <*> go l r
-      VRRecord r -> TRRecord <$> go l r
+      VTRow xs -> TTRow <$> mapM (mapM (go l)) xs
+      VTRowExt xs r -> TTRowExt <$> mapM (mapM (go l)) xs <*> go l r
+      VTRecord xs -> TTRecord <$> go l xs
       VTHole h -> do
         readIORef h >>= \case
           THEmpty n k _ _ -> StateT \vs -> do
@@ -430,4 +445,3 @@ exprTopCheck e t = do
   t <- typeCheck' t
   exprCheck e t
   asks typeLevel >>= flip typeQuote t
-

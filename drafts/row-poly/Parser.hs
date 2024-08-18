@@ -12,6 +12,7 @@ import Control.Monad.Combinators.Expr           (Operator (..), makeExprParser)
 import Data.Char                                qualified as Char
 import Data.Foldable
 import Data.Functor
+import Data.List                                qualified as List
 import Data.List.NonEmpty                       (NonEmpty (..))
 import Data.Set                                 qualified as Set
 import Data.Void                                (Void)
@@ -73,9 +74,6 @@ parens = Mega.between (symbol "(") (symbol ")")
 braces :: Parsec a -> Parsec a
 braces = Mega.between (symbol "{") (symbol "}")
 
-angle :: Parsec a -> Parsec a
-angle = Mega.between (symbol "<") (symbol ">")
-
 rsymbol :: StrictText -> Parsec ()
 rsymbol w = (nblexeme . Mega.try)
   (Mega.string w *> Mega.notFollowedBy Mega.alphaNumChar)
@@ -112,9 +110,7 @@ pType = pForall <|> pType2
       [ parens pType
       , RTCon <$> nblexeme pCon
       , RTVar <$> pVar
-      , symbol "<>" $> RREmpty
-      , pExt
-      , RRRecord <$> braces pType
+      , pRecord
       ]
 
     pType1 = do
@@ -126,7 +122,6 @@ pType = pForall <|> pType2
     pType2 = do
       sepBy1 pType1 pArrow >>= \case
         x :| [] -> pure x
-        -- x :| xs -> pure $ foldr (\x k y -> RTArrow y (k x)) id xs x
         xs -> pure $ foldr1 RTArrow xs
 
     pForall = do
@@ -136,11 +131,18 @@ pType = pForall <|> pType2
       rsymbol "."
       RTForall x t <$> pType
 
-    pExt = angle do
-      RRExtend
-        <$> pVar
-        <*> (symbol ":" *> pType)
-        <*> (symbol "|" *> pType)
+    pRecord = braces do
+      Mega.optional (Mega.try p) >>= \case
+        Nothing -> Mega.optional pVar >>= \case
+          Just r -> pure $ RTRecordExt [] r
+          Nothing -> pure $ RTRecord []
+        Just x -> do
+          xs <- List.sortOn fst <$> many (symbol "," *> p)
+          Mega.optional (symbol "|" *> pVar) >>= \case
+            Nothing -> pure $ RTRecord (x : xs)
+            Just r -> pure $ RTRecordExt (x : xs) r
+      where
+        p = (,) <$> pVar <*> (symbol ":" *> pType)
 
 pExpr :: Parsec Expr
 pExpr = do
@@ -151,8 +153,7 @@ pExpr = do
   where
     pAtom = Mega.choice
       [ parens pExpr
-      , pEmpty
-      , pExtend
+      , pRecord
       , pLet
       , pLambda
       , lexeme pInt
@@ -191,19 +192,22 @@ pExpr = do
       pArrow
       k <$> pExpr
 
-    pEmpty = rsymbol "{}" $> EEmpty
-
     pSelectRestrict x = Mega.choice
       [ Mega.single '.' *> (ESelect x <$> pVar)
       , symbol "~" *> (ERestrict x <$> pVar)
       , pure x
       ]
 
-    pExtend = braces do
-      l <- pVar
-      x <- symbol "=" *> pExpr
-      r <- symbol "|" *> pExpr
-      pure $ EExtend l x r
+    pRecord = braces do
+      Mega.optional (Mega.try p) >>= \case
+        Nothing -> pure $ ERecord []
+        Just x -> do
+          xs <- many (symbol "," *> p)
+          Mega.optional (symbol "|" *> pExpr) >>= \case
+            Nothing -> pure $ ERecord (x : xs)
+            Just r -> pure $ ERecordExt (x : xs) r
+      where
+        p = (,) <$> pVar <*> (symbol "=" *> pExpr)
 
 pDef :: Parsec (StrictText, Maybe RType, Expr)
 pDef = MegaL.nonIndented space pTerm

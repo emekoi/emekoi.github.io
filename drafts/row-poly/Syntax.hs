@@ -90,9 +90,8 @@ data RType where
   RTCon :: Name -> RType
   RTArrow :: RType -> RType -> RType
   RTApply :: RType -> RType -> RType
-  RREmpty :: RType
-  RRExtend :: Name -> RType -> RType -> RType
-  RRRecord :: RType -> RType
+  RTRecord :: [(Name, RType)] -> RType
+  RTRecordExt :: [(Name, RType)] -> Name -> RType
   deriving (Eq, Show)
 
 data KHole where
@@ -118,9 +117,9 @@ data TType where
   TTCon :: Name -> Kind -> Unique -> TType
   TTArrow :: TType -> TType -> TType
   TTApply :: TType -> TType -> TType
-  TREmpty :: TType
-  TRExtend :: Name -> TType -> TType -> TType
-  TRRecord :: TType -> TType
+  TTRow :: [(Name, TType)] -> TType
+  TTRowExt :: [(Name, TType)] -> TType -> TType
+  TTRecord :: TType -> TType
   TTHole :: IORef THole -> TType
   deriving (Eq)
 
@@ -130,9 +129,9 @@ data VType where
   VTCon :: Name -> Kind -> Unique -> VType
   VTArrow :: VType -> VType -> VType
   VTApply :: VType -> VType -> VType
-  VREmpty :: VType
-  VRExtend :: Name -> VType -> VType -> VType
-  VRRecord :: VType -> VType
+  VTRow :: [(Name, VType)] -> VType
+  VTRowExt :: [(Name, VType)] -> VType -> VType
+  VTRecord :: VType -> VType
   VTHole :: IORef THole -> VType
   deriving (Eq)
 
@@ -144,10 +143,10 @@ data Expr where
   ELambda :: Name -> Maybe RType -> Expr -> Expr
   ELet :: Name -> Maybe RType -> Expr -> Expr -> Expr
   ELetRec :: Name -> Maybe RType -> Expr -> Expr -> Expr
-  EEmpty :: Expr
   ESelect :: Expr -> Name -> Expr
   ERestrict :: Expr -> Name -> Expr
-  EExtend :: Name -> Expr -> Expr -> Expr
+  ERecord :: [(Name, Expr)] -> Expr
+  ERecordExt :: [(Name, Expr)] -> Expr -> Expr
   EAnnot :: Expr -> RType -> Expr
   deriving (Eq, Show)
 
@@ -241,6 +240,17 @@ typeForce (VTHole h) = go h
         pure t
       THFull t  -> pure t
       THEmpty{} -> pure (VTHole h)
+typeForce (VTRecord xs) = VTRecord <$> typeForce xs
+typeForce (VTRowExt xs r) = typeForce r >>= \case
+  VTRowExt ys r -> pure $ VTRowExt (merge xs ys) r
+  VTRow ys -> pure $ VTRow (merge xs ys)
+  r -> pure $ VTRowExt xs r
+  where
+    merge :: Ord a => [(a, b)] -> [(a, b)] -> [(a, b)]
+    merge (x:xs) (y:ys)
+      | fst y < fst x = y : merge (x:xs) ys
+      | otherwise     = x : merge xs (y:ys)
+    merge xs ys = xs ++ ys
 typeForce t = pure t
 
 typeEval :: (Dbg, MonadIO m) => [VType] -> TType -> m VType
@@ -249,9 +259,9 @@ typeEval env (TTVar i _)      = pure $ env !! i
 typeEval _ (TTCon c k u)      = pure $ VTCon c k u
 typeEval env (TTArrow a b)    = VTArrow <$> typeEval env a <*> typeEval env b
 typeEval env (TTApply a b)    = VTApply <$> typeEval env a <*> typeEval env b
-typeEval _ TREmpty            = pure VREmpty
-typeEval env (TRExtend x t r) = VRExtend x <$> typeEval env t <*> typeEval env r
-typeEval env (TRRecord r)     = VRRecord <$> typeEval env r
+typeEval env (TTRow xs)       = VTRow <$> mapM (mapM (typeEval env)) xs
+typeEval env (TTRowExt xs r)  = VTRowExt <$> mapM (mapM (typeEval env)) xs <*> typeEval env r
+typeEval env (TTRecord xs)    = VTRecord <$> typeEval env xs
 typeEval _ (TTHole h)         = typeForce (VTHole h)
 
 typeQuote :: (Dbg, MonadIO m) => Level -> VType -> m TType
@@ -263,9 +273,9 @@ typeQuote l t = typeForce t >>= \case
   VTCon c k u -> pure $ TTCon c k u
   VTArrow s t -> TTArrow <$> typeQuote l s <*> typeQuote l t
   VTApply s t -> TTApply <$> typeQuote l s <*> typeQuote l t
-  VREmpty -> pure TREmpty
-  VRExtend x t r -> TRExtend x <$> typeQuote l t <*> typeQuote l r
-  VRRecord r -> TRRecord <$> typeQuote l r
+  VTRow xs -> TTRow <$> mapM (mapM (typeQuote l)) xs
+  VTRowExt xs r -> TTRowExt <$> mapM (mapM (typeQuote l)) xs <*> typeQuote l r
+  VTRecord xs -> TTRecord <$> typeQuote l xs
   VTHole h -> pure $ TTHole h
 
 -- typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
@@ -311,6 +321,10 @@ instance Display Check TType where
       parens True x  = "(" <> x <> ")"
       parens False x = x
 
+      field (x, t) = do
+        t <- go False False t
+        pure $ x <> " : " <> t
+
       go p1 p2 (TTForall x k t) = do
         t <- typeBind x k $ go False False t
         x <- kindForce k >>= \k -> do
@@ -327,14 +341,15 @@ instance Display Check TType where
         a <- go True False a
         b <- go False True b
         pure $ parens p2 (a <> " " <> b)
-      go _ _ TREmpty = pure "<>"
-      go _ _ (TRExtend x t r) = do
-        t <- go False False t
+      go _ _ (TTRow xs) = do
+        Text.intercalate ", " <$> mapM field xs
+      go _ _ (TTRowExt xs r) = do
+        xs <- Text.intercalate ", " <$> mapM field xs
         r <- go False False r
-        pure $ "<" <> x <> " : " <> t <> " | " <> r <> ">"
-      go _ _ (TRRecord r) = do
-        r <- go False False r
-        pure $ "{" <> r <> "}"
+        pure $ xs <> " | " <> r
+      go _ _ (TTRecord xs) = do
+        xs <- go False False xs
+        pure $ "{" <> xs <>  "}"
       go p1 p2 (TTHole h) = readIORef h >>= \case
         THEmpty x k _ u -> do
           k <- display k
