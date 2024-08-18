@@ -155,6 +155,9 @@ tagsMeta = Aeson.toJSON . Map.foldrWithKey' f [] . tagMap
 
 build ::  BuildOptions -> Rules ()
 build b = do
+  buildDir <- shakeFiles <$> getShakeOptionsRules
+  writeFileChanged (buildDir </> ".debug-mode") (show b.watch)
+
   gitHash <- gitHashOracle
 
   buildTime <- liftIO Clock.getCurrentTime
@@ -163,7 +166,7 @@ build b = do
     hash <- gitHash "master"
     pure $ siteBuild b.watch hash posts
 
-  let getSiteMeta = Aeson.toJSON <$> getSite []
+  let getSiteEmpty = Aeson.toJSON <$> getSite []
 
   template <- Template.compileDir "templates"
 
@@ -204,7 +207,7 @@ build b = do
     let mkPage = Page ("title" .= Shake.takeBaseName input)
 
     tPage <- template "agda-page.html"
-    siteMeta <- getSiteMeta
+    siteMeta <- getSiteEmpty
 
     liftIO (Text.readFile input)
       >>= Agda.readAgdaNaked input
@@ -312,7 +315,7 @@ build b = do
     putInfo $ unwords ["PAGE", output]
 
     tPage <- template "page.html"
-    siteMeta <- getSiteMeta
+    siteMeta <- getSiteEmpty
 
     MMark.renderMarkdownIO (noteEntry : defaultExtensions) input
       >>= writePage siteMeta tPage output
@@ -322,7 +325,7 @@ build b = do
     putInfo $ unwords ["PAGE", output]
 
     t <- template "page.html"
-    siteMeta <- getSiteMeta
+    siteMeta <- getSiteEmpty
 
     renderMarkdownIO input
       >>= writePage siteMeta t output
@@ -344,7 +347,7 @@ build b = do
     putInfo $ unwords ["POST", output]
     (input, page) <- (Map.! output) <$> liftIO (MVar.readMVar postsMap)
     t <- template "post.html"
-    siteMeta <- getSiteMeta
+    siteMeta <- getSiteEmpty
 
     writePage siteMeta t output page
 
@@ -363,7 +366,6 @@ build b = do
       copyFileChanged file (Shake.replaceDirectory file outDir)
 
     need deps
-
   where
     postFolders
       |  b.watch  = ["drafts", "posts"]
@@ -378,7 +380,10 @@ build b = do
         , ext <- postExts
       ]
 
-    getPostFiles = getDirectoryFiles "" postPattern
+    getPostFiles = do
+      buildDir <- shakeFiles <$> getShakeOptions
+      need [buildDir </> ".debug-mode"]
+      getDirectoryFiles "" postPattern
 
     agdaOut x = Shake.replaceDirectory (Shake.replaceExtensions x "md") "agda"
 

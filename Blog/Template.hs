@@ -20,7 +20,6 @@ import Data.Text.IO               qualified as Text
 import Data.Text.Lazy             qualified as TextL
 import Development.Shake
 import Development.Shake.FilePath ((<.>), (</>))
-import Development.Shake.FilePath qualified as Shake
 import Text.Megaparsec.Error      qualified as Mega
 import Text.Mustache              qualified as Stache
 import Text.Mustache.Parser       qualified as Stache
@@ -29,37 +28,43 @@ import Text.Mustache.Type         (Node (..), Template (..))
 compileDir :: FilePath -> Rules (FilePath -> Action Template)
 compileDir dir = do
   templateMap <- liftIO $ MVar.newMVar mempty
+  pure (getTemplate templateMap)
 
-  dir </> "*.mustache" %> \mInputFile -> do
-    let
-      tName = Shake.takeBaseName mInputFile
-      pName = Stache.PName (Text.pack tName)
-
-    putInfo $ unwords ["TEMPLATE", tName]
-
-    mInput <- liftIO $ Text.readFile mInputFile
-
-    case Stache.parseMustache tName mInput of
-      Left err -> fileError (Just mInputFile) $
-        Mega.errorBundlePretty err
-      Right nodes -> do
-        let partials = foldMap getPartials nodes
-
-        need . fmap (getInputFile . Text.unpack . Stache.unPName) $
-          Set.toList partials
-
-        liftIO $ MVar.modifyMVar_ templateMap \ts ->
-          let ts' = Map.insert pName nodes ts
-          in pure ts'
-
-  pure $ \tName -> do
-    need [dir </> tName <.> "mustache"]
-    Template (Stache.PName (Text.pack tName))
-      <$> liftIO (MVar.readMVar templateMap)
   where
     getInputFile tName = dir </> tName <.> "mustache"
-    getPartials (Partial p _) = Set.singleton p
+
+    getPartials (Partial p _) = Set.singleton (Text.unpack . Stache.unPName $ p)
     getPartials _             = mempty
+
+    getTemplate tMap tName = do
+      let pName = Stache.PName (Text.pack tName)
+
+      need [getInputFile tName]
+
+      liftIO (MVar.readMVar tMap) >>= flip (.) (Map.lookup pName) \case
+        Nothing -> getTemplate' tMap tName pName
+        Just _ -> pure ()
+
+      Template pName <$> liftIO (MVar.readMVar tMap)
+
+    getTemplate' tMap tName pName = do
+      let fName = getInputFile tName
+
+      putInfo $ unwords ["TEMPLATE", tName]
+
+      mInput <- liftIO $ Text.readFile fName
+
+      case Stache.parseMustache tName mInput of
+        Left err -> fileError (Just fName) $
+          Mega.errorBundlePretty err
+        Right nodes -> do
+          let partials = foldMap getPartials nodes
+
+          void $ forP (Set.toList partials) (getTemplate tMap)
+
+          liftIO $ MVar.modifyMVar_ tMap \ts ->
+            let ts' = Map.insert pName nodes ts
+            in pure ts'
 
 preprocess :: Aeson.Value -> Template -> Maybe FilePath -> StrictText -> Action StrictText
 preprocess site (Template _ tc) file input = do
