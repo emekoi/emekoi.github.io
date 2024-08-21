@@ -24,6 +24,7 @@ import Data.Bifunctor
 import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
+import Data.Maybe                 (fromMaybe)
 import Data.Text                  qualified as Text
 import Data.Typeable              (Typeable)
 import GHC.Stack
@@ -110,7 +111,7 @@ rowUnify ((x, t):xs) ys r r' = do
           writeIORef h (THFull $ VTRowExt [(x,t)] r') $> ([], Just r')
       _ -> error "TODO"
     rowRewrite [] = throw (TypeErrorTypeMissingLabels [x])
-rowUnify [] [] Nothing r'  = mapM_ (typeUnify (VTRow [])) r'
+rowUnify [] [] r r' = typeUnify (fromMaybe (VTRow []) r) (fromMaybe (VTRow []) r')
 rowUnify [] ys (Just r) r' = typeUnify r (maybe (VTRow ys) (VTRowExt ys) r')
 rowUnify [] ys Nothing _   = throw . TypeErrorTypeMissingLabels $ fst <$> ys
 
@@ -387,12 +388,6 @@ exprInfer (ERecordExt xs e) = do
   xs <- mapM (mapM exprInfer) xs
   r <- asks typeLevel >>= typeHole "r" KRow
   exprCheck e (VTRecord r)
-  -- TODO: normalize type. we should infer the type of e and depending on
-  -- whether it is a concrete record or a record extension, produce a new
-  -- concrete record/record extension
-  -- exprInfer e >>= typeForce >>= \case
-  --   VTRecordExt ys r -> pure ()
-  --   VTRecord ys -> pure ()
   pure $ VTRecord (VTRowExt xs r)
 
 -- | infer the VType of a given Expr, instantiating and leading VForalls
@@ -413,7 +408,7 @@ exprTopInfer e = do
   -- the start of the final type at the same time as we quote the type
   (t', vs) <- mfix \(~(_, a)) -> do
     t <- exprInfer e
-    -- exprCheck e t
+    exprCheck e t
     runStateT (go (Level (length a)) t) []
 
   pure $ foldl' (flip $ uncurry TTForall) t' vs

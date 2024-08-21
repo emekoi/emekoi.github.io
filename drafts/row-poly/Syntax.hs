@@ -363,24 +363,3 @@ instance Display Check VType where
   display t = do
     l <- asks typeLevel
     typeQuote l t >>= display
-    -- go l False t
-    -- where
-    --   parens True x  = "(" <> x <> ")"
-    --   parens False x = x
-
-    --   go l p t = typeForce t >>= \case
-    --     VTVar l'_  -> do
-    --       x <- (!! lvl2idx l l') <$> asks rawTypeNames
-    --       pure $ x <> "@" <> Text.pack (show (unLevel l'))
-    --     VTCon c _ _ -> pure c
-    --     VTArrow a b -> do
-    --       a <- go l True a
-    --       b <- go l False b
-    --       pure $ parens p (a <> " -> " <> b)
-    --     VTForall x env t -> do
-    --       t <- typeEval (VTVar l : env) t
-    --         >>= typeBind x . go (succ l) False
-    --       pure $ parens p ("forall " <> x <> ". " <> t)
-    --     VTHole h -> readIORef h >>= \case
-    --       Empty x u l -> pure $ "?" <> x <> "."
-    --         <> Text.pack (show (unUnique u) <> "@" <> show (unLevel l))

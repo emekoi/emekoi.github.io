@@ -103,6 +103,10 @@ pKind =
     (Mega.choice [parens pKind, rsymbol "Type" $> RKType, rsymbol "Row" $> RKRow])
     [[InfixR (pArrow $> RKArrow)]]
 
+pArg :: Parsec p -> Parsec (StrictText, Maybe p)
+pArg p = (, Nothing) <$> pVar <|> parens do
+  (,) <$> pVar <*> fmap Just (symbol ":" *> p)
+
 pType :: Parsec RType
 pType = pForall <|> pType2
   where
@@ -126,9 +130,7 @@ pType = pForall <|> pType2
 
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
-      (x, t) <- (, Nothing) <$> pVar <|> parens do
-        (,) <$> pVar <*> fmap Just (symbol ":" *> pKind)
-      rsymbol "."
+      (x, t) <- pArg pKind <* symbol "."
       RTForall x t <$> pType
 
     pRecord = braces do
@@ -187,14 +189,20 @@ pExpr = do
 
     pLambda = do
       void . lexeme $ (Mega.char '\\' <|> Mega.char 'λ')
-      k <- (flip ELambda Nothing <$> pVar) <|> parens do
-        ELambda <$> pVar <*> fmap Just (symbol ":" *> pType)
-      pArrow
-      k <$> pExpr
+      xs <- many (pArg pType) <* pArrow
+      foldr (fmap . uncurry ELambda) pExpr xs
+
+    pSelect x = do
+      foldl' ESelect x
+        <$> some (Mega.single '.' *> pVar)
+
+    pRestrict x = do
+      foldl' ERestrict x
+        <$> some (symbol "~" *> pVar)
 
     pSelectRestrict x = Mega.choice
-      [ Mega.single '.' *> (ESelect x <$> pVar)
-      , symbol "~" *> (ERestrict x <$> pVar)
+      [ pSelect x
+      , pRestrict x
       , pure x
       ]
 
