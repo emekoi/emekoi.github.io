@@ -1,6 +1,0 @@
-_site/
-_cache/
-dist/
-dist-*/
-.ghc.environment.*
-cabal.project.local*
