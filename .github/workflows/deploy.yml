@@ -49,11 +49,11 @@ jobs:
 
     - name: configure build
       run: |
-        cabal configure -f 'ci' --constraint 'hakyll -watchServer -previewServer -checkExternal'
+        cabal configure --disable-tests --disable-benchmarks -f '+ci'
         cabal build all --dry-run
 
     - name: restore cached dependencies
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       id: cache
       env:
         key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
@@ -69,7 +69,7 @@ jobs:
 
     # Cache dependencies already here, so that we do not have to rebuild them should the subsequent steps fail.
     - name: save cached dependencies
-      uses: actions/cache/save@v3
+      uses: actions/cache/save@v4
       # If we had an exact cache hit, trying to save the cache would error because of key clash.
       if: steps.cache.outputs.cache-hit != 'true'
       with:
@@ -78,7 +78,8 @@ jobs:
 
     - name: build blog
       run: |
-        cabal -j -O2 run -- blog build
+        cabal build all
+        cabal exec -- blog build -v Info
 
     - name: build resume
       uses: xu-cheng/latex-action@v3
@@ -89,10 +90,10 @@ jobs:
       uses: actions/configure-pages@v4
 
     - name: upload artifact
-      uses: actions/upload-pages-artifact@v2
+      uses: actions/upload-pages-artifact@v3
       with:
         path: '_site/'
 
     - name: deploy to github pages
       id: deployment
-      uses: actions/deploy-pages@v3
+      uses: actions/deploy-pages@v4
