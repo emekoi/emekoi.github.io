@@ -1,0 +1,10 @@
+cradle:
+  multi:
+    - path: "vendor/mmark"
+      config:
+        cradle:
+          cabal:
+    - path: "."
+      config:
+        cradle:
+          cabal:

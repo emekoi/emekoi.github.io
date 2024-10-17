@@ -1,0 +1,102 @@
+% change research experience to work experience
+% add ta-ing to work experience
+% remove some of the less impressive stuff? zig? brainfuck? unlambda?
+% add cs81 compiler?
+
+\documentclass[a4paper]{article}
+\usepackage{resume}
+
+\begin{document}
+    %==== Contact Info ====%
+    \contact{Emeka Nkurumeh}{Pasadena, CA}{\href{https://emekoi.github.io/}{https://emekoi.github.io/}}{\href{mailto:e.nk@caltech.edu}{e.nk@caltech.edu}}
+
+    %==== Education ====%
+    \header{Education}
+    \begin{school}{California Institute of Technology}{Pasadena, CA}{3.4}{Sep 2021--June 2025}
+        % \item Programming Fundamentals, Methods, and Software Design (CS 1--4), Decidability and Tractability (CS 21), Algorithms (CS 38), Interactive Theorem Proving (CS 128), Programming Languages (CS 131), Compilers (CS 164), Computer Graphics Laboratory (CS 171)
+        \item Decidability and Tractability (CS 21), Algorithms (CS 38), Interactive Theorem Proving (CS 128), Programming Languages (CS 131), Compilers (CS 164)
+        \item Calculus and Linear Algebra (Ma 1), Differential Equations (Ma 2), Abstract Algebra (Ma 5), Discrete Math (Ma 6), Graduate Probability (Ma 140)
+    \end{school}
+
+    \header{Awards}
+    \award{Gordon McClure Memorial Communications Prize in History}{June 2024}{Caltech}
+    \award{George W. Housner Student Discovery Fund}{April 2024}{Caltech}
+    \award{OPLSS Grant}{April 2024}{University of Oregon}
+    \award{PLMW @ POPL 2024}{Jan 2024}{ACM SIGPLAN/NSF}
+    \award{Gates Scholar}{Apr 2021}{The Bill \& Melinda Gates Foundation}
+    \award{QuestBridge National College Match Scholar}{Dec 2020}{QuestBridge}
+
+    \header{Skills}
+    \begin{skill}{Programming Languages}
+      \begin{itemize}[nosep]
+        \item Haskell, OCaml, Coq, C, Agda, Java, Python, Rust, x86/x86\_64 Assembly, Lua, Zig, \LaTeX{}
+      \end{itemize}
+    \end{skill}
+    \vspace{-8pt}
+    \begin{skill}{Unix Operating Systems}
+      \begin{itemize}[nosep]
+        \item Bash, Fish, Vim, Emacs, Git, gdb, Linux, various Unix command line programs
+     \end{itemize}
+    \end{skill}
+    \vspace{-5pt}
+
+    \header{Research Experience}
+    \begin{activity*}{Formally Verified CBPV Compiler}{Caltech}{Jan 2024--present}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Formalized the type system and semantics of a call-by-push-value calculus in Agda and implemented a sound and complete type checker.
+        \item Implemented a reference interpreter and started work on compiling to a small stack machine with the goal of proving them equivalent.
+      \end{itemize}
+    \end{activity*}
+
+    \begin{activity*}{Stream Type Transformers}{University of Pennsylvania}{June 2023--Aug 2023}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Worked with Benjamin C. Pierce and Joseph W. Cutler on efficient type inference for a calculus of typed stream transformers based on ordered bunched logics, known as `Stream Types'.
+        \item Reformulated the existing system as a labeled calculus and developed a novel polynomial-time type checking algorithm in Haskell, improving over a previous exponential time algorithm.
+      \end{itemize}
+    \end{activity*}
+
+    \begin{activity*}{Site Percolation on 2D Lattices}{OSSM}{Aug 2020--Dec 2020}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Worked with Jayanta Rudra on creating and optimizing a visualizer for site percolation on 2D lattices for use in calculating critical thresholds for spanning clusters.
+        \item Started work on an interactive visualizer for site percolation in higher dimensional lattices.
+      \end{itemize}
+    \end{activity*}
+
+    \header{Work Experience}
+    \begin{activity*}{Teaching Assistant}{Caltech}{Jan 2024--present}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Graded assignments and led TA sessions.
+      \end{itemize}
+    \end{activity*}
+
+    \header{Projects and Extracurriculars}
+    \begin{activity}{Zig Programming Language Project}{Sept 2018--Sept 2023}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Contributed to standard library, various stages of the bootstrapping compiler, and improved support for non-MSVC based build environments on Windows.
+        \item Reported several bugs and made multiple influential language proposals.
+      \end{itemize}
+    \end{activity}
+
+    % \begin{activity}{Brainf*ck Compiler}{Dec 2021}
+    %   \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+    %     \item Implemented a dependency-free Brainf*ck interpreter and compiler with support for outputting ELF executables with no dependency on any system libraries.
+    %     \item Implemented several optimizations leading to a 2-5x performance increase over the baseline compiler and a reduction of the number of syscalls needed for IO-bound programs.
+    %   \end{itemize}
+    % \end{activity}
+
+    \begin{activity}{Unlambda Interpreter}{Mar 2022}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Wrote an Unlambda interpreter using a modified CEK machine to capture and restore continuations.
+        \item Started work on a graph rewriting based approach for interpretation of combinator-based code and compilation to imperative languages such as x86\_64 assembly.
+      \end{itemize}
+    \end{activity}
+
+    % \begin{activity}{Bidirectional Type Checkers}{Jul 2022--Mar 2023}
+    %   Implemented type checkers for the bidirectional type systems presented in
+    %   \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+    %     \item \textit{A Mechanical Formalization of Higher-Ranked Polymorphic Type Inference}
+    %     \item \textit{Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism}
+    %     \item \textit{Let Arguments Go First}
+    %   \end{itemize}
+    % \end{activity}
+\end{document}

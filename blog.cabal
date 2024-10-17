@@ -1,0 +1,92 @@
+cabal-version:      3.0
+
+author:             Emeka Nkurumeh
+build-type:         Simple
+homepage:           https://emekoi.github.io
+license-file:       LICENSE
+license:            BSD-3-Clause
+maintainer:         emekankurumeh@outlook.com
+name:               blog
+version:            0.1.0.0
+
+flag ci
+  description: Are we on a ci runner?
+  default:     False
+
+common base
+  ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing
+  ld-options: -fuse-ld=mold -Wl,--gc-sections,--build-id
+  ld-options: -Wl,--icf=all,--ignore-data-address-equality
+
+  default-language: Haskell2010
+  default-extensions:
+    ApplicativeDo
+    BangPatterns
+    BlockArguments
+    DataKinds
+    DuplicateRecordFields
+    FlexibleContexts
+    FlexibleInstances
+    FunctionalDependencies
+    GADTs
+    GeneralizedNewtypeDeriving
+    ImportQualifiedPost
+    LambdaCase
+    MultiParamTypeClasses
+    NamedFieldPuns
+    NoFieldSelectors
+    OverloadedRecordDot
+    OverloadedStrings
+    RecordWildCards
+    ScopedTypeVariables
+    TupleSections
+    TypeApplications
+    TypeFamilies
+    TypeOperators
+    ViewPatterns
+
+executable blog
+    import:      base
+    ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is Blog
+    main-is:     Blog.hs
+    other-modules:
+      Blog.Agda
+      Blog.Config
+      Blog.MMark
+      Blog.Shake
+      Blog.Template
+      Blog.Type
+      Blog.Util
+
+    if !flag(ci)
+      cpp-options: -DENABLE_WATCH
+
+    build-depends:
+      , aeson                  ^>= 2.2
+      , base                   ^>= 4.19
+      , bytestring             ^>= 0.12
+      , containers             ^>= 0.6
+      , directory              ^>= 1.3
+      , ghc-syntax-highlighter ^>= 0.0.10
+      , lucid                  ^>= 2.11
+      , megaparsec             ^>= 9.6
+      , microlens              ^>= 0.4
+      , mmark                  ^>= 0.0.7
+      , modern-uri             ^>= 0.3
+      , mtl                    ^>= 2.3
+      , optparse-applicative   ^>= 0.18
+      , shake                  ^>= 0.19
+      , stache                 ^>= 2.3
+      , template-haskell       ^>= 2.21
+      , text                   ^>= 2.1
+      , text-icu               ^>= 0.8
+      , time                   ^>= 1.12
+      , transformers           ^>= 0.6
+
+    if !flag(ci)
+      build-depends:
+        , fsnotify       ^>= 0.4
+        , http-types     ^>= 0.12
+        , wai            ^>= 3.2
+        , wai-app-static ^>= 3.1
+        , warp           ^>= 3.3

@@ -1,0 +1,7 @@
+.shake/
+_site/
+dist-newstyle/
+.local/
+
+cabal.project.local*
+*.agdai

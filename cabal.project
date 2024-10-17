@@ -1,0 +1,9 @@
+packages: ./*.cabal
+optional-packages: vendor/*/*.cabal
+with-compiler: ghc-9.8
+
+package *
+  split-sections: true
+
+package warp
+  ghc-options: -ghcversion-file=/home/emekoi/.ghcup/ghc/9.8.2/lib/ghc-9.8.2/lib/x86_64-linux-ghc-9.8.2/rts-1.0.2/include/ghcversion.h
