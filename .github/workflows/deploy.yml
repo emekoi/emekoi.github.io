@@ -76,15 +76,13 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: build blog
-      run: |
-        cabal build all
-        cabal exec -- blog build -v Info
-
-    - name: build resume
-      uses: xu-cheng/latex-action@v3
+    - name: build blog and resume
+      uses: xu-cheng/texlive-action@v2
       with:
-        root_file: resume/resume.tex
+        scheme: small
+        run: |
+          cabal build all
+          cabal exec -- blog build -v Info
 
     - name: setup pages
       uses: actions/configure-pages@v4
