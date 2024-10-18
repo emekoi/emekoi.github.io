@@ -63,8 +63,10 @@ data Options = Options
   , jobs      :: Int
   }
 
-newtype BuildOptions
-  = BuildOptions { watch :: Bool }
+data BuildOptions = BuildOptions
+  { watch :: Bool
+  , latex :: Bool
+  }
 
 newtype CleanOptions
   = CleanOptions { cache :: Bool }
@@ -230,16 +232,17 @@ build b = do
       ]
 
   -- build resume
-  routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
-    putInfo $ unwords ["RESUME", output]
+  when b.latex do
+    routeStatic "resume/resume.tex" "static/resume.pdf" \_ output -> do
+      putInfo $ unwords ["RESUME", output]
 
-    need ["resume/resume.sty", "resume/latexmkrc"]
-    buildDir <- shakeFiles <$> getShakeOptions
-    cmd_ @(String -> [String] -> _)
-      "latexmk -r resume/latexmkrc -quiet"
-      [ "-outdir=" ++ Shake.takeDirectory output
-      , "-auxdir=" ++ buildDir
-      ]
+      need ["resume/resume.sty", "resume/latexmkrc"]
+      buildDir <- shakeFiles <$> getShakeOptions
+      cmd_ @(String -> [String] -> _)
+        "latexmk -r resume/latexmkrc -quiet"
+        [ "-outdir=" ++ Shake.takeDirectory output
+        , "-auxdir=" ++ buildDir
+        ]
 
   -- write JSON feed
   routeStatic1 "feed.json" \output -> do
@@ -529,7 +532,7 @@ parseOptions = do
     [ A.command "build" (A.info pBuild (A.progDesc "Build the site"))
     , A.command "clean" (A.info pClean (A.progDesc "Remove build files"))
     , A.command "preview" (A.info pPreview (A.progDesc "Run a preview server"))
-    ]) <|> pBuild
+    ])
 
   verbosity <- A.option A.auto (mconcat
     [ A.long "verbosity"
@@ -549,6 +552,7 @@ parseOptions = do
   where
     pBuild = Build <$> do
       watch <- A.switch (A.long "watch" <> A.short 'w' <> A.help "Watch for changes and rebuild automatically")
+      latex <- A.switch (A.long "latex" <> A.help "Build PDFs with latexmk")
       pure BuildOptions {..}
 
     pClean = Clean <$> do
