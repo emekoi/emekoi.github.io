@@ -87,7 +87,6 @@ jobs:
         args: -r resume/latexmkrc -outdir=_site/static -auxdir=.shake/
         root_file: resume/resume.tex
 
-
     - name: setup pages
       uses: actions/configure-pages@v4
 

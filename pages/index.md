@@ -24,8 +24,10 @@ GPG Key
 [0B81A91D60C23D68](/static/0B81A91D60C23D68.asc)
 :::
 
+{{# site.posts }}
 # Recent Posts
 {{> post-list.md }}
+{{/site.posts}}
 
 # Publications
 
