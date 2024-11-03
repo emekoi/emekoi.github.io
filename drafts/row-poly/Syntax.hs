@@ -88,7 +88,7 @@ data RType where
   RTForall :: Name -> Maybe RKind -> RType -> RType
   RTVar :: Name -> RType
   RTCon :: Name -> RType
-  RTArrow :: RType -> RType -> RType
+  RTArrow :: [RType] -> RType -> RType
   RTApply :: RType -> RType -> RType
   RTRecord :: [(Name, RType)] -> RType
   RTRecordExt :: [(Name, RType)] -> Name -> RType
@@ -115,7 +115,7 @@ data TType where
   TTForall :: Name -> Kind -> TType -> TType
   TTVar :: Index -> Kind -> TType
   TTCon :: Name -> Kind -> Unique -> TType
-  TTArrow :: TType -> TType -> TType
+  TTArrow :: [TType] -> TType -> TType
   TTApply :: TType -> TType -> TType
   TTRow :: [(Name, TType)] -> TType
   TTRowExt :: [(Name, TType)] -> TType -> TType
@@ -127,7 +127,7 @@ data VType where
   VTForall :: Name -> Kind -> [VType] -> TType -> VType
   VTVar :: Level -> Kind -> VType
   VTCon :: Name -> Kind -> Unique -> VType
-  VTArrow :: VType -> VType -> VType
+  VTArrow :: [VType] -> VType -> VType
   VTApply :: VType -> VType -> VType
   VTRow :: [(Name, VType)] -> VType
   VTRowExt :: [(Name, VType)] -> VType -> VType
@@ -139,8 +139,8 @@ data Expr where
   EUnit :: Expr
   EInt :: Int -> Expr
   EVar :: Name -> Expr
-  EApply :: Expr -> Expr -> Expr
-  ELambda :: Name -> Maybe RType -> Expr -> Expr
+  EApply :: Expr -> [Expr] -> Expr
+  ELambda :: [(Name, Maybe RType)] -> Expr -> Expr
   ELet :: Name -> Maybe RType -> Expr -> Expr -> Expr
   ELetRec :: Name -> Maybe RType -> Expr -> Expr -> Expr
   ESelect :: Expr -> Name -> Expr
@@ -257,7 +257,7 @@ typeEval :: (Dbg, MonadIO m) => [VType] -> TType -> m VType
 typeEval env (TTForall x k t) = pure $ VTForall x k env t
 typeEval env (TTVar i _)      = pure $ env !! i
 typeEval _ (TTCon c k u)      = pure $ VTCon c k u
-typeEval env (TTArrow a b)    = VTArrow <$> typeEval env a <*> typeEval env b
+typeEval env (TTArrow as b)   = VTArrow <$> mapM (typeEval env) as <*> typeEval env b
 typeEval env (TTApply a b)    = VTApply <$> typeEval env a <*> typeEval env b
 typeEval env (TTRow xs)       = VTRow <$> mapM (mapM (typeEval env)) xs
 typeEval env (TTRowExt xs r)  = VTRowExt <$> mapM (mapM (typeEval env)) xs <*> typeEval env r
@@ -271,7 +271,7 @@ typeQuote l t = typeForce t >>= \case
     TTForall x k <$> typeQuote (succ l) t'
   VTVar x k -> pure $ TTVar (lvl2idx l x) k
   VTCon c k u -> pure $ TTCon c k u
-  VTArrow s t -> TTArrow <$> typeQuote l s <*> typeQuote l t
+  VTArrow ss t -> TTArrow <$> mapM (typeQuote l) ss <*> typeQuote l t
   VTApply s t -> TTApply <$> typeQuote l s <*> typeQuote l t
   VTRow xs -> TTRow <$> mapM (mapM (typeQuote l)) xs
   VTRowExt xs r -> TTRowExt <$> mapM (mapM (typeQuote l)) xs <*> typeQuote l r
@@ -333,10 +333,10 @@ instance Display Check TType where
         pure $ parens (p1 || p2) ("forall " <> x <> ". " <> t)
       go _ _ (TTVar i _) = (!! i) <$> asks rawTypeNames
       go _ _ (TTCon c _ _) = pure c
-      go p1 p2 (TTArrow a b) = do
-        a <- go True False a
+      go p1 p2 (TTArrow as b) = do
+        as <- mapM (go True False) as
         b <- go False False b
-        pure $ parens (p1 || p2) (a <> " -> " <> b)
+        pure $ parens (p1 || p2) (Text.intercalate " -> " (as ++ [b]))
       go _ p2 (TTApply a b) = do
         a <- go True False a
         b <- go False True b

@@ -493,7 +493,7 @@ run o (Build b) = do
     (build b)
 run o (Preview w) = do
   shakeOpts <- shakeOptions o
-  _ <- forkIO (watch shakeOpts (build BuildOptions{ watch = True }))
+  _ <- forkIO (watch shakeOpts (build BuildOptions{ watch = True, latex = True }))
   let app = Wai.staticApp (staticSettings siteOutput)
   Warp.runSettings warpSettings app
   where

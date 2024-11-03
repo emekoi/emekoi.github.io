@@ -3,6 +3,7 @@
 {-# LANGUAGE LambdaCase     #-}
 
 -- TODO: instantiate unknown kinds to KType
+-- TODO: nail down expected/recieved order in errors
 
 module Infer
     ( TypeError (..)
@@ -25,6 +26,7 @@ import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromMaybe)
+import Data.Set                   qualified as Set
 import Data.Text                  qualified as Text
 import Data.Typeable              (Typeable)
 import GHC.Stack
@@ -115,6 +117,38 @@ rowUnify [] [] r r' = typeUnify (fromMaybe (VTRow []) r) (fromMaybe (VTRow []) r
 rowUnify [] ys (Just r) r' = typeUnify r (maybe (VTRow ys) (VTRowExt ys) r')
 rowUnify [] ys Nothing _   = throw . TypeErrorTypeMissingLabels $ fst <$> ys
 
+rowUnify'
+  :: Dbg => [(Name, VType)] -> [(Name, VType)]
+  -> Maybe VType -> Maybe VType -> Check ()
+rowUnify' (Map.fromList -> xs) (Map.fromList -> ys) rx ry = do
+  forM_ (Map.keysSet xs `Set.intersection` Map.keysSet ys) \n ->
+    typeUnify (xs Map.! n) (ys Map.! n)
+  case (null ysMissing, null xsMissing) of
+    -- they share the same fields so unify rx ry
+    (True, True)  -> typeUnify rx' ry'
+    -- ys has fields not in xs, so unify rx (ys - xs | ry)
+    (True, False) -> typeUnify rx' (f xsMissing ry)
+    -- xs has fields not in ys, so unify (xs - ys | rx) ry
+    (False, True) -> typeUnify (f ysMissing rx) ry'
+    -- if rx == ry, unification is not possible
+    (False, False) | rx == ry -> do
+      -- could be either a rigid mismatch or an occurs check issue
+      -- but calling it a rigid mismatch makes for clearer errors
+      s1 <- display (f xs rx)
+      s2 <- display (f ys ry)
+      throw (TypeErrorTypeMismatch s1 s2)
+    -- otherwise, unify rx (ys - xs | r) and unify (xs - ys | r) ry
+    (False, False) -> do
+      r <- asks typeLevel >>= typeHole "r" KRow
+      typeUnify rx' (VTRowExt (Map.toList xsMissing) r)
+      typeUnify (VTRowExt (Map.toList ysMissing) r) ry'
+  where
+    f (Map.toList -> r) = maybe (VTRow r) (VTRowExt r)
+    rx' = fromMaybe (VTRow []) rx
+    ry' = fromMaybe (VTRow []) ry
+    ysMissing = xs Map.\\ ys
+    xsMissing = ys Map.\\ xs
+
 -- | unify 2 types
 typeUnify :: Dbg => VType -> VType -> Check ()
 typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
@@ -136,18 +170,18 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     kindUnify k k'
   (VTCon _ k u) (VTCon _ k' u') | u == u' ->
     kindUnify k k'
-  (VTArrow t1 t2) (VTArrow t1' t2') ->
-    typeUnify t1 t1' *> typeUnify t2 t2'
+  (VTArrow t1 t2) (VTArrow t1' t2') | length t1 == length t1' ->
+    mapM_ (uncurry typeUnify) (zip t1 t1') *> typeUnify t2 t2'
   (VTRecord xs) (VTRecord xs') -> do
     typeUnify xs xs'
   (VTRow xs) (VTRow xs') ->
-    rowUnify xs xs' Nothing Nothing
+    rowUnify' xs xs' Nothing Nothing
   (VTRowExt xs r) (VTRowExt xs' r') ->
-    rowUnify xs xs' (Just r) (Just r')
+    rowUnify' xs xs' (Just r) (Just r')
   (VTRow xs) (VTRowExt xs' r') ->
-    rowUnify xs xs' Nothing (Just r')
+    rowUnify' xs xs' Nothing (Just r')
   (VTRowExt xs r) (VTRow xs') ->
-    rowUnify xs xs' (Just r) Nothing
+    rowUnify' xs xs' (Just r) Nothing
   t1 t2 -> do
     s1 <- display t1
     s2 <- display t2
@@ -169,12 +203,12 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
         throw (TypeErrorTypeVariableEscape s)
       pure k
     scopeCheck _ _ _ (VTCon _ k _) = pure k
-    scopeCheck l l' h (VTArrow a b) = do
-      typeForce a >>= scopeCheck l l' h >>= kindUnify KType
-      typeForce b >>= scopeCheck l l' h >>= kindUnify KType
+    scopeCheck l l' h (VTArrow as b) = do
+      mapM_ (scopeCheck l l' h >=> kindUnify KType) as
+      scopeCheck l l' h b >>= kindUnify KType
       pure KType
     scopeCheck l l' h (VTApply a b) = do
-      (k1, k2) <- typeForce a >>= scopeCheck l l' h >>= kindForce >>= \case
+      (k1, k2) <- scopeCheck l l' h a >>= kindForce >>= \case
         KArrow k1 k2 -> pure (k1, k2)
         KHole h -> do
           k1 <- kindHole
@@ -184,7 +218,7 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
         _ -> do
           s <- display a
           throw $ TypeErrorKindNonArrow s
-      typeForce b >>= scopeCheck l l' h >>= kindUnify k1
+      scopeCheck l l' h b >>= kindUnify k1
       pure k2
     scopeCheck l l' h (VTRow xs) = do
       forM_ xs \(_, t) ->
@@ -255,12 +289,14 @@ typeCheck t = do
     go _ (RTCon c) = asks rawTypeCons >>= flip (.) (Map.lookup c) \case
       Nothing -> throw $ TypeErrorConstructorUnknown c
       Just (u, k) -> pure (TTCon c k u, k)
-    go acc (RTArrow a b) = do
-      (a, k1) <- go acc a
-      kindUnify k1 KType
+    go acc (RTArrow as b) = do
+      as <- forM as \a -> do
+        (a, k1) <- go acc a
+        kindUnify k1 KType
+        pure a
       (b, k2) <- go acc b
       kindUnify k2 KType
-      pure (TTArrow a b, KType)
+      pure (TTArrow as b, KType)
     go acc (RTApply a b) = do
       (a, k1) <- go acc a
       (k1, k2) <- kindForce k1 >>= \case
@@ -308,9 +344,18 @@ exprCheck e t = typeForce t >>= \case
     l <- asks typeLevel
     t' <- typeEval (VTVar l k : env) t
     typeBind x k $ exprCheck e t'
-  VTArrow s t | ELambda x s' e <- e -> do
-    forM_ s' (typeCheck' >=> typeUnify s)
-    exprBind x s $ exprCheck e t
+  VTArrow ss t | ELambda xs e <- e -> do
+    let (ls, lx) = (length ss, length xs)
+    xs' <- forM (zip ss xs) \(s, (x, s')) -> do
+      forM_ s' (typeCheck' >=> typeUnify s)
+      pure (x, s)
+    if ls > lx then
+      -- curried application
+      foldr (uncurry exprBind) (exprCheck e (VTArrow (drop lx ss) t)) xs'
+    else if ls < lx then do
+      -- t must be another function type
+      foldr (uncurry exprBind) (exprCheck (ELambda (drop ls xs) e) t) xs'
+    else foldr (uncurry exprBind) (exprCheck e t) xs'
   t2 | ELet x t1 e1 e2 <- e -> do
     t1 <- case t1 of
       Nothing ->
@@ -328,6 +373,14 @@ exprCheck e t = typeForce t >>= \case
     t' <- exprInferInst e
     typeUnify t' t
 
+exprCheckSpine :: Dbg => [VType] -> VType -> [Expr] -> Check (Either VType VType)
+exprCheckSpine (s:ss) t (x:xs) = exprCheck x s *> exprCheckSpine ss t xs
+exprCheckSpine [] t []         = pure (Right t)
+exprCheckSpine ss t []         = pure (Right $ VTArrow ss t)
+exprCheckSpine [] t xs         = typeForce t >>= \case
+  VTArrow ss t -> exprCheckSpine ss t xs
+  t -> pure (Left t)
+
 -- | infer the VType of a given Expr
 exprInfer :: Dbg => Expr -> Check VType
 exprInfer EUnit = do
@@ -341,22 +394,29 @@ exprInfer (EVar v) = do
 exprInfer (EAnnot e t) = do
   t <- typeCheck' t
   exprCheck e t $> t
-exprInfer (ELambda x t e) = do
+exprInfer (ELambda xs e) = do
   l <- asks typeLevel
-  t <- maybe (typeHole x KType l) typeCheck' t
-  VTArrow t <$> exprBind x t (exprInferInst e)
-exprInfer (EApply f x) = do
+  ts <- forM xs \(x, t) ->
+   (x,) <$> maybe (typeHole x KType l) typeCheck' t
+  -- foldr/foldl doesn't matter since bindings are unique and non-dependent
+  -- r <- foldl' (flip $ uncurry exprBind) (exprInferInst e) ts
+  r <- foldr (uncurry exprBind) (exprInferInst e) ts
+  pure $ VTArrow (snd <$> ts) r
+exprInfer (EApply f xs) = do
   exprInferInst f >>= typeForce >>= apply
   where
     apply (VTHole h) = readIORef h >>= \case
       THEmpty n k l _ -> do
-        t1 <- typeHole n k l
+        t1s <- replicateM (length xs) (typeHole n k l)
         t2 <- typeHole n k l
-        writeIORef h (THFull (VTArrow t1 t2))
-        exprCheck x t1 $> t2
+        writeIORef h (THFull (VTArrow t1s t2))
+        forM_ (zip xs t1s) (uncurry exprCheck) $> t2
       THFull t -> apply t
-    apply (VTArrow s t) = do
-      exprCheck x s $> t
+    apply (VTArrow ss t) = exprCheckSpine ss t xs >>= \case
+      Right t -> pure t
+      Left t -> do
+        s <- display t
+        throw $ TypeErrorExprNonFunction f s
     apply t = do
       s <- display t
       throw $ TypeErrorExprNonFunction f s
@@ -419,7 +479,7 @@ exprTopInfer e = do
         TTForall x k <$> go (succ l) t'
       VTVar x k -> pure $ TTVar (lvl2idx l x) k
       VTCon c i k -> pure $ TTCon c i k
-      VTArrow s t -> TTArrow <$> go l s <*> go l t
+      VTArrow ss t -> TTArrow <$> mapM (go l) ss <*> go l t
       VTApply s t -> TTApply <$> go l s <*> go l t
       VTRow xs -> TTRow <$> mapM (mapM (go l)) xs
       VTRowExt xs r -> TTRowExt <$> mapM (mapM (go l)) xs <*> go l r

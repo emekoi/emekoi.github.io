@@ -126,7 +126,8 @@ pType = pForall <|> pType2
     pType2 = do
       sepBy1 pType1 pArrow >>= \case
         x :| [] -> pure x
-        xs -> pure $ foldr1 RTArrow xs
+        -- we know xs is nonempty so init and last are fine
+        x :| xs -> pure $ RTArrow (x : init xs) (last xs)
 
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
@@ -135,7 +136,7 @@ pType = pForall <|> pType2
 
     pRecord = braces do
       Mega.optional (Mega.try p) >>= \case
-        Nothing -> Mega.optional pVar >>= \case
+        Nothing -> Mega.optional (symbol "|" *> pVar) >>= \case
           Just r -> pure $ RTRecordExt [] r
           Nothing -> pure $ RTRecord []
         Just x -> do
@@ -176,7 +177,7 @@ pExpr = do
       xs <- lineFold1 pAtom
       pure case xs of
         x :| [] -> x
-        x :| xs -> foldl' EApply x xs
+        x :| xs -> EApply x xs
 
     pLet = do
       rsymbol "let"
@@ -190,7 +191,7 @@ pExpr = do
     pLambda = do
       void . lexeme $ (Mega.char '\\' <|> Mega.char 'λ')
       xs <- many (pArg pType) <* pArrow
-      foldr (fmap . uncurry ELambda) pExpr xs
+      ELambda xs <$> pExpr
 
     pSelect x = do
       foldl' ESelect x
