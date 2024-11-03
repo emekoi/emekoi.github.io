@@ -365,7 +365,9 @@ exprCheck e t = typeForce t >>= \case
     else if ls < lx then do
       -- t must be another function type
       foldr (uncurry exprBind) (exprCheck (ELambda (drop ls xs) e) t) xs'
-    else foldr (uncurry exprBind) (exprCheck e t) xs'
+    else
+      -- fully saturated application
+      foldr (uncurry exprBind) (exprCheck e t) xs'
   t2 | ELet x t1 e1 e2 <- e -> do
     t1 <- case t1 of
       Nothing ->
@@ -470,7 +472,7 @@ exprInfer (ERecordExt xs e) = do
 exprInferInst :: Dbg => Expr -> Check VType
 exprInferInst e = do
   l <- asks typeLevel
-  exprInfer e >>= instAll l
+  exprInfer e >>= typeForce >>= instAll l
   where
     instAll l (VTForall x k env t) = do
       h <- typeHole x k l

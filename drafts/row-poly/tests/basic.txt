@@ -39,3 +39,13 @@ test44 = \(r : {a : Unit}) (a : Int) -> { a = Unit, a = a | r }
 
 -- FAIL
 test4 = \(r : {a : Unit, a : Int}) (f: {a : Int, a : Unit} -> Unit) -> f r
+
+-- PASS
+test : {id : forall a. a -> a} -> (forall a. a -> a)
+test = \(m : {id : forall a. a -> a}) -> m.id
+
+-- PASS
+test = \(m : {id : forall a. a -> a}) -> m.id
+
+-- PASS
+test = \(m : {id : forall f. forall a. forall b. (a -> b) -> f a -> f b}) -> m.id

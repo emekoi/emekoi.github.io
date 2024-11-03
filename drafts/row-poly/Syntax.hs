@@ -1,6 +1,8 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase     #-}
 
+-- TODO: add type abstractions and applications. maybe
+
 module Syntax
     ( Check
     , Context (..)
@@ -315,19 +317,27 @@ instance (MonadIO m) => Display m Kind where
         KHEmpty -> pure "?"
         KHFull k -> go p k
 
+data TTypeParen
+  = ParenNone
+  | ParenArrow
+  | ParenApply
+
 instance Display Check TType where
-  display = go False
+  display = go ParenNone
     where
-      parens True x  = "(" <> x <> ")"
-      parens False x = x
+      parenApply ParenApply x = "(" <> x <> ")"
+      parenApply _ x          = x
+
+      parens ParenNone x = x
+      parens _ x         = "(" <> x <> ")"
 
       field (x, t) = do
-        t <- go False t
+        t <- go ParenNone t
         pure $ x <> " : " <> t
 
       -- go inArrow inApplication
       go p (TTForall x k t) = do
-        t <- typeBind x k $ go False t
+        t <- typeBind x k $ go ParenNone t
         x <- kindForce k >>= \k -> do
           k <- display k
           pure $ "(" <> x <> " : " <> k <>  ")"
@@ -335,21 +345,21 @@ instance Display Check TType where
       go _ (TTVar i _) = (!! i) <$> asks rawTypeNames
       go _ (TTCon c _ _) = pure c
       go p (TTArrow as b) = do
-        as <- mapM (go True) as
-        b <- go False b
+        as <- mapM (go ParenArrow) as
+        b <- go ParenNone b
         pure $ parens p (Text.intercalate " -> " (as ++ [b]))
       go p (TTApply f xs) = do
-        f <- go True f
-        xs <- mapM (go True) xs
-        pure $ parens p (Text.intercalate " " (f : xs))
+        f <- go ParenNone f
+        xs <- mapM (go ParenApply) xs
+        pure $ parenApply p (Text.intercalate " " (f : xs))
       go _ (TTRow xs) = do
         Text.intercalate ", " <$> mapM field xs
       go _ (TTRowExt xs r) = do
         xs <- Text.intercalate ", " <$> mapM field xs
-        r <- go False r
+        r <- go ParenNone r
         pure $ xs <> " | " <> r
       go _ (TTRecord xs) = do
-        xs <- go False xs
+        xs <- go ParenNone xs
         pure $ "{" <> xs <>  "}"
       go p (TTHole h) = readIORef h >>= \case
         THEmpty x k _ u -> do
