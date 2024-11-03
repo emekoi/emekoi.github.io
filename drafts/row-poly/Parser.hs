@@ -199,7 +199,7 @@ pExpr = do
 
     pRestrict x = do
       foldl' ERestrict x
-        <$> some (symbol "~" *> pVar)
+        <$> some (symbol "-" *> pVar)
 
     pSelectRestrict x = Mega.choice
       [ pSelect x

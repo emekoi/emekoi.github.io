@@ -21,7 +21,6 @@ import Control.Monad.Fix
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
-import Data.Bifunctor
 import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
@@ -47,7 +46,7 @@ data TypeErrorKind
   | TypeErrorTypeMissingLabels [StrictText]
   | TypeErrorConstructorUnknown StrictText
   | TypeErrorVariableUnbound StrictText
-  | TypeErrorExprNonFunction Expr StrictText
+  | TypeErrorExprNonFunction Expr
   deriving (Show, Typeable)
 
 data TypeError where TypeError :: Dbg => TypeErrorKind -> TypeError
@@ -91,36 +90,11 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
         KHFull t -> scopeCheck h t
         KHEmpty -> pure ()
 
+-- FIXME: destroys duplicate labels
 rowUnify
   :: Dbg => [(Name, VType)] -> [(Name, VType)]
   -> Maybe VType -> Maybe VType -> Check ()
-rowUnify ((x, t):xs) ys r r' = do
-  (ys, r') <- rowRewrite ys
-  rowUnify xs ys r r'
-  where
-    rowRewrite ((y, t'):ys) | x == y = typeUnify t t' $> (ys, r')
-    rowRewrite ((y, t'):ys) = first ((y, t'):) <$> rowRewrite ys
-    rowRewrite [] | Just r' <- r' = typeForce r' >>= \case
-      VTHole h -> readIORef h >>= \case
-        THFull _ -> error "IMPOSSIBLE"
-        THEmpty _ _ l _ -> do
-          forM_ r $ typeForce >=> \r -> do
-            when (r == r') do
-              s1 <- display (VTRowExt ((x,t):xs) r)
-              s2 <- display r'
-              throw (TypeErrorTypeOccursCheck s1 s2)
-          r' <- typeHole "r" KRow l
-          writeIORef h (THFull $ VTRowExt [(x,t)] r') $> ([], Just r')
-      _ -> error "TODO"
-    rowRewrite [] = throw (TypeErrorTypeMissingLabels [x])
-rowUnify [] [] r r' = typeUnify (fromMaybe (VTRow []) r) (fromMaybe (VTRow []) r')
-rowUnify [] ys (Just r) r' = typeUnify r (maybe (VTRow ys) (VTRowExt ys) r')
-rowUnify [] ys Nothing _   = throw . TypeErrorTypeMissingLabels $ fst <$> ys
-
-rowUnify'
-  :: Dbg => [(Name, VType)] -> [(Name, VType)]
-  -> Maybe VType -> Maybe VType -> Check ()
-rowUnify' (Map.fromList -> xs) (Map.fromList -> ys) rx ry = do
+rowUnify (Map.fromList -> xs) (Map.fromList -> ys) rx ry = do
   forM_ (Map.keysSet xs `Set.intersection` Map.keysSet ys) \n ->
     typeUnify (xs Map.! n) (ys Map.! n)
   case (null ysMissing, null xsMissing) of
@@ -130,10 +104,13 @@ rowUnify' (Map.fromList -> xs) (Map.fromList -> ys) rx ry = do
     (True, False) -> typeUnify rx' (f xsMissing ry)
     -- xs has fields not in ys, so unify (xs - ys | rx) ry
     (False, True) -> typeUnify (f ysMissing rx) ry'
-    -- if rx == ry, unification is not possible
+    -- if rx == ry, unification is not possible.
+    -- NOTE: this equivalent to the side condition given in the paper since
+    -- rewriting produces either empty or singleton substitutions since
+    -- variables can only occur in the tail position of a row.
     (False, False) | rx == ry -> do
-      -- could be either a rigid mismatch or an occurs check issue
-      -- but calling it a rigid mismatch makes for clearer errors
+      -- NOTE: could be either a rigid mismatch or an occurs check issue but
+      -- calling it a rigid mismatch makes for clearer errors
       s1 <- display (f xs rx)
       s2 <- display (f ys ry)
       throw (TypeErrorTypeMismatch s1 s2)
@@ -175,13 +152,13 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   (VTRecord xs) (VTRecord xs') -> do
     typeUnify xs xs'
   (VTRow xs) (VTRow xs') ->
-    rowUnify' xs xs' Nothing Nothing
+    rowUnify xs xs' Nothing Nothing
   (VTRowExt xs r) (VTRowExt xs' r') ->
-    rowUnify' xs xs' (Just r) (Just r')
+    rowUnify xs xs' (Just r) (Just r')
   (VTRow xs) (VTRowExt xs' r') ->
-    rowUnify' xs xs' Nothing (Just r')
+    rowUnify xs xs' Nothing (Just r')
   (VTRowExt xs r) (VTRow xs') ->
-    rowUnify' xs xs' (Just r) Nothing
+    rowUnify xs xs' (Just r) Nothing
   t1 t2 -> do
     s1 <- display t1
     s2 <- display t2
@@ -198,6 +175,10 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       typeBind x k $ typeEval (v k : env) t
         >>= scopeCheck l l' h
     scopeCheck l l' _ t@(VTVar x k) = do
+      -- NOTE: if l <= x, then x was bound by a forall to the right of the one
+      -- that bound the hole so solving h to some type containing t would cause
+      -- t to escape its scope. however, if x > l', then t was bound by a forall
+      -- in the solution of h, so t does not escape.
       when (l <= x && x < l') do
         s <- display t
         throw (TypeErrorTypeVariableEscape s)
@@ -373,14 +354,6 @@ exprCheck e t = typeForce t >>= \case
     t' <- exprInferInst e
     typeUnify t' t
 
-exprCheckSpine :: Dbg => [VType] -> VType -> [Expr] -> Check (Either VType VType)
-exprCheckSpine (s:ss) t (x:xs) = exprCheck x s *> exprCheckSpine ss t xs
-exprCheckSpine [] t []         = pure (Right t)
-exprCheckSpine ss t []         = pure (Right $ VTArrow ss t)
-exprCheckSpine [] t xs         = typeForce t >>= \case
-  VTArrow ss t -> exprCheckSpine ss t xs
-  t -> pure (Left t)
-
 -- | infer the VType of a given Expr
 exprInfer :: Dbg => Expr -> Check VType
 exprInfer EUnit = do
@@ -402,24 +375,31 @@ exprInfer (ELambda xs e) = do
   -- r <- foldl' (flip $ uncurry exprBind) (exprInferInst e) ts
   r <- foldr (uncurry exprBind) (exprInferInst e) ts
   pure $ VTArrow (snd <$> ts) r
-exprInfer (EApply f xs) = do
-  exprInferInst f >>= typeForce >>= apply
+exprInfer (EApply f xs) =
+  exprInferInst f >>= typeForce >>= \case
+    VTArrow ts r -> apply ts r [] xs
+    t -> apply [] t [] xs
   where
-    apply (VTHole h) = readIORef h >>= \case
-      THEmpty n k l _ -> do
-        t1s <- replicateM (length xs) (typeHole n k l)
-        t2 <- typeHole n k l
-        writeIORef h (THFull (VTArrow t1s t2))
-        forM_ (zip xs t1s) (uncurry exprCheck) $> t2
-      THFull t -> apply t
-    apply (VTArrow ss t) = exprCheckSpine ss t xs >>= \case
-      Right t -> pure t
-      Left t -> do
-        s <- display t
-        throw $ TypeErrorExprNonFunction f s
-    apply t = do
-      s <- display t
-      throw $ TypeErrorExprNonFunction f s
+    -- NOTE: we traverse the arrow type alongside the spine, collected applied
+    -- arguments until we hit a mismatch or the end of the spine. if we hit the
+    -- end, the return type is whats left, if there was a mismatch we try to
+    -- resolve it. if we can't we report that the application of f to the spine
+    -- so far doesn't yield a function we apply to the rest of the spine.
+    apply (t:ts) r xs (y:ys) = exprCheck y t *> apply ts r (y : xs) ys
+    apply [] r _ []         = pure r
+    apply ts r _ []         = pure $ VTArrow ts r
+    apply [] r xs ys        = typeForce r >>= \case
+      VTArrow ts r -> apply ts r xs ys
+      VTHole h -> readIORef h >>= \case
+        THFull _ -> error "IMPOSSIBLE"
+        THEmpty n k l _ -> do
+          -- NOTE: its fine to duplicate names and levels
+          ts <- replicateM (length ys) (typeHole n k l)
+          r <- typeHole n k l
+          writeIORef h (THFull (VTArrow ts r))
+          forM_ (zip ys ts) (uncurry exprCheck) $> r
+      _ -> throw $ TypeErrorExprNonFunction (EApply f (reverse xs))
+
 exprInfer (ELet x t1 e1 e2) = do
   t1 <- case t1 of
     Nothing ->
