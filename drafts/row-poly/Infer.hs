@@ -66,8 +66,8 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
   k k' | k == k' -> pure ()
   (KHole h) k2 -> fillHole h k2
   k1 (KHole h) -> fillHole h k1
-  (KArrow k1 k2) (KArrow k1' k2') ->
-    kindUnify k1 k1' *> kindUnify k2 k2'
+  (KArrow k1 k2) (KArrow k1' k2') | length k1 == length k1' ->
+    mapM_ (uncurry kindUnify) (zip k1 k1') *> kindUnify k2 k2'
   k1 k2 -> do
     s1 <- display k1
     s2 <- display k2
@@ -79,9 +79,9 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
 
     scopeCheck _ KType = pure ()
     scopeCheck _ KRow = pure ()
-    scopeCheck h (KArrow a b) = do
-      kindForce a >>= scopeCheck h
-      kindForce b >>= scopeCheck h
+    scopeCheck h (KArrow xs t) = do
+      mapM_ (kindForce >=> scopeCheck h) xs
+      kindForce t >>= scopeCheck h
     scopeCheck h (KHole h') = do
       when (h == h') do
         s1 <- display _k1
@@ -159,6 +159,8 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     kindUnify k k'
   (VTArrow t1 t2) (VTArrow t1' t2') | length t1 == length t1' ->
     mapM_ (uncurry typeUnify) (zip t1 t1') *> typeUnify t2 t2'
+  (VTApply t1 t2) (VTApply t1' t2') | length t2 == length t2' ->
+    typeUnify t1 t1' *> mapM_ (uncurry typeUnify) (zip t2 t2')
   (VTRecord xs) (VTRecord xs') -> do
     typeUnify xs xs'
   (VTRow xs) (VTRow xs') ->
@@ -198,19 +200,27 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       mapM_ (scopeCheck l l' h >=> kindUnify KType) as
       scopeCheck l l' h b >>= kindUnify KType
       pure KType
-    scopeCheck l l' h (VTApply a b) = do
-      (k1, k2) <- scopeCheck l l' h a >>= kindForce >>= \case
-        KArrow k1 k2 -> pure (k1, k2)
-        KHole h -> do
-          k1 <- kindHole
+    scopeCheck l l' h (VTApply f xs) =
+      scopeCheck l l' h f >>= kindForce >>= \case
+        KArrow k1 k2 -> do
+          let (lk, lx) = (length k1, length xs)
+          forM_ (zip k1 xs) \(k, t) -> do
+            scopeCheck l l' h t >>= kindUnify k
+          if lk > lx then pure $ KArrow (drop lx k1) k2
+          else if lk == lx then pure k2
+          else do
+            -- NOTE: due to how the parser is written, we know all arrow kinds are
+            -- of the form xs -> Row or xs -> Type, so if length k1 < length xs,
+            -- there is no way to unify the kinds
+            s <- display (VTApply f (take lk xs))
+            throw $ TypeErrorKindNonArrow s
+        KHole h' -> do
+          k1 <- mapM (scopeCheck l l' h) xs
           k2 <- kindHole
-          writeIORef h (KHFull (KArrow k1 k2))
-          pure (k1, k2)
+          writeIORef h' (KHFull (KArrow k1 k2)) $> k2
         _ -> do
-          s <- display a
+          s <- display f
           throw $ TypeErrorKindNonArrow s
-      scopeCheck l l' h b >>= kindUnify k1
-      pure k2
     scopeCheck l l' h (VTRow xs) = do
       forM_ xs \(_, t) ->
         scopeCheck l l' h t >>= kindUnify KType
@@ -266,9 +276,9 @@ typeCheck t = do
   -- TODO: can we build this directly without the later eval step?
   (,k) <$> (asks typeEnv >>= flip typeEval t)
   where
-    getKind RKType        = KType
-    getKind RKRow         = KRow
-    getKind (RKArrow a b) = KArrow (getKind a) (getKind b)
+    getKind RKType         = KType
+    getKind RKRow          = KRow
+    getKind (RKArrow xs t) = KArrow (map getKind xs) (getKind t)
 
     go (env, l) (RTForall x k t) = do
       k <- maybe kindHole (pure . getKind) k
@@ -288,21 +298,30 @@ typeCheck t = do
       (b, k2) <- go acc b
       kindUnify k2 KType
       pure (TTArrow as b, KType)
-    go acc (RTApply a b) = do
-      (a, k1) <- go acc a
-      (k1, k2) <- kindForce k1 >>= \case
-        KArrow k1 k2 -> pure (k1, k2)
-        KHole h -> do
-          k1 <- kindHole
+    go acc (RTApply f xs) = do
+      (f, k1) <- go acc f
+      kindForce k1 >>= \case
+        KArrow k1 k2 -> do
+          let (lk, lx) = (length k1, length xs)
+          xs' <- forM (zip k1 xs) \(k, t) -> do
+            (t, k') <- go acc t
+            kindUnify k k' $> t
+          if lk > lx then pure (TTApply f xs', KArrow (drop lx k1) k2)
+          else if lk == lx then pure (TTApply f xs', k2)
+          else do
+            -- NOTE: due to how the parser is written, we know all arrow kinds are
+            -- of the form xs -> Row or xs -> Type, so if length k1 < length xs,
+            -- there is no way to unify the kinds
+            s <- display (TTApply f (take lk xs'))
+            throw $ TypeErrorKindNonArrow s
+        KHole h' -> do
+          k1 <- mapM (go acc) xs
           k2 <- kindHole
-          writeIORef h (KHFull (KArrow k1 k2))
-          pure (k1, k2)
+          writeIORef h' (KHFull (KArrow (snd <$> k1) k2)) $>
+            (TTApply f (fst <$> k1), k2)
         _ -> do
-          s <- display a
+          s <- display f
           throw $ TypeErrorKindNonArrow s
-      (b, k1') <- go acc b
-      kindUnify k1 k1'
-      pure (TTApply a b, k2)
     go acc (RTRecord xs) = do
       xs <- forM xs \(x, t) -> do
         (t, k) <- go acc t
@@ -403,13 +422,20 @@ exprInfer (EApply f xs) =
       VTHole h -> readIORef h >>= \case
         THFull _ -> error "IMPOSSIBLE"
         THEmpty n k l _ -> do
-          -- NOTE: its fine to duplicate names and levels
-          ts <- replicateM (length ys) (typeHole n k l)
-          r <- typeHole n k l
-          writeIORef h (THFull (VTArrow ts r))
-          forM_ (zip ys ts) (uncurry exprCheck) $> r
-      _ -> throw $ TypeErrorExprNonFunction (EApply f (reverse xs))
+          -- NOTE: the paper has us generate holes to check the spine against,
+          -- but doing so is functionally the same as just inferring the type of
+          -- the spine and instantiating it so thats what we do instead
 
+          -- -- NOTE: its fine to duplicate names and levels
+          -- ts <- replicateM (length ys) (typeHole n k l)
+          -- r <- typeHole n k l
+          -- writeIORef h (THFull (VTArrow ts r))
+          -- mapM_ (uncurry exprCheck) (zip ys ts) $> r
+
+          ts <- mapM exprInferInst ys
+          r <- typeHole n k l
+          writeIORef h (THFull (VTArrow ts r)) $> r
+      _ -> throw $ TypeErrorExprNonFunction (EApply f (reverse xs))
 exprInfer (ELet x t1 e1 e2) = do
   t1 <- case t1 of
     Nothing ->
@@ -470,7 +496,7 @@ exprTopInfer e = do
       VTVar x k -> pure $ TTVar (lvl2idx l x) k
       VTCon c i k -> pure $ TTCon c i k
       VTArrow ss t -> TTArrow <$> mapM (go l) ss <*> go l t
-      VTApply s t -> TTApply <$> go l s <*> go l t
+      VTApply f xs -> TTApply <$> go l f <*> mapM (go l) xs
       VTRow xs -> TTRow <$> mapM (mapM (go l)) xs
       VTRowExt xs r -> TTRowExt <$> mapM (mapM (go l)) xs <*> go l r
       VTRecord xs -> TTRecord <$> go l xs

@@ -8,7 +8,6 @@ module Parser
 import Control.Applicative
 import Control.Applicative.Combinators.NonEmpty (sepBy1)
 import Control.Monad
-import Control.Monad.Combinators.Expr           (Operator (..), makeExprParser)
 import Data.Char                                qualified as Char
 import Data.Foldable
 import Data.Functor
@@ -99,9 +98,18 @@ pArrow = void $ symbol "->" <|> symbol "→"
 
 pKind :: Parsec RKind
 pKind =
-  makeExprParser
-    (Mega.choice [parens pKind, rsymbol "Type" $> RKType, rsymbol "Row" $> RKRow])
-    [[InfixR (pArrow $> RKArrow)]]
+  sepBy1 pAtom pArrow >>= pure . \case
+    x :| [] -> x
+    -- we know xs is nonempty so init and last are fine
+    x :| xs -> case last xs of
+      RKArrow xs' y -> RKArrow (x : (init xs ++ xs')) y
+      y             -> RKArrow (x : init xs) y
+  where
+    pAtom = Mega.choice
+      [ parens pKind
+      , rsymbol "Type" $> RKType
+      , rsymbol "Row" $> RKRow
+      ]
 
 pArg :: Parsec p -> Parsec (StrictText, Maybe p)
 pArg p = (, Nothing) <$> pVar <|> parens do
@@ -121,13 +129,17 @@ pType = pForall <|> pType2
       xs <- lineFold1 pAtom
       pure case xs of
         x :| [] -> x
-        x :| xs -> foldl' RTApply x xs
+        f :| xs -> case f of
+          RTApply f xs' -> RTApply f (xs' ++ xs)
+          _             -> RTApply f xs
 
     pType2 = do
-      sepBy1 pType1 pArrow >>= \case
-        x :| [] -> pure x
+      sepBy1 pType1 pArrow >>= pure . \case
+        x :| [] -> x
         -- we know xs is nonempty so init and last are fine
-        x :| xs -> pure $ RTArrow (x : init xs) (last xs)
+        x :| xs -> case last xs of
+          RTArrow xs' y -> RTArrow (x : (init xs ++ xs')) y
+          y             -> RTArrow (x : init xs) y
 
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
@@ -177,7 +189,9 @@ pExpr = do
       xs <- lineFold1 pAtom
       pure case xs of
         x :| [] -> x
-        x :| xs -> EApply x xs
+        f :| xs -> case f of
+          EApply f xs' -> EApply f (xs' ++ xs)
+          _            -> EApply f xs
 
     pLet = do
       rsymbol "let"
