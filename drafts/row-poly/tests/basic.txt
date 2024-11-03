@@ -1,0 +1,41 @@
+-- PASS
+test1 = \r s -> let choose : forall a. Int -> a -> a -> a = \x y z -> z in choose 0 { a = 1 | r} { b = Unit | s }
+
+-- PASS
+test1 = \r -> \s -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | s }
+
+-- PASS
+test99 = \r s -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | s }
+
+-- FAIL
+test2 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | r }
+
+-- FAIL
+test3 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | {c = Unit | r} }
+
+-- PASS
+test = let id : forall a. a -> a = \x -> x in \y -> id
+
+-- PASS
+test = let id : forall a. a -> a = \x -> x in {id = id}
+
+-- PASS
+update = \r -> { x = r.x | r - x }
+
+-- PASS
+update = \r -> { x = r.x.y | r }
+
+-- PASS
+test33 = \(y : forall a. a -> a) -> let x : forall b. b -> b = y in x Unit
+
+-- PASS
+test33 = \(y : forall a. a -> a) -> let x = y in x Unit
+
+-- FAIL
+test4 = \(r : {a : Unit, a : Int}) (f: {a : Unit, a : Int} -> Unit) -> f { a = Unit | r }
+
+-- PASS
+test44 = \(r : {a : Unit}) (a : Int) -> { a = Unit, a = a | r }
+
+-- FAIL
+test4 = \(r : {a : Unit, a : Int}) (f: {a : Int, a : Unit} -> Unit) -> f r

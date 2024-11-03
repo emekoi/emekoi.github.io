@@ -4,6 +4,7 @@
 
 -- TODO: instantiate unknown kinds to KType
 -- TODO: nail down expected/recieved order in errors
+-- TODO: use label maps everywhere
 
 module Infer
     ( TypeError (..)
@@ -90,37 +91,46 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
         KHFull t -> scopeCheck h t
         KHEmpty -> pure ()
 
--- FIXME: destroys duplicate labels
+rowToMap :: [(Name, VType)] -> Map.Map Name [VType]
+rowToMap xs = foldr `flip` Map.empty `flip` xs $ \(x, t) r ->
+  -- NOTE: right associated due to foldr
+  Map.insertWith (++) x [t] r
+
+mapToRow :: Map.Map Name [VType] -> [(Name, VType)]
+mapToRow = concatMap (\(x, ts) -> (x,) <$> ts) . Map.toList
+
 rowUnify
   :: Dbg => [(Name, VType)] -> [(Name, VType)]
   -> Maybe VType -> Maybe VType -> Check ()
-rowUnify (Map.fromList -> xs) (Map.fromList -> ys) rx ry = do
-  forM_ (Map.keysSet xs `Set.intersection` Map.keysSet ys) \n ->
-    typeUnify (xs Map.! n) (ys Map.! n)
+rowUnify (rowToMap -> xs) (rowToMap -> ys) rx ry = do
+  forM_ (Map.keysSet xs `Set.intersection` Map.keysSet ys) \n -> do
+    when (length xs /= length ys) typeMismatch
+    mapM_ (uncurry typeUnify) $ zip (xs Map.! n) (ys Map.! n)
   case (null ysMissing, null xsMissing) of
     -- they share the same fields so unify rx ry
     (True, True)  -> typeUnify rx' ry'
     -- ys has fields not in xs, so unify rx (ys - xs | ry)
-    (True, False) -> typeUnify rx' (f xsMissing ry)
+    (True, False) -> typeUnify rx' (toRow xsMissing ry)
     -- xs has fields not in ys, so unify (xs - ys | rx) ry
-    (False, True) -> typeUnify (f ysMissing rx) ry'
-    -- if rx == ry, unification is not possible.
+    (False, True) -> typeUnify (toRow ysMissing rx) ry'
+    -- if rx == ry at this point, unification is not possible.
     -- NOTE: this equivalent to the side condition given in the paper since
     -- rewriting produces either empty or singleton substitutions since
     -- variables can only occur in the tail position of a row.
-    (False, False) | rx == ry -> do
-      -- NOTE: could be either a rigid mismatch or an occurs check issue but
-      -- calling it a rigid mismatch makes for clearer errors
-      s1 <- display (f xs rx)
-      s2 <- display (f ys ry)
-      throw (TypeErrorTypeMismatch s1 s2)
+    -- NOTE: could be either a rigid mismatch or an occurs check issue but
+    -- calling it a rigid mismatch makes for clearer errors
+    (False, False) | rx == ry -> typeMismatch
     -- otherwise, unify rx (ys - xs | r) and unify (xs - ys | r) ry
     (False, False) -> do
       r <- asks typeLevel >>= typeHole "r" KRow
-      typeUnify rx' (VTRowExt (Map.toList xsMissing) r)
-      typeUnify (VTRowExt (Map.toList ysMissing) r) ry'
+      typeUnify rx' (VTRowExt (mapToRow xsMissing) r)
+      typeUnify (VTRowExt (mapToRow ysMissing) r) ry'
   where
-    f (Map.toList -> r) = maybe (VTRow r) (VTRowExt r)
+    toRow (mapToRow -> r) = maybe (VTRow r) (VTRowExt r)
+    typeMismatch = do
+      s1 <- display (toRow xs rx)
+      s2 <- display (toRow ys ry)
+      throw (TypeErrorTypeMismatch s1 s2)
     rx' = fromMaybe (VTRow []) rx
     ry' = fromMaybe (VTRow []) ry
     ysMissing = xs Map.\\ ys
