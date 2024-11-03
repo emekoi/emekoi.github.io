@@ -8,7 +8,7 @@ test1 = \r -> \s -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -
 test99 = \r s -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | s }
 
 -- FAIL
-test2 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | r }
+test2 = \r -> let choose : forall a. a -> a -> a = \x y -> y in choose { a = 1 | r} { b = Unit | r }
 
 -- FAIL
 test3 = \r -> let choose : forall a. Int -> a -> a -> a = \x -> \y -> \z -> z in choose 0 { a = 1 | r} { b = Unit | {c = Unit | r} }

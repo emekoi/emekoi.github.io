@@ -279,6 +279,7 @@ build b = do
 
     [tPostList, tPage] <- forP ["post-list.md", "page.html"] template
     siteMeta <- jsonInsert "publications" works
+      . jsonInsert "hide-recent" (null posts)
       . Aeson.toJSON <$> getSite (fst <$> take 5 posts)
 
     Template.preprocessFile siteMeta tPostList input
