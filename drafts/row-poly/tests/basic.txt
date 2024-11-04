@@ -49,3 +49,10 @@ test = \(m : {id : forall a. a -> a}) -> m.id
 
 -- PASS
 test = \(m : {id : forall f. forall a. forall b. (a -> b) -> f a -> f b}) -> m.id
+
+-- PASS
+map = \m f x -> m.map f x
+
+-- PASS
+map : forall f. forall a. forall b. {map : forall a. forall b. (a -> b) -> f a -> f b} -> (a -> b) ->f a ->  f b
+map = \m f x -> m.map f x

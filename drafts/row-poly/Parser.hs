@@ -87,6 +87,9 @@ ident first = nblexeme . Mega.try $ (name >>= check)
       | x `Set.member` keywords = fail $ show x ++ " cannot be an identifier"
       | otherwise = pure x
 
+trySubParse :: (Monad m, Alternative m) => m a -> (a -> m a) -> m a
+trySubParse p f = p >>= \x -> f x <|> pure x
+
 pVar :: Parsec StrictText
 pVar =  ident Mega.lowerChar
 
@@ -161,7 +164,7 @@ pType = pForall <|> pType2
 
 pExpr :: Parsec Expr
 pExpr = do
-  x <- pExpr1 >>= pSelectRestrict
+  x <- trySubParse pExpr1 pRestrict
   Mega.optional (symbol ":" *> pType) <&> \case
     Just t -> EAnnot x t
     Nothing -> x
@@ -186,7 +189,7 @@ pExpr = do
       EInt <$> MegaL.signed empty pNum Mega.<?> "integer literal"
 
     pExpr1 = do
-      xs <- lineFold1 pAtom
+      xs <- lineFold1 (trySubParse pAtom pSelect)
       pure case xs of
         x :| [] -> x
         f :| xs -> case f of
@@ -214,12 +217,6 @@ pExpr = do
     pRestrict x = do
       foldl' ERestrict x
         <$> some (symbol "-" *> pVar)
-
-    pSelectRestrict x = Mega.choice
-      [ pSelect x
-      , pRestrict x
-      , pure x
-      ]
 
     pRecord = braces do
       Mega.optional (Mega.try p) >>= \case
