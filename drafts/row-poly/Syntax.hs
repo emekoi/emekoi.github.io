@@ -335,7 +335,6 @@ instance Display Check TType where
         t <- go ParenNone t
         pure $ x <> " : " <> t
 
-      -- go inArrow inApplication
       go p (TTForall x k t) = do
         t <- typeBind x k $ go ParenNone t
         x <- kindForce k >>= \k -> do

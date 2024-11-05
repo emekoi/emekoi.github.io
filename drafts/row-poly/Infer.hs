@@ -33,6 +33,9 @@ import GHC.Stack
 import Prelude                    hiding ((!!))
 import Syntax
 
+zipWithM' :: Applicative m => [a] -> [b] -> (a -> b -> m c) -> m [c]
+zipWithM' xs ys f = zipWithM f xs ys
+
 bind2 :: Monad m => m a -> m b -> (a -> b -> m c) -> m c
 bind2 x y k = x >>= ((y >>=) . k)
 
@@ -67,7 +70,7 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
   (KHole h) k2 -> fillHole h k2
   k1 (KHole h) -> fillHole h k1
   (KArrow k1 k2) (KArrow k1' k2') | length k1 == length k1' ->
-    mapM_ (uncurry kindUnify) (zip k1 k1') *> kindUnify k2 k2'
+    zipWithM_ kindUnify k1 k1' *> kindUnify k2 k2'
   k1 k2 -> do
     s1 <- display k1
     s2 <- display k2
@@ -105,7 +108,7 @@ rowUnify
 rowUnify (rowToMap -> xs) (rowToMap -> ys) rx ry = do
   forM_ (Map.keysSet xs `Set.intersection` Map.keysSet ys) \n -> do
     when (length xs /= length ys) typeMismatch
-    mapM_ (uncurry typeUnify) $ zip (xs Map.! n) (ys Map.! n)
+    zipWithM_ typeUnify (xs Map.! n) (ys Map.! n)
   case (null ysMissing, null xsMissing) of
     -- they share the same fields so unify rx ry
     (True, True)  -> typeUnify rx' ry'
@@ -158,9 +161,9 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
   (VTCon _ k u) (VTCon _ k' u') | u == u' ->
     kindUnify k k'
   (VTArrow t1 t2) (VTArrow t1' t2') | length t1 == length t1' ->
-    mapM_ (uncurry typeUnify) (zip t1 t1') *> typeUnify t2 t2'
+    zipWithM_ typeUnify t1 t1' *> typeUnify t2 t2'
   (VTApply t1 t2) (VTApply t1' t2') | length t2 == length t2' ->
-    typeUnify t1 t1' *> mapM_ (uncurry typeUnify) (zip t2 t2')
+    typeUnify t1 t1' *> zipWithM_ typeUnify t2 t2'
   (VTRecord xs) (VTRecord xs') -> do
     typeUnify xs xs'
   (VTRow xs) (VTRow xs') ->
@@ -204,7 +207,7 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
       scopeCheck l l' h f >>= kindForce >>= \case
         KArrow k1 k2 -> do
           let (lk, lx) = (length k1, length xs)
-          forM_ (zip k1 xs) \(k, t) -> do
+          void $ zipWithM' k1 xs \k t -> do
             scopeCheck l l' h t >>= kindUnify k
           if lk > lx then pure $ KArrow (drop lx k1) k2
           else if lk == lx then pure k2
@@ -245,29 +248,6 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
           pure k
         THFull t -> scopeCheck l l' h t
 
--- | compute the kind of a VType
--- typeKind :: VType -> Check Kind
--- typeKind t = typeForce t >>= \case
---   VTVar _ k -> pure k
---   VTCon _ k _ -> pure k
---   VTArrow a b -> do
---     -- TODO: do we need this?
---     typeKind a >>= kindUnify KType
---     typeKind b >>= kindUnify KType
---     pure KType
---   VTApply a b -> do
---     -- TODO: do we need this?
---     typeKind a >>= kindUnify KType
---     typeKind b >>= kindUnify KType
---     pure KType
---   VTForall x k e t -> do
---     v <- VTVar <$> asks typeLevel
---     typeBind x k $ typeEval (v k : e) t
---       >>= typeKind
---   VTHole h -> readIORef h >>= \case
---     THEmpty _ k _ -> pure k
---     THFull t -> typeKind t
-
 -- | convert a RType to VType and compute its kind
 typeCheck :: Dbg => RType -> Check (VType, Kind)
 typeCheck t = do
@@ -303,7 +283,7 @@ typeCheck t = do
       kindForce k1 >>= \case
         KArrow k1 k2 -> do
           let (lk, lx) = (length k1, length xs)
-          xs' <- forM (zip k1 xs) \(k, t) -> do
+          xs' <- zipWithM' k1 xs \k t -> do
             (t, k') <- go acc t
             kindUnify k k' $> t
           if lk > lx then pure (TTApply f xs', KArrow (drop lx k1) k2)
@@ -356,7 +336,7 @@ exprCheck e t = typeForce t >>= \case
     typeBind x k $ exprCheck e t'
   VTArrow ss t | ELambda xs e <- e -> do
     let (ls, lx) = (length ss, length xs)
-    xs' <- forM (zip ss xs) \(s, (x, s')) -> do
+    xs' <- zipWithM' ss xs \s (x, s') -> do
       forM_ s' (typeCheck' >=> typeUnify s)
       pure (x, s)
     if ls > lx then
@@ -415,7 +395,7 @@ exprInfer (EApply f xs) =
     -- arguments until we hit a mismatch or the end of the spine. if we hit the
     -- end, the return type is whats left, if there was a mismatch we try to
     -- resolve it. if we can't we report that the application of f to the spine
-    -- so far doesn't yield a function we apply to the rest of the spine.
+    -- so far doesn't yield a function we can apply to the rest of the spine.
     apply (t:ts) r xs (y:ys) = exprCheck y t *> apply ts r (y : xs) ys
     apply [] r _ []         = pure r
     apply ts r _ []         = pure $ VTArrow ts r
@@ -427,13 +407,6 @@ exprInfer (EApply f xs) =
           -- NOTE: the paper has us generate holes to check the spine against,
           -- but doing so is functionally the same as just inferring the type of
           -- the spine and instantiating it so thats what we do instead
-
-          -- -- NOTE: its fine to duplicate names and levels
-          -- ts <- replicateM (length ys) (typeHole n k l)
-          -- r <- typeHole n k l
-          -- writeIORef h (THFull (VTArrow ts r))
-          -- mapM_ (uncurry exprCheck) (zip ys ts) $> r
-
           ts <- mapM exprInferInst ys
           r <- typeHole n k l
           writeIORef h (THFull (VTArrow ts r)) $> r
