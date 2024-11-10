@@ -248,84 +248,87 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
           pure k
         THFull t -> scopeCheck l l' h t
 
--- | convert a RType to VType and compute its kind
-typeCheck :: Dbg => RType -> Check (VType, Kind)
+-- | convert a RType to VType ensure the kind is Type
+typeCheck :: Dbg => RType -> Check VType
 typeCheck t = do
   raw <- asks rawTypeLevels
-  (t, k) <- go (raw, Level $ length raw) t
-  -- TODO: can we build this directly without the later eval step?
-  (,k) <$> (asks typeEnv >>= flip typeEval t)
+  env <- asks typeEnv
+  (vt, _, k) <- go (Level $ length raw, raw, env) t
+  kindUnify k KType $> vt
   where
     getKind RKType         = KType
     getKind RKRow          = KRow
     getKind (RKArrow xs t) = KArrow (map getKind xs) (getKind t)
 
-    go (env, l) (RTForall x k t) = do
-      k <- maybe kindHole (pure . getKind) k
-      (t, k') <- go (Map.insert x (l, k) env, succ l) t
-      pure (TTForall x k t, k')
-    go (env, l) (RTVar v) = case Map.lookup v env of
-      Just (l', k) -> pure (TTVar (lvl2idx l l') k, k)
+    go (l, ctx, env) (RTForall x rk rt) = do
+      k <- maybe kindHole (pure . getKind) rk
+      (_, tt, k') <- go (succ l, Map.insert x (l, k) ctx, VTVar l k : env) rt
+      pure (VTForall x k env tt, TTForall x k tt, k')
+    go (l, ctx, _) (RTVar v) = case Map.lookup v ctx of
+      Just (l', k) -> pure (VTVar l' k, TTVar (lvl2idx l l') k, k)
       Nothing      -> throw $ TypeErrorTypeVariableUnbound v
     go _ (RTCon c) = asks rawTypeCons >>= flip (.) (Map.lookup c) \case
       Nothing -> throw $ TypeErrorConstructorUnknown c
-      Just (u, k) -> pure (TTCon c k u, k)
-    go acc (RTArrow as b) = do
-      as <- forM as \a -> do
-        (a, k1) <- go acc a
-        kindUnify k1 KType
-        pure a
-      (b, k2) <- go acc b
-      kindUnify k2 KType
-      pure (TTArrow as b, KType)
-    go acc (RTApply f xs) = do
-      (f, k1) <- go acc f
-      kindForce k1 >>= \case
-        KArrow k1 k2 -> do
-          let (lk, lx) = (length k1, length xs)
-          xs' <- zipWithM' k1 xs \k t -> do
-            (t, k') <- go acc t
-            kindUnify k k' $> t
-          if lk > lx then pure (TTApply f xs', KArrow (drop lx k1) k2)
-          else if lk == lx then pure (TTApply f xs', k2)
-          else do
+      Just (u, k) -> pure (VTCon c k u, TTCon c k u, k)
+    go acc (RTArrow rt1s rt2) = do
+      (vt1s, tt1s) <- unzip <$> forM rt1s \rt -> do
+        (vt, tt, k) <- go acc rt
+        kindUnify k KType
+        pure (vt, tt)
+      (vt2, tt2, k) <- go acc rt2
+      kindUnify k KType
+      pure (VTArrow vt1s vt2, TTArrow tt1s tt2, KType)
+    go acc (RTApply rt1 rt2s) = do
+      (vt1, tt1, k) <- go acc rt1
+      kindForce k >>= \case
+        KArrow k1s k2 -> do
+          let (lk, lrt) = (length k1s, length rt2s)
+          (vt2s, tt2s) <- unzip <$> zipWithM' k1s rt2s \k t -> do
+            (vt2, tt2, k') <- go acc t
+            kindUnify k k' $> (vt2, tt2)
+          if lk > lrt then
+            pure (VTApply vt1 vt2s, TTApply tt1 tt2s, KArrow (drop lrt k1s) k2)
+          else if lk < lrt then do
             -- NOTE: due to how the parser is written, we know all arrow kinds are
             -- of the form xs -> Row or xs -> Type, so if length k1 < length xs,
             -- there is no way to unify the kinds
-            s <- display (TTApply f (take lk xs'))
+            -- (vt3, tt3, k3) <- unzip3 <$> mapM (go acc) (drop lk rt2s)
+            -- k4 <- kindHole
+            -- kindUnify k2 (KArrow k3 k4)
+            -- pure ( VTApply (VTApply vt1 vt2s) vt3
+            --      , TTApply (TTApply tt1 tt2s) tt3
+            --      , KArrow (k1s ++ k3) k4
+            --      )
+            s <- display (TTApply tt1 (take lk tt2s))
             throw $ TypeErrorKindNonArrow s
+          else
+            pure (VTApply vt1 vt2s, TTApply tt1 tt2s, k2)
         KHole h' -> do
-          k1 <- mapM (go acc) xs
+          (vt2s, tt2s, k1s) <- unzip3 <$> mapM (go acc) rt2s
           k2 <- kindHole
-          writeIORef h' (KHFull (KArrow (snd <$> k1) k2)) $>
-            (TTApply f (fst <$> k1), k2)
+          writeIORef h' (KHFull (KArrow k1s k2)) $>
+            (VTApply vt1 vt2s, TTApply tt1 tt2s, k2)
         _ -> do
-          s <- display f
+          s <- display tt1
           throw $ TypeErrorKindNonArrow s
-    go acc (RTRecord xs) = do
-      xs <- forM xs \(x, t) -> do
-        (t, k) <- go acc t
+    go acc (RTRecord rrs) = do
+      (ls, vts, tts) <- unzip3 <$> forM rrs \(rl, rt) -> do
+        (vt, tt, k) <- go acc rt
         kindUnify k KType
-        pure (x, t)
-      pure (TTRecord (TTRow xs), KType)
-    go acc@(env, l) (RTRecordExt xs r) = do
-      xs <- forM xs \(x, t) -> do
-        (t, k) <- go acc t
+        pure (rl, vt, tt)
+      pure (VTRecord (VTRow (zip ls vts)), TTRecord (TTRow (zip ls tts)), KType)
+    go acc@(l, ctx, _) (RTRecordExt rrs rt) = do
+      (ls, vts, tts) <- unzip3 <$> forM rrs \(rl, rt) -> do
+        (vt, tt, k) <- go acc rt
         kindUnify k KType
-        pure (x, t)
-      r <- case Map.lookup r env of
-        Nothing      -> throw $ TypeErrorTypeVariableUnbound r
+        pure (rl, vt, tt)
+      case Map.lookup rt ctx of
+        Nothing      -> throw $ TypeErrorTypeVariableUnbound rt
         Just (l', k) -> do
           kindUnify k KRow
-          pure $ TTVar (lvl2idx l l') k
-      pure (TTRecord (TTRowExt xs r), KType)
-
--- | convert a RType to VType ensure the kind is Type
-typeCheck' :: Dbg => RType -> Check VType
-typeCheck' t = do
-  (t, k) <- typeCheck t
-  kindUnify KType k
-  pure t
+          let (vt, tt) = (VTVar l' KRow, TTVar (lvl2idx l l') KRow)
+          pure ( VTRecord (VTRowExt (zip ls vts) vt)
+               , TTRecord (TTRowExt (zip ls tts) tt), KType)
 
 -- | check an Expr has a given VType
 exprCheck :: Dbg => Expr -> VType -> Check ()
@@ -337,7 +340,7 @@ exprCheck e t = typeForce t >>= \case
   VTArrow ss t | ELambda xs e <- e -> do
     let (ls, lx) = (length ss, length xs)
     xs' <- zipWithM' ss xs \s (x, s') -> do
-      forM_ s' (typeCheck' >=> typeUnify s)
+      forM_ s' (typeCheck >=> typeUnify s)
       pure (x, s)
     if ls > lx then
       -- curried application
@@ -353,11 +356,11 @@ exprCheck e t = typeForce t >>= \case
       Nothing ->
         exprInfer e1
       Just t1 -> do
-        t1 <- typeCheck' t1
+        t1 <- typeCheck t1
         exprCheck e1 t1 $> t1
     exprBind x t1 $ exprCheck e2 t2
   t2 | ELetRec x t1 e1 e2 <- e -> do
-    t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck' t1
+    t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck t1
     exprBind x t1 do
       exprCheck e1 t1
       exprCheck e2 t2
@@ -376,12 +379,12 @@ exprInfer (EVar v) = do
     Nothing -> throw $ TypeErrorVariableUnbound v
     Just t  -> pure t
 exprInfer (EAnnot e t) = do
-  t <- typeCheck' t
+  t <- typeCheck t
   exprCheck e t $> t
 exprInfer (ELambda xs e) = do
   l <- asks typeLevel
   ts <- forM xs \(x, t) ->
-   (x,) <$> maybe (typeHole x KType l) typeCheck' t
+   (x,) <$> maybe (typeHole x KType l) typeCheck t
   -- foldr/foldl doesn't matter since bindings are unique and non-dependent
   -- r <- foldl' (flip $ uncurry exprBind) (exprInferInst e) ts
   r <- foldr (uncurry exprBind) (exprInferInst e) ts
@@ -416,11 +419,11 @@ exprInfer (ELet x t1 e1 e2) = do
     Nothing ->
       exprInfer e1
     Just t1 -> do
-      t1 <- typeCheck' t1
+      t1 <- typeCheck t1
       exprCheck e1 t1 $> t1
   exprBind x t1 (exprInfer e2)
 exprInfer (ELetRec x t1 e1 e2) = do
-  t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck' t1
+  t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck t1
   exprBind x t1 do
     exprCheck e1 t1
     exprInfer e2
@@ -455,11 +458,11 @@ exprInferInst e = do
 -- | infer and generalize the TType of a given Expr
 exprTopInfer :: Dbg => Expr -> Check TType
 exprTopInfer e = do
+  t <- exprInfer e
+  exprCheck e t
   -- NOTE: uses laziness to compute the number of binders that we will insert at
   -- the start of the final type at the same time as we quote the type
   (t', vs) <- mfix \(~(_, a)) -> do
-    t <- exprInfer e
-    exprCheck e t
     runStateT (go (Level (length a)) t) []
 
   pure $ foldl' (flip $ uncurry TTForall) t' vs
@@ -470,11 +473,11 @@ exprTopInfer e = do
         TTForall x k <$> go (succ l) t'
       VTVar x k -> pure $ TTVar (lvl2idx l x) k
       VTCon c i k -> pure $ TTCon c i k
-      VTArrow ss t -> TTArrow <$> mapM (go l) ss <*> go l t
-      VTApply f xs -> TTApply <$> go l f <*> mapM (go l) xs
-      VTRow xs -> TTRow <$> mapM (mapM (go l)) xs
-      VTRowExt xs r -> TTRowExt <$> mapM (mapM (go l)) xs <*> go l r
-      VTRecord xs -> TTRecord <$> go l xs
+      VTArrow t1s t2 -> TTArrow <$> mapM (go l) t1s <*> go l t2
+      VTApply t1 t2s -> TTApply <$> go l t1 <*> mapM (go l) t2s
+      VTRow rs -> TTRow <$> mapM (mapM (go l)) rs
+      VTRowExt rs r -> TTRowExt <$> mapM (mapM (go l)) rs <*> go l r
+      VTRecord r -> TTRecord <$> go l r
       VTHole h -> do
         readIORef h >>= \case
           THEmpty n k _ _ -> StateT \vs -> do
@@ -488,6 +491,6 @@ exprTopInfer e = do
 -- | check that an Expr has a given RType and convert RType to a TType
 exprTopCheck :: Dbg => Expr -> RType -> Check TType
 exprTopCheck e t = do
-  t <- typeCheck' t
+  t <- typeCheck t
   exprCheck e t
   asks typeLevel >>= flip typeQuote t
