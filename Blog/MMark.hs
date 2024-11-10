@@ -7,6 +7,7 @@ module Blog.MMark
     , rawBlocks
     , renderMarkdown
     , renderMarkdownIO
+    , details
     ) where
 
 import Blog.Type                  (Page (..), StrictText, fileError)
@@ -284,6 +285,23 @@ renderMarkdownIO exts file = do
   input <- liftIO $ Text.readFile file
   liftIO . putStrLn $ unwords [ "READ", file ]
   renderMarkdown exts file input
+
+-- "details" tag
+details :: Monad m => Extension m
+details = blockRender \old -> \case
+  Div attrs [summary,body] | "details" `elem` attrs.classes -> do
+    details_ $ do
+      summary_ (getSummary summary)
+      old body
+    "\n"
+  Div attrs [body] | "details" `elem` attrs.classes -> do
+    details_ $ do
+      old body
+    "\n"
+  x -> old x
+  where
+    getSummary (Paragraph (_, p)) = p
+    getSummary _ = error "invalid details summary"
 
 -- scuffed implementation of description lists
 descriptionList :: Monad m => Extension m
