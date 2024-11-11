@@ -275,26 +275,26 @@ pFencedCodeBlock = do
   CodeBlock infoString (assembleCodeBlock alevel ls) <$ sc
 
 -- | Parse the opening fence of a fenced code block.
-pOpeningFence :: BParser (Char, Int, Maybe Text)
+pOpeningFence :: BParser (Char, Int, Attributes)
 pOpeningFence = p '`' <|> p '~'
   where
+    pSimple = do
+      ml <- optional
+        (T.strip <$> someEscapedWith (not . isSpaceN) <?> "info string")
+      guard (maybe True (not . T.any (== '`')) ml)
+      pure $ case ml of
+        Nothing -> mempty
+        Just l ->
+          if T.null l
+            then mempty
+            else mempty { classes = [l] }
     p ch = try $ do
       void $ count 3 (char ch)
       n <- (+ 3) . length <$> many (char ch)
-      ml <-
-        optional
-          (T.strip <$> someEscapedWith notNewline <?> "info string")
-      guard (maybe True (not . T.any (== '`')) ml)
-      ( ch,
-        n,
-        case ml of
-          Nothing -> Nothing
-          Just l ->
-            if T.null l
-              then Nothing
-              else Just l
-        )
-        <$ eol
+      attrs <- sc' *> (try pAttributes <|> do
+        (pSimple <* sc') <> (try pAttributes <|> mempty))
+      (ch, n, attrs) <$ eol
+
 -- | Parse the closing fence of a fenced block.
 pClosingFence :: Char -> Int -> BParser ()
 pClosingFence ch n = try . label "closing code fence" $ do
@@ -331,7 +331,7 @@ pIndentedCodeBlock = do
       g []       = []
       g (x : xs) = f x : xs
   ls <- g . ($ []) <$> go id
-  CodeBlock Nothing (assembleCodeBlock clevel ls) <$ sc
+  CodeBlock mempty (assembleCodeBlock clevel ls) <$ sc
 
 -- | Parse an unorederd list.
 pUnorderedList :: BParser (Block Isp)

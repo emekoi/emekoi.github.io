@@ -29,6 +29,7 @@ import Text.MMark.Trans
 import Text.MMark.Type
 import Text.MMark.Util
 import Text.URI            qualified as URI
+import Data.List           qualified as L
 
 -- | Render a 'MMark' markdown document. You can then render @'Html' ()@ to
 -- various things:
@@ -75,9 +76,9 @@ defaultBlockRender blockRender = \case
     h5_ html >> newline
   Heading6 (_, html) ->
     h6_ html >> newline
-  CodeBlock infoString txt -> do
-    let f x = class_ $ "language-" <> T.takeWhile (not . isSpace) x
-    pre_ $ code_ (maybe [] (pure . f) infoString) (toHtml txt)
+  CodeBlock attrs txt -> do
+    let f (x, _) = class_ $ "language-" <> T.takeWhile (not . isSpace) x
+    pre_ $ code_ (maybe [] (pure . f) (L.uncons $ classes attrs)) (toHtml txt)
     newline
   Naked (_, html) ->
     html >> newline

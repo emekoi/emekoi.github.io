@@ -40,7 +40,7 @@ GPG Key
 {{/ site.publications }}
 :::
 
-```{=raw}
+``` {=raw}
 <!-- # Bibliography -->
 <!-- You can find a list of all the works I have cited (or hope to cite) [here](/bibliography). -->
 ```

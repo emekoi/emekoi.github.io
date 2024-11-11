@@ -177,7 +177,7 @@ data Block a
   -- | Heading (level 6), leaf block
   | Heading6 a
   -- | Code block, leaf block with info string and contents
-  | CodeBlock (Maybe Text) Text
+  | CodeBlock Attributes Text
   -- | Naked content, without an enclosing tag
   | Naked a
   -- | Paragraph, leaf block

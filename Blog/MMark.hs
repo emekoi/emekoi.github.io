@@ -321,7 +321,7 @@ descriptionList = blockRender \old -> \case
 -- emit blocks with language 'raw' as raw HTML
 rawBlocks :: Monad m => Extension m
 rawBlocks = blockRender \old -> \case
-  CodeBlock (Just "{=raw}") txt ->  toHtmlRaw txt
+  CodeBlock attrs txt | ["{=raw}"] <- attrs.classes -> toHtmlRaw txt
   x -> old x
 
 -- demote headers by 1 (h1 -> h2, ..., h6 -> p)

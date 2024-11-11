@@ -156,11 +156,11 @@ ghcHighlight _ = Nothing
 
 highlight :: Extension Action
 highlight = blockRender \old block -> case block of
-  CodeBlock (Just "haskell") txt ->
+  CodeBlock attrs txt | "haskell" `elem` attrs.classes ->
     case ghcHighlight txt of
       Just html -> wrap html
       Nothing   -> old block
-  CodeBlock (Just l) txt -> do
+  CodeBlock attrs txt | l : _ <- attrs.classes -> do
     html <- lift $ pygmentize l (Text.encodeUtf8 txt)
     wrap $ toHtmlRaw html
   _ -> old block
