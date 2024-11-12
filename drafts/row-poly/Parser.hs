@@ -101,9 +101,9 @@ pArrow = void $ symbol "->" <|> symbol "→"
 
 pKind :: Parsec RKind
 pKind =
-  sepBy1 pAtom pArrow >>= pure . \case
+  sepBy1 pAtom pArrow <&> \case
     x :| [] -> x
-    -- we know xs is nonempty so init and last are fine
+    -- NOTE: we know xs is nonempty so init and last are fine
     x :| xs -> case last xs of
       RKArrow xs' y -> RKArrow (x : (init xs ++ xs')) y
       y             -> RKArrow (x : init xs) y
@@ -137,9 +137,9 @@ pType = pForall <|> pType2
           _             -> RTApply f xs
 
     pType2 = do
-      sepBy1 pType1 pArrow >>= pure . \case
+      sepBy1 pType1 pArrow <&> \case
         x :| [] -> x
-        -- we know xs is nonempty so init and last are fine
+        -- NOTE: we know xs is nonempty so init and last are fine
         x :| xs -> case last xs of
           RTArrow xs' y -> RTArrow (x : (init xs ++ xs')) y
           y             -> RTArrow (x : init xs) y
