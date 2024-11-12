@@ -151,7 +151,7 @@ pType = pForall <|> pType2
 
     pRecord = braces do
       Mega.optional (Mega.try p) >>= \case
-        Nothing -> Mega.optional (symbol "|" *> pVar) >>= \case
+        Nothing -> Mega.optional pVar >>= \case
           Just r -> pure $ RTRecordExt [] r
           Nothing -> pure $ RTRecord []
         Just x -> do

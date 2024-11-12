@@ -1,6 +1,7 @@
 {-# LANGUAGE BlockArguments  #-}
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns    #-}
 
 -- TODO: add type abstractions and applications. maybe
 
@@ -19,8 +20,10 @@ module Syntax
     , RType (..)
     , StrictText
     , THole (..)
+    , TRow
     , TType (..)
     , Unique
+    , VRow
     , VType (..)
     , exprBind
     , kindForce
@@ -40,9 +43,11 @@ module Syntax
 import Control.Monad
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
+import Data.Foldable1             (foldrMap1')
 import Data.IORef                 (IORef)
 import Data.IORef                 qualified as IORef
 import Data.List                  qualified as List
+import Data.List.NonEmpty         (NonEmpty)
 import Data.Map.Strict            (Map)
 import Data.Map.Strict            qualified as Map
 import Data.Text                  qualified as Text
@@ -125,25 +130,29 @@ data THole where
   THEmpty :: Name -> Kind -> Level -> Unique -> THole
   deriving (Eq)
 
+type TRow = Map.Map Name (NonEmpty TType)
+
 data TType where
   TTHole :: IORef THole -> TType
   TTCon :: Name -> Kind -> TType
   TTVar :: Index -> Kind -> TType
   TTArrow :: [TType] -> TType -> TType
-  TTRow :: [(Name, TType)] -> TType
-  TTRowExt :: [(Name, TType)] -> TType -> TType
+  TTRow :: TRow -> TType
+  TTRowExt :: TRow -> TType -> TType
   TTRecord :: TType -> TType
   TTApply :: TType -> [TType] -> TType
   TTForall :: Name -> Kind -> TType -> TType
   deriving (Eq)
+
+type VRow = Map.Map Name (NonEmpty VType)
 
 data VType where
   VTHole :: IORef THole -> VType
   VTCon :: Name -> Kind -> VType
   VTVar :: Level -> Kind -> VType
   VTArrow :: [VType] -> VType -> VType
-  VTRow :: [(Name, VType)] -> VType
-  VTRowExt :: [(Name, VType)] -> VType -> VType
+  VTRow :: VRow -> VType
+  VTRowExt :: VRow -> VType -> VType
   VTRecord :: VType -> VType
   VTApply :: VType -> [VType] -> VType
   VTForall :: Name -> Kind -> [VType] -> TType -> VType
@@ -228,17 +237,11 @@ typeForce (VTHole h) = go h
         pure t
       THFull t  -> pure t
       THEmpty{} -> pure (VTHole h)
-typeForce (VTRecord xs) = VTRecord <$> typeForce xs
+-- NOTE: normalize row extensions
 typeForce (VTRowExt xs r) = typeForce r >>= \case
-  VTRowExt ys r -> pure $ VTRowExt (merge xs ys) r
-  VTRow ys -> pure $ VTRow (merge xs ys)
+  VTRowExt ys r -> pure $ VTRowExt (Map.unionWith (<>) xs ys) r
+  VTRow ys -> pure $ VTRow (Map.unionWith (<>) xs ys)
   r -> pure $ VTRowExt xs r
-  where
-    merge :: Ord a => [(a, b)] -> [(a, b)] -> [(a, b)]
-    merge (x:xs) (y:ys)
-      | fst y < fst x = y : merge (x:xs) ys
-      | otherwise     = x : merge xs (y:ys)
-    merge xs ys = xs ++ ys
 typeForce t = pure t
 
 typeEval :: (Dbg, MonadIO m) => [VType] -> TType -> m VType
@@ -319,9 +322,10 @@ instance Display Check TType where
       parens ParenNone x = x
       parens _ x         = "(" <> x <> ")"
 
-      field (x, t) = do
-        t <- go ParenNone t
-        pure $ x <> " : " <> t
+      field (x, ts) = do
+        let f t = x <> " : " <> t
+        ts <- mapM (go ParenNone) ts
+        pure $ foldrMap1' f (\x r -> f x <> ", " <> r) ts
 
       go p (TTHole h) = readIORef h >>= \case
         THEmpty x k _ u -> do
@@ -339,12 +343,12 @@ instance Display Check TType where
         t1s <- mapM (go ParenArrow) t1s
         t2 <- go ParenNone t2
         pure $ parens p (Text.intercalate " -> " (t1s ++ [t2]))
-      go _ (TTRow fs) = do
+      go _ (TTRow (Map.toList -> fs)) = do
         Text.intercalate ", " <$> mapM field fs
-      go _ (TTRowExt fs r) = do
+      go _ (TTRowExt (Map.toList -> fs) r) = do
         fs <- Text.intercalate ", " <$> mapM field fs
         r <- go ParenNone r
-        pure $ fs <> " | " <> r
+        pure $ if Text.null fs then r else fs <> " | " <> r
       go _ (TTRecord fs) = do
         fs <- go ParenNone fs
         pure $ "{" <> fs <>  "}"

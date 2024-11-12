@@ -1,9 +1,6 @@
-{-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE LambdaCase     #-}
-
--- TODO: instantiate unknown kinds to KType
--- TODO: nail down expected/recieved order in errors
--- TODO: use label maps everywhere
+{-# LANGUAGE BlockArguments  #-}
+{-# LANGUAGE LambdaCase      #-}
+{-# LANGUAGE OverloadedLists #-}
 
 module Infer
     ( TypeError (..)
@@ -19,8 +16,10 @@ import Control.Monad
 import Control.Monad.Fix
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
+import Control.Monad.Trans.Class
 import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
+import Data.List.NonEmpty         (NonEmpty)
 import Data.Map.Strict            qualified as Map
 import Data.Text                  qualified as Text
 import Error
@@ -30,6 +29,17 @@ import Unify
 
 zipWithM' :: Applicative m => [a] -> [b] -> (a -> b -> m c) -> m [c]
 zipWithM' xs ys f = zipWithM f xs ys
+
+listToRow :: [(Name, r)] -> Map.Map Name (NonEmpty r)
+listToRow fs = foldr `flip` Map.empty `flip` fs $ \(x, t) r ->
+  -- NOTE: right associated due to foldr
+  Map.insertWith (<>) x [t] r
+
+listToRow' :: [Name] -> [r] -> Map.Map Name (NonEmpty r)
+listToRow' xs ts = listToRow $ zip xs ts
+
+-- mapToRow :: Map.Map Name [VType] -> [(Name, VType)]
+-- mapToRow = concatMap (\(x, ts) -> (x,) <$> ts) . Map.toList
 
 -- | convert a RType to VType ensure the kind is Type
 typeCheck :: Dbg => RType -> Check VType
@@ -99,7 +109,10 @@ typeCheck t = do
         (vt, tt, k) <- go acc rt
         kindUnify k KType
         pure (rl, vt, tt)
-      pure (VTRecord (VTRow (zip ls vts)), TTRecord (TTRow (zip ls tts)), KType)
+      pure ( VTRecord (VTRow (listToRow' ls vts))
+           , TTRecord (TTRow (listToRow' ls tts))
+           , KType
+           )
     go acc@(l, ctx, _) (RTRecordExt rrs rt) = do
       (ls, vts, tts) <- unzip3 <$> forM rrs \(rl, rt) -> do
         (vt, tt, k) <- go acc rt
@@ -110,8 +123,10 @@ typeCheck t = do
         Just (l', k) -> do
           kindUnify k KRow
           let (vt, tt) = (VTVar l' KRow, TTVar (lvl2idx l l') KRow)
-          pure ( VTRecord (VTRowExt (zip ls vts) vt)
-               , TTRecord (TTRowExt (zip ls tts) tt), KType)
+          pure ( VTRecord (VTRowExt (listToRow' ls vts) vt)
+               , TTRecord (TTRowExt (listToRow' ls tts) tt)
+               , KType
+               )
 
 -- | check an Expr has a given VType
 exprCheck :: Dbg => Expr -> VType -> Check ()
@@ -196,7 +211,8 @@ exprInfer (EApply f xs) =
           ts <- mapM exprInferInst ys
           r <- typeHole n k l
           writeIORef h (THFull (VTArrow ts r)) $> r
-      _ -> throw $ TypeErrorExprNonFunction (Text.pack . show $ EApply f (reverse xs))
+      _ -> throw . TypeErrorExprNonFunction $
+        Text.pack . show $ EApply f (reverse xs)
 exprInfer (ELet x t1 e1 e2) = do
   t1 <- case t1 of
     Nothing ->
@@ -213,19 +229,19 @@ exprInfer (ELetRec x t1 e1 e2) = do
 exprInfer (ESelect e l) = do
   t <- asks typeLevel >>= typeHole "t" KType
   r <- asks typeLevel >>= typeHole "r" KRow
-  exprCheck e (VTRecord (VTRowExt [(l, t)] r)) $> t
+  exprCheck e (VTRecord (VTRowExt [(l, [t])] r)) $> t
 exprInfer (ERestrict e l) = do
   t <- asks typeLevel >>= typeHole "t" KType
   r <- asks typeLevel >>= typeHole "r" KRow
-  exprCheck e (VTRecord (VTRowExt [(l, t)] r)) $> VTRecord r
+  exprCheck e (VTRecord (VTRowExt [(l, [t])] r)) $> VTRecord r
 exprInfer (ERecord xs) = do
   xs <- mapM (mapM exprInfer) xs
-  pure $ VTRecord (VTRow xs)
+  pure $ VTRecord (VTRow (listToRow xs))
 exprInfer (ERecordExt xs e) = do
   xs <- mapM (mapM exprInfer) xs
   r <- asks typeLevel >>= typeHole "r" KRow
   exprCheck e (VTRecord r)
-  pure $ VTRecord (VTRowExt xs r)
+  pure $ VTRecord (VTRowExt (listToRow xs) r)
 
 -- | infer the VType of a given Expr, instantiating and leading VForalls
 exprInferInst :: Dbg => Expr -> Check VType
@@ -254,7 +270,9 @@ exprTopInfer e = do
       VTForall x k env t -> do
         t' <- typeEval (VTVar l k : env) t
         TTForall x k <$> go (succ l) t'
-      VTVar x k -> pure $ TTVar (lvl2idx l x) k
+      VTVar x k -> kindForce k >>= \case
+        k@KHole{} -> lift (kindUnify k KType) $> TTVar (lvl2idx l x) KType
+        k -> pure $ TTVar (lvl2idx l x) k
       VTCon c i -> pure $ TTCon c i
       VTArrow t1s t2 -> TTArrow <$> mapM (go l) t1s <*> go l t2
       VTApply t1 t2s -> TTApply <$> go l t1 <*> mapM (go l) t2s

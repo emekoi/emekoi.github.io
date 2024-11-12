@@ -1,6 +1,5 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase     #-}
-{-# LANGUAGE ViewPatterns   #-}
 
 module Unify
     ( kindUnify
@@ -9,6 +8,7 @@ module Unify
 
 import Control.Monad
 import Control.Monad.Trans.Reader
+import Control.Monad.Zip
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromMaybe)
@@ -54,21 +54,14 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
         KHFull t -> scopeCheck h t
         KHEmpty -> pure ()
 
-rowToMap :: [(Name, VType)] -> Map.Map Name [VType]
-rowToMap xs = foldr `flip` Map.empty `flip` xs $ \(x, t) r ->
-  -- NOTE: right associated due to foldr
-  Map.insertWith (++) x [t] r
-
-mapToRow :: Map.Map Name [VType] -> [(Name, VType)]
-mapToRow = concatMap (\(x, ts) -> (x,) <$> ts) . Map.toList
-
 rowUnify
-  :: Dbg => [(Name, VType)] -> [(Name, VType)]
+  :: Dbg => VRow -> VRow
   -> Maybe VType -> Maybe VType -> Check ()
-rowUnify (rowToMap -> xs) (rowToMap -> ys) rx ry = do
+rowUnify xs ys rx ry = do
   forM_ (Map.keysSet xs `Set.intersection` Map.keysSet ys) \n -> do
     when (length xs /= length ys) typeMismatch
-    zipWithM_ typeUnify (xs Map.! n) (ys Map.! n)
+    -- zipWithM_ typeUnify (xs Map.! n) (ys Map.! n)
+    mapM_ (uncurry typeUnify) $ mzip (xs Map.! n) (ys Map.! n)
   case (null ysMissing, null xsMissing) of
     -- they share the same fields so unify rx ry
     (True, True)  -> typeUnify rx' ry'
@@ -86,16 +79,16 @@ rowUnify (rowToMap -> xs) (rowToMap -> ys) rx ry = do
     -- otherwise, unify rx (ys - xs | r) and unify (xs - ys | r) ry
     (False, False) -> do
       r <- asks typeLevel >>= typeHole "r" KRow
-      typeUnify rx' (VTRowExt (mapToRow xsMissing) r)
-      typeUnify (VTRowExt (mapToRow ysMissing) r) ry'
+      typeUnify (VTRowExt ysMissing r) ry'
+      typeUnify rx' (VTRowExt xsMissing r)
   where
-    toRow (mapToRow -> r) = maybe (VTRow r) (VTRowExt r)
+    toRow r = maybe (VTRow r) (VTRowExt r)
     typeMismatch = do
       s1 <- display (toRow xs rx)
       s2 <- display (toRow ys ry)
       throw (TypeErrorTypeMismatch s1 s2)
-    rx' = fromMaybe (VTRow []) rx
-    ry' = fromMaybe (VTRow []) ry
+    rx' = fromMaybe (VTRow mempty) rx
+    ry' = fromMaybe (VTRow mempty) ry
     ysMissing = xs Map.\\ ys
     xsMissing = ys Map.\\ xs
 
@@ -185,12 +178,12 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
           s <- display t
           throw $ TypeErrorKindNonArrow s
     scopeCheck minLevel maxLevel h (VTRow fs) = do
-      forM_ fs \(_, t) ->
-        scopeCheck minLevel maxLevel h t >>= kindUnify KType
+      forM_ fs $
+        mapM (scopeCheck minLevel maxLevel h >=> kindUnify KType)
       pure KRow
     scopeCheck minLevel maxLevel h (VTRowExt fs r) = do
-      forM_ fs \(_, t) ->
-        scopeCheck minLevel maxLevel h t >>= kindUnify KType
+      forM_ fs $
+        mapM (scopeCheck minLevel maxLevel h >=> kindUnify KType)
       scopeCheck minLevel maxLevel h r >>= kindUnify KRow
       pure KRow
     scopeCheck minLevel maxLevel h (VTRecord rs) = do
