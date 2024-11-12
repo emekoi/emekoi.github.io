@@ -14,9 +14,9 @@ module Infer
 
 import Control.Monad
 import Control.Monad.Fix
+import Control.Monad.Trans.Class
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
-import Control.Monad.Trans.Class
 import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.List.NonEmpty         (NonEmpty)
@@ -26,9 +26,7 @@ import Error
 import Prelude                    hiding ((!!))
 import Syntax
 import Unify
-
-zipWithM' :: Applicative m => [a] -> [b] -> (a -> b -> m c) -> m [c]
-zipWithM' xs ys f = zipWithM f xs ys
+import Util
 
 listToRow :: [(Name, r)] -> Map.Map Name (NonEmpty r)
 listToRow fs = foldr `flip` Map.empty `flip` fs $ \(x, t) r ->
@@ -37,9 +35,6 @@ listToRow fs = foldr `flip` Map.empty `flip` fs $ \(x, t) r ->
 
 listToRow' :: [Name] -> [r] -> Map.Map Name (NonEmpty r)
 listToRow' xs ts = listToRow $ zip xs ts
-
--- mapToRow :: Map.Map Name [VType] -> [(Name, VType)]
--- mapToRow = concatMap (\(x, ts) -> (x,) <$> ts) . Map.toList
 
 -- | convert a RType to VType ensure the kind is Type
 typeCheck :: Dbg => RType -> Check VType
@@ -176,9 +171,6 @@ exprInfer (EVar v) = do
   asks rawTermTypes >>= flip (.) (Map.lookup v) \case
     Nothing -> throw $ TypeErrorVariableUnbound v
     Just t  -> pure t
-exprInfer (EAnnot e t) = do
-  t <- typeCheck t
-  exprCheck e t $> t
 exprInfer (ELambda xs e) = do
   l <- asks typeLevel
   ts <- forM xs \(x, t) ->
@@ -187,6 +179,19 @@ exprInfer (ELambda xs e) = do
   -- r <- foldl' (flip $ uncurry exprBind) (exprInferInst e) ts
   r <- foldr (uncurry exprBind) (exprInferInst e) ts
   pure $ VTArrow (snd <$> ts) r
+exprInfer (ELet x t1 e1 e2) = do
+  t1 <- case t1 of
+    Nothing ->
+      exprInfer e1
+    Just t1 -> do
+      t1 <- typeCheck t1
+      exprCheck e1 t1 $> t1
+  exprBind x t1 (exprInfer e2)
+exprInfer (ELetRec x t1 e1 e2) = do
+  t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck t1
+  exprBind x t1 do
+    exprCheck e1 t1
+    exprInfer e2
 exprInfer (EApply f xs) =
   exprInferInst f >>= typeForce >>= \case
     VTArrow ts r -> apply ts r [] xs
@@ -213,19 +218,6 @@ exprInfer (EApply f xs) =
           writeIORef h (THFull (VTArrow ts r)) $> r
       _ -> throw . TypeErrorExprNonFunction $
         Text.pack . show $ EApply f (reverse xs)
-exprInfer (ELet x t1 e1 e2) = do
-  t1 <- case t1 of
-    Nothing ->
-      exprInfer e1
-    Just t1 -> do
-      t1 <- typeCheck t1
-      exprCheck e1 t1 $> t1
-  exprBind x t1 (exprInfer e2)
-exprInfer (ELetRec x t1 e1 e2) = do
-  t1 <- maybe (asks typeLevel >>= typeHole x KType) typeCheck t1
-  exprBind x t1 do
-    exprCheck e1 t1
-    exprInfer e2
 exprInfer (ESelect e l) = do
   t <- asks typeLevel >>= typeHole "t" KType
   r <- asks typeLevel >>= typeHole "r" KRow
@@ -242,6 +234,9 @@ exprInfer (ERecordExt xs e) = do
   r <- asks typeLevel >>= typeHole "r" KRow
   exprCheck e (VTRecord r)
   pure $ VTRecord (VTRowExt (listToRow xs) r)
+exprInfer (EAnnot e t) =do
+  t <- typeCheck t
+  exprCheck e t $> t
 
 -- | infer the VType of a given Expr, instantiating and leading VForalls
 exprInferInst :: Dbg => Expr -> Check VType

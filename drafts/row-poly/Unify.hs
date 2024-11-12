@@ -16,12 +16,7 @@ import Data.Set                   qualified as Set
 import Error
 import Prelude                    hiding ((!!))
 import Syntax
-
-zipWithM' :: Applicative m => [a] -> [b] -> (a -> b -> m c) -> m [c]
-zipWithM' xs ys f = zipWithM f xs ys
-
-bind2 :: Monad m => m a -> m b -> (a -> b -> m c) -> m c
-bind2 x y k = x >>= ((y >>=) . k)
+import Util
 
 -- | unify 2 kinds
 kindUnify :: Dbg => Kind -> Kind -> Check ()
@@ -40,11 +35,6 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
       scopeCheck h k
       writeIORef h (KHFull k)
 
-    scopeCheck _ KType = pure ()
-    scopeCheck _ KRow = pure ()
-    scopeCheck h (KArrow xs t) = do
-      mapM_ (kindForce >=> scopeCheck h) xs
-      kindForce t >>= scopeCheck h
     scopeCheck h (KHole h') = do
       when (h == h') do
         s1 <- display _k1
@@ -53,6 +43,11 @@ kindUnify _k1 _k2 = bind2 (kindForce _k1) (kindForce _k2) \cases
       readIORef h >>= \case
         KHFull t -> scopeCheck h t
         KHEmpty -> pure ()
+    scopeCheck _ KType = pure ()
+    scopeCheck h (KArrow xs t) = do
+      mapM_ (kindForce >=> scopeCheck h) xs
+      kindForce t >>= scopeCheck h
+    scopeCheck _ KRow = pure ()
 
 rowUnify
   :: Dbg => VRow -> VRow
@@ -108,6 +103,8 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     kindUnify k1 k2
   (VTArrow t1s t1) (VTArrow t2s t2) | length t1s == length t2s ->
     zipWithM_ typeUnify t1s t2s *> typeUnify t1 t2
+  (VTApply t1 t1s) (VTApply t2 t2s) | length t1s == length t2s ->
+    typeUnify t1 t2 *> zipWithM_ typeUnify t1s t2s
   (VTRow fs1) (VTRow fs2) ->
     rowUnify fs1 fs2 Nothing Nothing
   (VTRowExt fs1 r1) (VTRowExt fs2 r2) ->
@@ -118,8 +115,6 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     rowUnify fs1 fs2 (Just r1) Nothing
   (VTRecord fs1) (VTRecord fs2) ->
     typeUnify fs1 fs2
-  (VTApply t1 t1s) (VTApply t2 t2s) | length t1s == length t2s ->
-    typeUnify t1 t2 *> zipWithM_ typeUnify t1s t2s
   (VTForall x1 k1 e1 t1) (VTForall _ k2 e2 t2) -> do
     kindUnify k1 k2
     l <- asks typeLevel
@@ -133,63 +128,11 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     throw $ TypeErrorTypeMismatch s1 s2
   where
     fillHole l k h t = do
-      maxLevel <- asks typeLevel
-      k' <- scopeCheck l maxLevel h t
-      kindUnify k k'
+      baseLevel <- asks typeLevel
+      scopeCheck l baseLevel h t >>= kindUnify k
       writeIORef h (THFull t)
 
-    scopeCheck minLevel maxLevel h (VTForall x l env t) = do
-      v <- VTVar <$> asks typeLevel
-      typeBind x l $ typeEval (v l : env) t
-        >>= scopeCheck minLevel maxLevel h
-    scopeCheck minLevel maxLevel _ t@(VTVar l k) = do
-      -- NOTE: if minLevel <= l, then t was bound by a forall to the right of
-      -- the one that bound the hole so solving h to some type containing t
-      -- would cause t to escape its scope. however, if l > maxLevel, then t was
-      -- bound by a forall in the solution of h, so t does not escape.
-      when (minLevel <= l && l < maxLevel) do
-        s <- display t
-        throw (TypeErrorTypeVariableEscape s)
-      pure k
-    scopeCheck _ _ _ (VTCon _ k) = pure k
-    scopeCheck minLevel maxLevel h (VTArrow ts t) = do
-      mapM_ (scopeCheck minLevel maxLevel h >=> kindUnify KType) ts
-      scopeCheck minLevel maxLevel h t >>= kindUnify KType
-      pure KType
-    scopeCheck minLevel maxLevel h (VTApply t ts) =
-      scopeCheck minLevel maxLevel h t >>= kindForce >>= \case
-        KArrow ks k -> do
-          let (lk, lx) = (length ks, length ts)
-          void $ zipWithM' ks ts \k t -> do
-            scopeCheck minLevel maxLevel h t >>= kindUnify k
-          if lk > lx then pure $ KArrow (drop lx ks) k
-          else if lk == lx then pure k
-          else do
-            -- NOTE: due to how the parser is written, we know all arrow kinds
-            -- are of the form xs -> Row or xs -> Type, so if length k1 < length
-            -- xs, there is no way to unify the kinds
-            s <- display (VTApply t (take lk ts))
-            throw $ TypeErrorKindNonArrow s
-        KHole h' -> do
-          ks <- mapM (scopeCheck minLevel maxLevel h) ts
-          k <- kindHole
-          writeIORef h' (KHFull (KArrow ks k)) $> k
-        _ -> do
-          s <- display t
-          throw $ TypeErrorKindNonArrow s
-    scopeCheck minLevel maxLevel h (VTRow fs) = do
-      forM_ fs $
-        mapM (scopeCheck minLevel maxLevel h >=> kindUnify KType)
-      pure KRow
-    scopeCheck minLevel maxLevel h (VTRowExt fs r) = do
-      forM_ fs $
-        mapM (scopeCheck minLevel maxLevel h >=> kindUnify KType)
-      scopeCheck minLevel maxLevel h r >>= kindUnify KRow
-      pure KRow
-    scopeCheck minLevel maxLevel h (VTRecord rs) = do
-      scopeCheck minLevel maxLevel h rs >>= kindUnify KRow
-      pure KType
-    scopeCheck minLevel maxLevel h (VTHole h') = do
+    scopeCheck minLevel baseLevel h (VTHole h') = do
       when (h == h') do
         s1 <- display _t1
         s2 <- display _t2
@@ -200,4 +143,55 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
           when (l > minLevel) do
             writeIORef h' (THEmpty x k minLevel u)
           pure k
-        THFull t -> scopeCheck minLevel maxLevel h t
+        THFull t -> scopeCheck minLevel baseLevel h t
+    scopeCheck _ _ _ (VTCon _ k) = pure k
+    scopeCheck minLevel baseLevel _ t@(VTVar l k) = do
+      -- NOTE: if minLevel <= l, then t was bound by a forall to the right of
+      -- the one that bound the hole so solving h to some type containing t
+      -- would cause t to escape its scope. however, if l > baseLevel, then t
+      -- was bound by a forall in the solution of h, so t does not escape.
+      when (minLevel <= l && l < baseLevel) do
+        s <- display t
+        throw (TypeErrorTypeVariableEscape s)
+      pure k
+    scopeCheck minLevel baseLevel h (VTArrow ts t) = do
+      mapM_ (scopeCheck minLevel baseLevel h >=> kindUnify KType) ts
+      scopeCheck minLevel baseLevel h t >>= kindUnify KType
+      pure KType
+    scopeCheck minLevel baseLevel h (VTApply t ts) =
+      scopeCheck minLevel baseLevel h t >>= kindForce >>= \case
+        KArrow ks k -> do
+          let (lk, lx) = (length ks, length ts)
+          void $ zipWithM' ks ts \k t -> do
+            scopeCheck minLevel baseLevel h t >>= kindUnify k
+          if lk > lx then pure $ KArrow (drop lx ks) k
+          else if lk == lx then pure k
+          else do
+            -- NOTE: due to how the parser is written, we know all arrow kinds
+            -- are of the form xs -> Row or xs -> Type, so if length k1 < length
+            -- xs, there is no way to unify the kinds
+            s <- display (VTApply t (take lk ts))
+            throw $ TypeErrorKindNonArrow s
+        KHole h' -> do
+          ks <- mapM (scopeCheck minLevel baseLevel h) ts
+          k <- kindHole
+          writeIORef h' (KHFull (KArrow ks k)) $> k
+        _ -> do
+          s <- display t
+          throw $ TypeErrorKindNonArrow s
+    scopeCheck minLevel baseLevel h (VTRow fs) = do
+      forM_ fs $
+        mapM (scopeCheck minLevel baseLevel h >=> kindUnify KType)
+      pure KRow
+    scopeCheck minLevel baseLevel h (VTRowExt fs r) = do
+      forM_ fs $
+        mapM (scopeCheck minLevel baseLevel h >=> kindUnify KType)
+      scopeCheck minLevel baseLevel h r >>= kindUnify KRow
+      pure KRow
+    scopeCheck minLevel baseLevel h (VTRecord rs) = do
+      scopeCheck minLevel baseLevel h rs >>= kindUnify KRow
+      pure KType
+    scopeCheck minLevel baseLevel h (VTForall x l env t) = do
+      v <- VTVar <$> asks typeLevel
+      typeBind x l $ typeEval (v l : env) t
+        >>= scopeCheck minLevel baseLevel h

@@ -34,3 +34,4 @@ executable rows
     Parser
     Syntax
     Unify
+    Util

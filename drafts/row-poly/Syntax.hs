@@ -36,6 +36,7 @@ module Syntax
     , typeForce
     , typeHole
     , typeQuote
+    , typeQuote'
     , writeIORef
     , (!!)
     ) where
@@ -83,18 +84,18 @@ lvl2idx (Level l) (Level x) = Index (l - x - 1)
 xs !! (Index i) = xs List.!! i
 
 data RKind where
-  RKRow :: RKind
   RKType :: RKind
   RKArrow :: [RKind] -> RKind -> RKind
+  RKRow :: RKind
   deriving (Eq, Show)
 
 data RType where
   RTCon :: Name -> RType
   RTVar :: Name -> RType
   RTArrow :: [RType] -> RType -> RType
+  RTApply :: RType -> [RType] -> RType
   RTRecord :: [(Name, RType)] -> RType
   RTRecordExt :: [(Name, RType)] -> Name -> RType
-  RTApply :: RType -> [RType] -> RType
   RTForall :: Name -> Maybe RKind -> RType -> RType
   deriving (Eq, Show)
 
@@ -120,9 +121,9 @@ data KHole where
 
 data Kind where
   KHole :: IORef KHole -> Kind
-  KRow :: Kind
   KType :: Kind
   KArrow :: [Kind] -> Kind -> Kind
+  KRow :: Kind
   deriving (Eq)
 
 data THole where
@@ -137,10 +138,10 @@ data TType where
   TTCon :: Name -> Kind -> TType
   TTVar :: Index -> Kind -> TType
   TTArrow :: [TType] -> TType -> TType
+  TTApply :: TType -> [TType] -> TType
   TTRow :: TRow -> TType
   TTRowExt :: TRow -> TType -> TType
   TTRecord :: TType -> TType
-  TTApply :: TType -> [TType] -> TType
   TTForall :: Name -> Kind -> TType -> TType
   deriving (Eq)
 
@@ -151,10 +152,10 @@ data VType where
   VTCon :: Name -> Kind -> VType
   VTVar :: Level -> Kind -> VType
   VTArrow :: [VType] -> VType -> VType
+  VTApply :: VType -> [VType] -> VType
   VTRow :: VRow -> VType
   VTRowExt :: VRow -> VType -> VType
   VTRecord :: VType -> VType
-  VTApply :: VType -> [VType] -> VType
   VTForall :: Name -> Kind -> [VType] -> TType -> VType
   deriving (Eq)
 
@@ -231,7 +232,7 @@ typeForce (VTHole h) = go h
   where
     -- NOTE: fully dereference hole, performing path compression
     go h = readIORef h >>= \case
-      THFull (VTHole h')  -> do
+      THFull (VTHole h') -> do
         t <- go h'
         writeIORef h (THFull t)
         pure t
@@ -239,8 +240,8 @@ typeForce (VTHole h) = go h
       THEmpty{} -> pure (VTHole h)
 -- NOTE: normalize row extensions
 typeForce (VTRowExt xs r) = typeForce r >>= \case
-  VTRowExt ys r -> pure $ VTRowExt (Map.unionWith (<>) xs ys) r
   VTRow ys -> pure $ VTRow (Map.unionWith (<>) xs ys)
+  VTRowExt ys r -> pure $ VTRowExt (Map.unionWith (<>) xs ys) r
   r -> pure $ VTRowExt xs r
 typeForce t = pure t
 
@@ -249,10 +250,10 @@ typeEval _ (TTHole h)         = typeForce (VTHole h)
 typeEval _ (TTCon c k)        = pure $ VTCon c k
 typeEval env (TTVar i _)      = pure $ env !! i
 typeEval env (TTArrow t1s t2) = VTArrow <$> mapM (typeEval env) t1s <*> typeEval env t2
+typeEval env (TTApply t1 t2s) = VTApply <$> typeEval env t1 <*> mapM (typeEval env) t2s
 typeEval env (TTRow fs)       = VTRow <$> mapM (mapM (typeEval env)) fs
 typeEval env (TTRowExt fs r)  = VTRowExt <$> mapM (mapM (typeEval env)) fs <*> typeEval env r
 typeEval env (TTRecord rs)    = VTRecord <$> typeEval env rs
-typeEval env (TTApply t1 t2s) = VTApply <$> typeEval env t1 <*> mapM (typeEval env) t2s
 typeEval env (TTForall x k t) = pure $ VTForall x k env t
 
 typeQuote :: (Dbg, MonadIO m) => Level -> VType -> m TType
@@ -261,34 +262,33 @@ typeQuote l t = typeForce t >>= \case
   VTCon c k -> pure $ TTCon c k
   VTVar x k -> pure $ TTVar (lvl2idx l x) k
   VTArrow t1s t2 -> TTArrow <$> mapM (typeQuote l) t1s <*> typeQuote l t2
+  VTApply t1 t2s -> TTApply <$> typeQuote l t1 <*> mapM (typeQuote l) t2s
   VTRow fs -> TTRow <$> mapM (mapM (typeQuote l)) fs
   VTRowExt fs r -> TTRowExt <$> mapM (mapM (typeQuote l)) fs <*> typeQuote l r
   VTRecord rs -> TTRecord <$> typeQuote l rs
-  VTApply t1 t2s -> TTApply <$> typeQuote l t1 <*> mapM (typeQuote l) t2s
   VTForall x k env t -> do
     t' <- typeEval (VTVar l k : env) t
     TTForall x k <$> typeQuote (succ l) t'
 
--- typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
--- typeQuote' b l t = typeForce t >>= \case
---   VTVar x k -> pure $ TTVar (lvl2idx l x) k
---   VTCon c k u -> pure $ TTCon c k u
---   VTArrow s t -> TTArrow
---     <$> typeQuote' b l s
---     <*> typeQuote' b l t
---   VTApply s t -> TTApply
---     <$> typeQuote' b l s
---     <*> typeQuote' b l t
---   VTForall x k env t -> do
---     t' <- typeEval (VTVar l k : env) t
---     TTForall x k <$> typeQuote' b (succ l) t'
---   VTHole h -> do
---     -- NOTE: we clamp all levels to b
---     readIORef h >>= \case
---       THEmpty n k l | l > b ->
---         writeIORef h (THEmpty n k b)
---       _ -> pure ()
---     pure $ TTHole h
+typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
+typeQuote' b l t = typeForce t >>= \case
+  VTHole h -> do
+    -- NOTE: we clamp all levels to b
+    readIORef h >>= \case
+      THEmpty n k l u | l > b ->
+        writeIORef h (THEmpty n k b u)
+      _ -> pure ()
+    pure $ TTHole h
+  VTCon c k -> pure $ TTCon c k
+  VTVar x k -> pure $ TTVar (lvl2idx l x) k
+  VTArrow t1s t2 -> TTArrow <$> mapM (typeQuote' b l) t1s <*> typeQuote' b l t2
+  VTApply t1 t2s -> TTApply <$> typeQuote' b l t1 <*> mapM (typeQuote' b l) t2s
+  VTRow fs -> TTRow <$> mapM (mapM (typeQuote' b l)) fs
+  VTRowExt fs r -> TTRowExt <$> mapM (mapM (typeQuote' b l)) fs <*> typeQuote' b l r
+  VTRecord rs -> TTRecord <$> typeQuote' b l rs
+  VTForall x k env t -> do
+    t' <- typeEval (VTVar l k : env) t
+    TTForall x k <$> typeQuote' b (succ l) t'
 
 instance (MonadIO m) => Display m Kind where
   display = go False
@@ -297,14 +297,14 @@ instance (MonadIO m) => Display m Kind where
       parens False x = x
 
       go p (KHole h) = readIORef h >>= \case
-        KHEmpty -> pure "?"
         KHFull k -> go p k
-      go _ KRow = pure "Row"
+        KHEmpty -> pure "?"
       go _ KType = pure "Type"
       go p (KArrow k1s k2) = do
         k1s <- mapM (go True) k1s
         k2 <- go False k2
         pure $ parens p (Text.intercalate " -> " (k1s ++ [k2]))
+      go _ KRow = pure "Row"
 
 data TTypeParen
   = ParenNone
@@ -328,21 +328,22 @@ instance Display Check TType where
         pure $ foldrMap1' f (\x r -> f x <> ", " <> r) ts
 
       go p (TTHole h) = readIORef h >>= \case
+        THFull t -> do
+          l <- asks typeLevel
+          typeQuote l t >>= go p
         THEmpty x k _ u -> do
           k <- display k
           pure $ Text.cons '?' k <> displayUnique u <> "." <> x
-        THFull t -> do
-          -- FIXME: i think this level is wrong since we might pass quantifiers
-          -- on the way here
-          l <- asks typeLevel
-          t <- typeQuote l t
-          go p t
       go _ (TTCon c _) = pure c
       go _ (TTVar i _) = (!! i) <$> asks rawTypeNames
       go p (TTArrow t1s t2) = do
         t1s <- mapM (go ParenArrow) t1s
         t2 <- go ParenNone t2
         pure $ parens p (Text.intercalate " -> " (t1s ++ [t2]))
+      go p (TTApply t1 t2s) = do
+        t1 <- go ParenNone t1
+        t2s <- mapM (go ParenApply) t2s
+        pure $ parenApply p (Text.intercalate " " (t1 : t2s))
       go _ (TTRow (Map.toList -> fs)) = do
         Text.intercalate ", " <$> mapM field fs
       go _ (TTRowExt (Map.toList -> fs) r) = do
@@ -352,10 +353,6 @@ instance Display Check TType where
       go _ (TTRecord fs) = do
         fs <- go ParenNone fs
         pure $ "{" <> fs <>  "}"
-      go p (TTApply t1 t2s) = do
-        t1 <- go ParenNone t1
-        t2s <- mapM (go ParenApply) t2s
-        pure $ parenApply p (Text.intercalate " " (t1 : t2s))
       go p (TTForall x k t) = do
         t <- typeBind x k $ go ParenNone t
         x <- kindForce k >>= \k -> do
