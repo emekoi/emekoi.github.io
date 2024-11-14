@@ -102,7 +102,7 @@ data RType where
 data Expr where
   EInt :: Int -> Expr
   EVar :: Name -> Expr
-  ECon :: Name -> [Expr] -> Expr
+  ECon :: Name -> Expr
   ELambda :: [(Name, Maybe RType)] -> Expr -> Expr
   ELet :: Name -> Maybe RType -> Expr -> Expr -> Expr
   ELetRec :: Name -> Maybe RType -> Expr -> Expr -> Expr

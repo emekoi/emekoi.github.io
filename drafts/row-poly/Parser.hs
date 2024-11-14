@@ -176,7 +176,7 @@ pExpr = do
       , pLambda
       , lexeme pInt
       , EVar <$> pVar
-      , flip ECon [] <$> pCon
+      , ECon <$> pCon
       ]
 
     pNum = Mega.try (Mega.char '0' >> Mega.choice
@@ -193,7 +193,6 @@ pExpr = do
       pure case xs of
         x :| [] -> x
         f :| xs -> case f of
-          ECon f xs'   -> ECon f (xs' ++ xs)
           EApply f xs' -> EApply f (xs' ++ xs)
           _            -> EApply f xs
 

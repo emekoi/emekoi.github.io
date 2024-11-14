@@ -169,25 +169,10 @@ exprInfer (EVar v) = do
   asks rawTermTypes >>= flip (.) (Map.lookup v) \case
     Nothing -> throw $ TypeErrorTermVariableUnbound v
     Just t  -> pure t
-exprInfer (ECon c xs) = do
+exprInfer (ECon c) = do
   asks rawTermCons >>= flip (.) (Map.lookup c) \case
     Nothing -> throw $ TypeErrorTermConstructorUnknown c
-    Just t | null xs -> pure t
-    Just t -> do
-      l <- asks typeLevel
-      typeForce t >>= inst l >>= \case
-        VTArrow ts r -> apply ts r [] xs
-        _ -> throw $ TypeErrorTermConstructorArity c (length xs)
-  where
-    inst l (VTForall x k env t) = do
-      h <- typeHole x k l
-      typeEval (h : env) t >>= inst l
-    inst _ t = pure t
-
-    apply (t:ts) r xs (y:ys) = exprCheck y t *> apply ts r (y : xs) ys
-    apply [] r _ []          = pure r
-    apply _ _ xs _            =
-      throw $ TypeErrorTermConstructorArity c (length xs)
+    Just t  -> pure t
 exprInfer (ELambda xs e) = do
   l <- asks typeLevel
   ts <- forM xs \(x, t) ->
@@ -222,9 +207,9 @@ exprInfer (EApply f xs) =
     -- resolve it. if we can't we report that the application of f to the spine
     -- so far doesn't yield a function we can apply to the rest of the spine.
     apply (t:ts) r xs (y:ys) = exprCheck y t *> apply ts r (y : xs) ys
-    apply [] r _ []         = pure r
-    apply ts r _ []         = pure $ VTArrow ts r
-    apply [] r xs ys        = typeForce r >>= \case
+    apply [] r _ []          = pure r
+    apply ts r _ []          = pure $ VTArrow ts r
+    apply [] r xs ys         = typeForce r >>= \case
       VTArrow ts r -> apply ts r xs ys
       VTHole h -> readIORef h >>= \case
         THFull _ -> error "IMPOSSIBLE"
