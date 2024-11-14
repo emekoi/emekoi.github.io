@@ -22,9 +22,11 @@ data TypeErrorKind
   | TypeErrorTypeVariableEscape StrictText
   | TypeErrorTypeVariableUnbound StrictText
   | TypeErrorTypeMissingLabels [StrictText]
-  | TypeErrorConstructorUnknown StrictText
-  | TypeErrorVariableUnbound StrictText
-  | TypeErrorExprNonFunction StrictText
+  | TypeErrorTypeConstructorUnknown StrictText
+  | TypeErrorTermConstructorUnknown StrictText
+  | TypeErrorTermConstructorArity StrictText Int
+  | TypeErrorTermVariableUnbound StrictText
+  | TypeErrorTermNonFunction StrictText
   deriving (Show, Typeable)
 
 data TypeError where TypeError :: Dbg => TypeErrorKind -> TypeError

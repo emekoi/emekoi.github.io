@@ -100,9 +100,9 @@ data RType where
   deriving (Eq, Show)
 
 data Expr where
-  EUnit :: Expr
   EInt :: Int -> Expr
   EVar :: Name -> Expr
+  ECon :: Name -> [Expr] -> Expr
   ELambda :: [(Name, Maybe RType)] -> Expr -> Expr
   ELet :: Name -> Maybe RType -> Expr -> Expr -> Expr
   ELetRec :: Name -> Maybe RType -> Expr -> Expr -> Expr
@@ -172,6 +172,8 @@ data Context = Context
     -- ^ map from names to type constructors
   , rawTermTypes  :: Map Name VType
     -- ^ map from variables to types
+  , rawTermCons   :: Map Name VType
+    -- ^ map from term constructors to types
   }
 
 type Check = ReaderT Context IO
@@ -186,9 +188,17 @@ runCheck m =
     , rawTypeCons   = Map.fromList
       [ ("Unit", KType)
       , ("Int", KType)
+      , ("Maybe", KArrow [KType] KType)
       ]
     , rawTermTypes  = mempty
+    , rawTermCons   = Map.fromList
+      [ ("Unit", VTCon "Unit" KType)
+      , ("Nothing", VTForall "x" KType [] tMaybe)
+      , ("Just", VTForall "x" KType [] (TTArrow [TTVar (Index 0) KType] tMaybe))
+      ]
     }
+    where
+      tMaybe = TTApply (TTCon "Maybe" (KArrow [KType] KType)) [TTVar (Index 0) KType]
 
 typeBind :: Dbg => Name -> Kind -> Check r -> Check r
 typeBind x k = local \Context{..} -> Context

@@ -56,7 +56,7 @@ typeCheck t = do
       Just (l', k) -> pure (VTVar l' k, TTVar (lvl2idx l l') k, k)
       Nothing      -> throw $ TypeErrorTypeVariableUnbound v
     go _ (RTCon c) = asks rawTypeCons >>= flip (.) (Map.lookup c) \case
-      Nothing -> throw $ TypeErrorConstructorUnknown c
+      Nothing -> throw $ TypeErrorTypeConstructorUnknown c
       Just k -> pure (VTCon c k, TTCon c k, k)
     go acc (RTArrow rt1s rt2) = do
       (vt1s, tt1s) <- unzip <$> forM rt1s \rt -> do
@@ -163,20 +163,39 @@ exprCheck e t = typeForce t >>= \case
 
 -- | infer the VType of a given Expr
 exprInfer :: Dbg => Expr -> Check VType
-exprInfer EUnit = do
-  pure (VTCon "Unit" KType)
 exprInfer (EInt _) = do
   pure (VTCon "Int" KType)
 exprInfer (EVar v) = do
   asks rawTermTypes >>= flip (.) (Map.lookup v) \case
-    Nothing -> throw $ TypeErrorVariableUnbound v
+    Nothing -> throw $ TypeErrorTermVariableUnbound v
     Just t  -> pure t
+exprInfer (ECon c xs) = do
+  asks rawTermCons >>= flip (.) (Map.lookup c) \case
+    Nothing -> throw $ TypeErrorTermConstructorUnknown c
+    Just t | null xs -> pure t
+    Just t -> do
+      l <- asks typeLevel
+      typeForce t >>= inst l >>= \case
+        VTArrow ts r -> apply ts r [] xs
+        _ -> throw $ TypeErrorTermConstructorArity c (length xs)
+  where
+    inst l (VTForall x k env t) = do
+      h <- typeHole x k l
+      typeEval (h : env) t >>= inst l
+    inst _ t = pure t
+
+    apply (t:ts) r xs (y:ys) = exprCheck y t *> apply ts r (y : xs) ys
+    apply [] r _ []          = pure r
+    apply _ _ xs _            =
+      throw $ TypeErrorTermConstructorArity c (length xs)
 exprInfer (ELambda xs e) = do
   l <- asks typeLevel
   ts <- forM xs \(x, t) ->
    (x,) <$> maybe (typeHole x KType l) typeCheck t
-  -- foldr/foldl doesn't matter since bindings are unique and non-dependent
-  -- r <- foldl' (flip $ uncurry exprBind) (exprInferInst e) ts
+  -- NOTE: using exprInferInst in on e results in a eager system, using
+  -- exprInfer results in a lazy system (cf. "Seeking Stability by Being Lazy
+  -- and Shallow")
+  -- NOTE: foldr since we may make xs a telescope later on
   r <- foldr (uncurry exprBind) (exprInferInst e) ts
   pure $ VTArrow (snd <$> ts) r
 exprInfer (ELet x t1 e1 e2) = do
@@ -216,7 +235,7 @@ exprInfer (EApply f xs) =
           ts <- mapM exprInferInst ys
           r <- typeHole n k l
           writeIORef h (THFull (VTArrow ts r)) $> r
-      _ -> throw . TypeErrorExprNonFunction $
+      _ -> throw . TypeErrorTermNonFunction $
         Text.pack . show $ EApply f (reverse xs)
 exprInfer (ESelect e l) = do
   t <- asks typeLevel >>= typeHole "t" KType
