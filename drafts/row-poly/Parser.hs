@@ -162,11 +162,11 @@ pType = pForall <|> pType2
       where
         p = (,) <$> pVar <*> (symbol ":" *> pType)
 
-pExpr :: Parsec Expr
+pExpr :: Parsec RExpr
 pExpr = do
   x <- trySubParse pExpr1 pRestrict
   Mega.optional (symbol ":" *> pType) <&> \case
-    Just t -> EAnnot x t
+    Just t -> REAnnot x t
     Nothing -> x
   where
     pAtom = Mega.choice
@@ -175,8 +175,8 @@ pExpr = do
       , pLet
       , pLambda
       , lexeme pInt
-      , EVar <$> pVar
-      , ECon <$> pCon
+      , REVar <$> pVar
+      , RECon <$> pCon
       ]
 
     pNum = Mega.try (Mega.char '0' >> Mega.choice
@@ -186,15 +186,15 @@ pExpr = do
       ]) <|> MegaL.decimal
 
     pInt = Mega.try do
-      EInt <$> MegaL.signed empty pNum Mega.<?> "integer literal"
+      REInt <$> MegaL.signed empty pNum Mega.<?> "integer literal"
 
     pExpr1 = do
       xs <- lineFold1 (trySubParse pAtom pSelect)
       pure case xs of
         x :| [] -> x
         f :| xs -> case f of
-          EApply f xs' -> EApply f (xs' ++ xs)
-          _            -> EApply f xs
+          REApply f xs' -> REApply f (xs' ++ xs)
+          _             -> REApply f xs
 
     pLet = do
       rsymbol "let"
@@ -203,33 +203,33 @@ pExpr = do
       t <- optional (symbol ":" *> pType)
       v <- symbol "=" *> pExpr
       e <- rsymbol "in" *> pExpr
-      pure $ (if isRec then ELetRec else ELet) x t v e
+      pure $ (if isRec then RELetRec else RELet) x t v e
 
     pLambda = do
       void . lexeme $ (Mega.char '\\' <|> Mega.char 'λ')
       xs <- many (pArg pType) <* pArrow
-      ELambda xs <$> pExpr
+      RELambda xs <$> pExpr
 
     pSelect x = do
-      foldl' ESelect x
+      foldl' RESelect x
         <$> some (Mega.single '.' *> pVar)
 
     pRestrict x = do
-      foldl' ERestrict x
+      foldl' RERestrict x
         <$> some (symbol "-" *> pVar)
 
     pRecord = braces do
       Mega.optional (Mega.try p) >>= \case
-        Nothing -> pure $ ERecord []
+        Nothing -> pure $ RERecord []
         Just x -> do
           xs <- many (symbol "," *> p)
           Mega.optional (symbol "|" *> pExpr) >>= \case
-            Nothing -> pure $ ERecord (x : xs)
-            Just r -> pure $ ERecordExt (x : xs) r
+            Nothing -> pure $ RERecord (x : xs)
+            Just r -> pure $ RERecordExt (x : xs) r
       where
         p = (,) <$> pVar <*> (symbol "=" *> pExpr)
 
-pDef :: Parsec (StrictText, Maybe RType, Expr)
+pDef :: Parsec (StrictText, Maybe RType, RExpr)
 pDef = MegaL.nonIndented space pTerm
   where
     pTerm = do
@@ -241,6 +241,5 @@ pDef = MegaL.nonIndented space pTerm
       e <- symbol "=" *> lexeme pExpr
       pure (x, t, e)
 
-
-parser :: Parsec [(StrictText, Maybe RType, Expr)]
+parser :: Parsec [(StrictText, Maybe RType, RExpr)]
 parser = many (lexeme pDef) <* Mega.eof

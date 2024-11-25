@@ -10,7 +10,7 @@ module Syntax
     , Context (..)
     , Dbg
     , Display (..)
-    , Expr (..)
+    , RExpr (..)
     , Index (..)
     , KHole (..)
     , Kind (..)
@@ -99,19 +99,24 @@ data RType where
   RTForall :: Name -> Maybe RKind -> RType -> RType
   deriving (Eq, Show)
 
-data Expr where
-  EInt :: Int -> Expr
-  EVar :: Name -> Expr
-  ECon :: Name -> Expr
-  ELambda :: [(Name, Maybe RType)] -> Expr -> Expr
-  ELet :: Name -> Maybe RType -> Expr -> Expr -> Expr
-  ELetRec :: Name -> Maybe RType -> Expr -> Expr -> Expr
-  EApply :: Expr -> [Expr] -> Expr
-  ESelect :: Expr -> Name -> Expr
-  ERestrict :: Expr -> Name -> Expr
-  ERecord :: [(Name, Expr)] -> Expr
-  ERecordExt :: [(Name, Expr)] -> Expr -> Expr
-  EAnnot :: Expr -> RType -> Expr
+data RExprArg where
+  REAType :: RType -> RExprArg
+  REAExpr :: RExpr -> RExprArg
+  deriving (Eq, Show)
+
+data RExpr where
+  REInt :: Int -> RExpr
+  REVar :: Name -> RExpr
+  RECon :: Name -> RExpr
+  RELambda :: [(Name, Maybe RType)] -> RExpr -> RExpr
+  RELet :: Name -> Maybe RType -> RExpr -> RExpr -> RExpr
+  RELetRec :: Name -> Maybe RType -> RExpr -> RExpr -> RExpr
+  REApply :: RExpr -> [RExpr] -> RExpr
+  RESelect :: RExpr -> Name -> RExpr
+  RERestrict :: RExpr -> Name -> RExpr
+  RERecord :: [(Name, RExpr)] -> RExpr
+  RERecordExt :: [(Name, RExpr)] -> RExpr -> RExpr
+  REAnnot :: RExpr -> RType -> RExpr
   deriving (Eq, Show)
 
 data KHole where
@@ -120,7 +125,7 @@ data KHole where
   deriving (Eq)
 
 data Kind where
-  KHole :: IORef KHole -> Kind
+  KHole :: {-# UNPACK #-} !(IORef KHole) -> Kind
   KType :: Kind
   KArrow :: [Kind] -> Kind -> Kind
   KRow :: Kind
@@ -134,7 +139,7 @@ data THole where
 type TRow = Map.Map Name (NonEmpty TType)
 
 data TType where
-  TTHole :: IORef THole -> TType
+  TTHole :: {-# UNPACK #-} !(IORef THole) -> TType
   TTCon :: Name -> Kind -> TType
   TTVar :: Index -> Kind -> TType
   TTArrow :: [TType] -> TType -> TType
