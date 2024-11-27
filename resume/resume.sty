@@ -29,9 +29,8 @@
 \newenvironment{school} [4] {
     \textbf{#1}\hfill #2\\
     \textit{GPA}: #3\hfill#4 \\
-    \vspace*{4pt}
     Relevant Coursework:
-    \begin{itemize}[topsep=7pt, partopsep=10pt, itemsep=-1pt]
+    \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
 } {
     \end{itemize}
     \vspace*{-4pt}
@@ -44,27 +43,40 @@
 % } {
 %     \vspace*{2pt}
 %   }
-\newcommand{\award} [3] {
-    \textbf{#1}\hfill #2\\
-    \textit{#3}\\
-    \vspace*{4pt}
+% \newcommand{\award} [3] {
+%     \textbf{#1}\hfill #2\\
+%     \textit{#3}\\
+%     \vspace*{4pt}
+% }
+
+\newcommand{\award} [4] {
+  \textbf{#1}, #3\hfill #2\\
+  % #4\\
+  \vspace*{1pt}
 }
 
 \newenvironment{activity} [2] {
     \textbf{#1}\hfill #2\\
     % \vspace*{4pt}
-} {
-}
+} {}
 
 \newenvironment{activity*} [3] {
     \textbf{#1}, #2\hfill #3\\
     % \vspace*{4pt}
+} {}
+
+\newenvironment{publication} [3] {
+    \textbf{\href{#2}{#1}}, #3\\
+    \begin{quote}
+    \vspace{-\baselineskip}
+    \vspace{\parskip}
 } {
+    \vspace{-\baselineskip}
+    \vspace{\parskip}
+    \end{quote}
 }
 
 \newenvironment{skill} [1] {
     \textbf{#1}\\
     \vspace*{4pt}
-} {
-    \vspace*{10pt}
-}
+} {\vspace*{2pt}}

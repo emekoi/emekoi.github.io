@@ -1,9 +1,4 @@
-% change research experience to work experience
-% add ta-ing to work experience
-% remove some of the less impressive stuff? zig? brainfuck? unlambda?
-% add cs81 compiler?
-
-\documentclass[a4paper]{article}
+\documentclass[a4paper,10pt]{article}
 \usepackage{resume}
 
 \begin{document}
@@ -23,33 +18,16 @@
 
     \end{school}
 
-    \header{Awards}
-    \award{Gordon McClure Memorial Communications Prize in History}{June 2024}{Caltech}
-    \award{George W. Housner Student Discovery Fund}{April 2024}{Caltech}
-    \award{OPLSS Grant}{April 2024}{University of Oregon}
-    \award{PLMW @ POPL 2024}{Jan 2024}{ACM SIGPLAN/NSF}
-    \award{Gates Scholar}{Apr 2021}{The Bill \& Melinda Gates Foundation}
-    \award{QuestBridge National College Match Scholar}{Dec 2020}{QuestBridge}
-
-    \header{Skills}
-    \begin{skill}{Programming Languages}
-      \begin{itemize}[nosep]
-        \item Haskell, OCaml, Coq, C, Agda, Java, Python, x86/x86\_64 Assembly, Lua, Zig, \LaTeX{}
-      \end{itemize}
-    \end{skill}
-    \vspace{-8pt}
-    \begin{skill}{Unix Operating Systems}
-      \begin{itemize}[nosep]
-        \item Bash, Fish, Vim, Emacs, Git, gdb, Linux, various Unix command line programs
-     \end{itemize}
-    \end{skill}
-    \vspace{-5pt}
+    \header{Publications}
+    \begin{publication}{Stream Types}{https://dl.acm.org/doi/10.1145/3656434}{PLDI 2024}
+      Joseph W. Cutler, Christopher Watson, \textbf{Emeka Nkurumeh}, Phillip Hilliard, Harrison Goldstein, Caleb Stanford, Benjamin C. Pierce
+    \end{publication}
 
     \header{Research Experience}
     \begin{activity*}{Formally Verified CBPV Compiler}{Caltech}{Jan 2024--present}
       \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
-        \item Formalized the type system and semantics of a call-by-push-value calculus in Agda and implemented a sound and complete type checker.
-        \item Implemented a reference interpreter and started work on compiling to a small stack machine with the goal of proving them equivalent.
+        \item Worked with Michael Vanier to formalize the type system and semantics of a call-by-push-value calculus in Agda and implemented a sound and complete type checker.
+        \item Implemented a reference interpreter and started work on a verified compiler targeting a small stack machine with the goal of proving them equivalent.
       \end{itemize}
     \end{activity*}
 
@@ -67,12 +45,39 @@
       \end{itemize}
     \end{activity*}
 
+    \header{Awards And Achievements}
+    \award{Gordon McClure Memorial Communications Prize in History}{June 2024}{Caltech}{x}
+    \award{George W. Housner Student Discovery Fund Recipient}{April 2024}{Caltech}{x}
+    \award{OPLSS Grant Recipient}{April 2024}{University of Oregon}{x}
+    \award{PLMW @ POPL}{Jan 2024}{ACM SIGPLAN/NSF}{x}
+    \award{Gates Scholar}{Apr 2021}{The Bill \& Melinda Gates Foundation}{x}
+    \award{QuestBridge National College Match Scholar}{Dec 2020}{QuestBridge}{x}
+
     \header{Work Experience}
     \begin{activity*}{Teaching Assistant}{Caltech}{Jan 2024--present}
-      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
-        \item Graded assignments and led TA sessions.
-      \end{itemize}
+    \begin{quote}
+      \vspace{-\baselineskip}
+      \vspace{\parskip}
+
+      Served as TA for CS 128, 164, 171. Graded assignments, held office hours and recitations.
+
+      \vspace{-\baselineskip}
+      \vspace{\parskip}
+    \end{quote}
     \end{activity*}
+
+    \header{Skills}
+    \begin{skill}{Programming Languages}
+      \begin{itemize}[nosep]
+        \item Haskell, OCaml, Coq, C, Agda, Java, Python, x86/x86\_64 Assembly, Lua, Zig, \LaTeX{}
+      \end{itemize}
+    \end{skill}
+
+    \begin{skill}{Unix Operating Systems}
+      \begin{itemize}[nosep]
+        \item Bash, Fish, Vim, Emacs, Git, gdb, Linux, various Unix command line programs
+     \end{itemize}
+    \end{skill}
 
     \header{Projects and Extracurriculars}
     \begin{activity}{Zig Programming Language Project}{Sept 2018--Sept 2023}
@@ -82,26 +87,26 @@
       \end{itemize}
     \end{activity}
 
-    % \begin{activity}{Brainf*ck Compiler}{Dec 2021}
-    %   \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
-    %     \item Implemented a dependency-free Brainf*ck interpreter and compiler with support for outputting ELF executables with no dependency on any system libraries.
-    %     \item Implemented several optimizations leading to a 2-5x performance increase over the baseline compiler and a reduction of the number of syscalls needed for IO-bound programs.
-    %   \end{itemize}
-    % \end{activity}
-
-    \begin{activity}{Unlambda Interpreter}{Mar 2022}
-      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
-        \item Wrote an Unlambda interpreter using a modified CEK machine to capture and restore continuations.
-        \item Started work on a graph rewriting based approach for interpretation of combinator-based code and compilation to imperative languages such as x86\_64 assembly.
-      \end{itemize}
-    \end{activity}
-
     % \begin{activity}{Bidirectional Type Checkers}{Jul 2022--Mar 2023}
     %   Implemented type checkers for the bidirectional type systems presented in
     %   \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
     %     \item \textit{A Mechanical Formalization of Higher-Ranked Polymorphic Type Inference}
     %     \item \textit{Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism}
     %     \item \textit{Let Arguments Go First}
+    %   \end{itemize}
+    % \end{activity}
+
+    \begin{activity}{Unlambda Interpreter}{Mar 2022}
+      \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+        \item Wrote an Unlambda interpreter, using a CK machine to capture and restore continuations.
+        \item Started work on a graph-rewriting interpreter and compiler targeting x86\_64 assembly.
+      \end{itemize}
+    \end{activity}
+
+    % \begin{activity}{Brainf*ck Compiler}{Dec 2021}
+    %   \begin{itemize}[topsep=5pt, partopsep=0pt, itemsep=-1pt]
+    %     \item Implemented a dependency-free Brainf*ck interpreter and compiler with support for outputting ELF executables with no dependency on any system libraries.
+    %     \item Implemented several optimizations leading to a 2-5x performance increase over the baseline compiler and a reduction of the number of syscalls needed for IO-bound programs.
     %   \end{itemize}
     % \end{activity}
 \end{document}
