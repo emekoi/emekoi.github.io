@@ -9,6 +9,7 @@ module Unify
 import Control.Monad
 import Control.Monad.Trans.Reader
 import Control.Monad.Zip
+import Data.Function              (on)
 import Data.Functor               (($>))
 import Data.Map.Strict            qualified as Map
 import Data.Maybe                 (fromMaybe)
@@ -115,12 +116,12 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     rowUnify fs1 fs2 (Just r1) Nothing
   (VTRecord fs1) (VTRecord fs2) ->
     typeUnify fs1 fs2
-  (VTForall x1 k1 e1 t1) (VTForall _ k2 e2 t2) -> do
-    kindUnify k1 k2
+  (VTForall x1s e1 t1) (VTForall x2s e2 t2) | length x1s == length x2s -> do
+    zipWithM_ (kindUnify `on` snd) x1s x2s
     l <- asks typeLevel
-    typeBind x1 k1 do
-      t1 <- typeEval (VTVar l k1 : e1) t1
-      t2 <- typeEval (VTVar l k2 : e2) t2
+    typeBindAll x1s do
+      t1 <- typeEval (snd $ typeEnvExtend l e1 x1s) t1
+      t2 <- typeEval (snd $ typeEnvExtend l e2 x2s) t2
       typeUnify t1 t2
   t1 t2 -> do
     s1 <- display t1
@@ -191,7 +192,7 @@ typeUnify _t1 _t2 = bind2 (typeForce _t1) (typeForce _t2) \cases
     scopeCheck minLevel baseLevel h (VTRecord rs) = do
       scopeCheck minLevel baseLevel h rs >>= kindUnify KRow
       pure KType
-    scopeCheck minLevel baseLevel h (VTForall x l env t) = do
-      v <- VTVar <$> asks typeLevel
-      typeBind x l $ typeEval (v l : env) t
+    scopeCheck minLevel baseLevel h (VTForall xs env t) = do
+      l <- asks typeLevel
+      typeBindAll xs $ typeEval (snd $ typeEnvExtend l env xs) t
         >>= scopeCheck minLevel baseLevel h

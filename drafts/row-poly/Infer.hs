@@ -17,7 +17,6 @@ import Control.Monad.Fix
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
-import Data.Foldable              (Foldable (foldl'))
 import Data.Functor               (($>))
 import Data.List.NonEmpty         (NonEmpty)
 import Data.Map.Strict            qualified as Map
@@ -48,16 +47,12 @@ typeCheck t = do
     getKind RKRow          = KRow
     getKind (RKArrow xs t) = KArrow (map getKind xs) (getKind t)
 
-    go (l, ctx, env) (RTForall x rk rt) = do
-      k <- maybe kindHole (pure . getKind) rk
-      (_, tt, k') <- go (succ l, Map.insert x (l, k) ctx, VTVar l k : env) rt
-      pure (VTForall x k env tt, TTForall x k tt, k')
+    go _ (RTCon c) = asks typeCons >>= flip (.) (Map.lookup c) \case
+      Nothing -> throw $ TypeErrorTypeConstructorUnknown c
+      Just k -> pure (VTCon c k, TTCon c k, k)
     go (l, ctx, _) (RTVar v) = case Map.lookup v ctx of
       Just (l', k) -> pure (VTVar l' k, TTVar (lvl2idx l l') k, k)
       Nothing      -> throw $ TypeErrorTypeVariableUnbound v
-    go _ (RTCon c) = asks rawTypeCons >>= flip (.) (Map.lookup c) \case
-      Nothing -> throw $ TypeErrorTypeConstructorUnknown c
-      Just k -> pure (VTCon c k, TTCon c k, k)
     go acc (RTArrow rt1s rt2) = do
       (vt1s, tt1s) <- unzip <$> forM rt1s \rt -> do
         (vt, tt, k) <- go acc rt
@@ -122,14 +117,20 @@ typeCheck t = do
                , TTRecord (TTRowExt (listToRow' ls tts) tt)
                , KType
                )
+    go acc@(_, _, env) (RTForall rxs rt) = do
+      xs <- forM rxs \(x, rk) -> (x,) <$> maybe kindHole (pure . getKind) rk
+      acc' <- foldM `flip` acc `flip` xs $ \(l, ctx, env) (x, k) -> do
+        pure (succ l, Map.insert x (l, k) ctx, VTVar l k : env)
+      (_, tt, k') <- go acc' rt
+      pure (VTForall xs env tt, TTForall xs tt, k')
 
 -- | check an Expr has a given VType
 exprCheck :: Dbg => RExpr -> VType -> Check ()
 exprCheck e t = typeForce t >>= \case
-  VTForall x k env t -> do
+  VTForall xs env t -> do
     l <- asks typeLevel
-    t' <- typeEval (VTVar l k : env) t
-    typeBind x k $ exprCheck e t'
+    typeBindAll xs $ typeEval (snd $ typeEnvExtend l env xs) t
+      >>= exprCheck e
   VTArrow ss t | RELambda xs e <- e -> do
     let (ls, lx) = (length ss, length xs)
     xs' <- zipWithM' ss xs \s (x, s') -> do
@@ -248,9 +249,11 @@ exprInferInst e = do
   l <- asks typeLevel
   exprInfer e >>= typeForce >>= instAll l
   where
-    instAll l (VTForall x k env t) = do
-      h <- typeHole x k l
-      typeEval (h : env) t >>= instAll l
+    instAll l (VTForall xs env t) = do
+      (l', env') <- foldM `flip` (l, env) `flip` xs $ \(l, env) (x, k) -> do
+        h <- typeHole x k l
+        pure (succ l, h : env)
+      typeEval env' t >>= instAll l'
     instAll _ t = pure t
 
 -- | infer and generalize the TType of a given Expr
@@ -263,21 +266,9 @@ exprTopInfer e = do
   (t', vs) <- mfix \(~(_, a)) -> do
     runStateT (go (Level (length a)) t) []
 
-  pure $ foldl' (flip $ uncurry TTForall) t' vs
+  pure $ TTForall (reverse vs) t'
   where
     go l t = typeForce t >>= \case
-      VTForall x k env t -> do
-        t' <- typeEval (VTVar l k : env) t
-        TTForall x k <$> go (succ l) t'
-      VTVar x k -> kindForce k >>= \case
-        k@KHole{} -> lift (kindUnify k KType) $> TTVar (lvl2idx l x) KType
-        k -> pure $ TTVar (lvl2idx l x) k
-      VTCon c i -> pure $ TTCon c i
-      VTArrow t1s t2 -> TTArrow <$> mapM (go l) t1s <*> go l t2
-      VTApply t1 t2s -> TTApply <$> go l t1 <*> mapM (go l) t2s
-      VTRow rs -> TTRow <$> mapM (mapM (go l)) rs
-      VTRowExt rs r -> TTRowExt <$> mapM (mapM (go l)) rs <*> go l r
-      VTRecord r -> TTRecord <$> go l r
       VTHole h -> do
         readIORef h >>= \case
           THEmpty n k _ _ -> StateT \vs -> do
@@ -287,6 +278,19 @@ exprTopInfer e = do
                  , (n <> Text.pack (show (unLevel vl)), k) : vs
                  )
           THFull t -> go l t
+      VTCon c i -> pure $ TTCon c i
+      VTVar x k -> kindForce k >>= \case
+        k@KHole{} -> lift (kindUnify k KType) $> TTVar (lvl2idx l x) KType
+        k -> pure $ TTVar (lvl2idx l x) k
+      VTArrow t1s t2 -> TTArrow <$> mapM (go l) t1s <*> go l t2
+      VTApply t1 t2s -> TTApply <$> go l t1 <*> mapM (go l) t2s
+      VTRow rs -> TTRow <$> mapM (mapM (go l)) rs
+      VTRowExt rs r -> TTRowExt <$> mapM (mapM (go l)) rs <*> go l r
+      VTRecord r -> TTRecord <$> go l r
+      VTForall xs env t -> do
+        let (l', env') = typeEnvExtend l env xs
+        t' <- typeEval env' t
+        TTForall xs <$> go l' t'
 
 -- | check that an Expr has a given RType and convert RType to a TType
 exprTopCheck :: Dbg => RExpr -> RType -> Check TType

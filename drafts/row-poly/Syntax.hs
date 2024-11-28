@@ -4,18 +4,19 @@
 {-# LANGUAGE ViewPatterns    #-}
 
 -- TODO: add type abstractions and applications. maybe
+-- TODO: combine rawTypeNames, typeEnv, and typeLevel
 
 module Syntax
     ( Check
     , Context (..)
     , Dbg
     , Display (..)
-    , RExpr (..)
     , Index (..)
     , KHole (..)
     , Kind (..)
     , Level (..)
     , Name
+    , RExpr (..)
     , RKind (..)
     , RType (..)
     , StrictText
@@ -32,6 +33,8 @@ module Syntax
     , readIORef
     , runCheck
     , typeBind
+    , typeBindAll
+    , typeEnvExtend
     , typeEval
     , typeForce
     , typeHole
@@ -44,6 +47,7 @@ module Syntax
 import Control.Monad
 import Control.Monad.IO.Class     (MonadIO (..))
 import Control.Monad.Trans.Reader
+import Data.Foldable              (foldl')
 import Data.Foldable1             (foldrMap1')
 import Data.IORef                 (IORef)
 import Data.IORef                 qualified as IORef
@@ -96,7 +100,7 @@ data RType where
   RTApply :: RType -> [RType] -> RType
   RTRecord :: [(Name, RType)] -> RType
   RTRecordExt :: [(Name, RType)] -> Name -> RType
-  RTForall :: Name -> Maybe RKind -> RType -> RType
+  RTForall :: [(Name, Maybe RKind)] -> RType -> RType
   deriving (Eq, Show)
 
 data RExprArg where
@@ -147,7 +151,7 @@ data TType where
   TTRow :: TRow -> TType
   TTRowExt :: TRow -> TType -> TType
   TTRecord :: TType -> TType
-  TTForall :: Name -> Kind -> TType -> TType
+  TTForall :: [(Name, Kind)] -> TType -> TType
   deriving (Eq)
 
 type VRow = Map.Map Name (NonEmpty VType)
@@ -161,24 +165,24 @@ data VType where
   VTRow :: VRow -> VType
   VTRowExt :: VRow -> VType -> VType
   VTRecord :: VType -> VType
-  VTForall :: Name -> Kind -> [VType] -> TType -> VType
+  VTForall :: [(Name, Kind)] -> [VType] -> TType -> VType
   deriving (Eq)
 
 data Context = Context
-  { typeLevel     :: Level
-    -- ^ the current level
-  , rawTypeNames  :: [Name]
-    -- ^ stack of names from binders passed so far (length = typeLevel)
+  { -- | the current level
+    typeLevel     :: Level
+    -- | environment for evaluation of types (length = typeLevel)
   , typeEnv       :: [VType]
-    -- ^ environment for evaluation of types (length = typeLevel)
+    -- | map from names to type constructors
+  , typeCons      :: Map Name Kind
+    -- | stack of names from binders passed so far (length = typeLevel)
+  , rawTypeNames  :: [Name]
+    -- | map from names to the levels they were declared at
   , rawTypeLevels :: Map Name (Level, Kind)
-    -- ^ map from names to the levels they were declared at
-  , rawTypeCons   :: Map Name Kind
-    -- ^ map from names to type constructors
+    -- | map from variables to types
   , rawTermTypes  :: Map Name VType
-    -- ^ map from variables to types
+    -- | map from term constructors to types
   , rawTermCons   :: Map Name VType
-    -- ^ map from term constructors to types
   }
 
 type Check = ReaderT Context IO
@@ -187,19 +191,19 @@ runCheck :: Dbg => Check m -> IO m
 runCheck m =
   runReaderT m Context
     { typeLevel     = Level 0
-    , rawTypeNames  = mempty
     , typeEnv       = mempty
-    , rawTypeLevels = mempty
-    , rawTypeCons   = Map.fromList
+    , typeCons      = Map.fromList
       [ ("Unit", KType)
       , ("Int", KType)
       , ("Maybe", KArrow [KType] KType)
       ]
+    , rawTypeNames  = mempty
+    , rawTypeLevels = mempty
     , rawTermTypes  = mempty
     , rawTermCons   = Map.fromList
       [ ("Unit", VTCon "Unit" KType)
-      , ("Nothing", VTForall "x" KType [] tMaybe)
-      , ("Just", VTForall "x" KType [] (TTArrow [TTVar (Index 0) KType] tMaybe))
+      , ("Nothing", VTForall [("x", KType)] [] tMaybe)
+      , ("Just", VTForall [("x", KType)] [] (TTArrow [TTVar (Index 0) KType] tMaybe))
       ]
     }
     where
@@ -214,6 +218,13 @@ typeBind x k = local \Context{..} -> Context
   , typeEnv       = VTVar typeLevel k : typeEnv
   , ..
   }
+
+typeBindAll :: Dbg => [(Name, Kind)] -> Check r -> Check r
+typeBindAll xs m = foldr (uncurry typeBind) m xs
+
+typeEnvExtend :: Level -> [VType] -> [(Name, Kind)] -> (Level, [VType])
+typeEnvExtend l env =
+  foldl' (\(l, env) (_, k) -> (succ l, VTVar l k : env)) (l, env)
 
 exprBind :: Dbg => Name -> VType -> Check r -> Check r
 exprBind x t = local \ctx -> ctx
@@ -269,7 +280,7 @@ typeEval env (TTApply t1 t2s) = VTApply <$> typeEval env t1 <*> mapM (typeEval e
 typeEval env (TTRow fs)       = VTRow <$> mapM (mapM (typeEval env)) fs
 typeEval env (TTRowExt fs r)  = VTRowExt <$> mapM (mapM (typeEval env)) fs <*> typeEval env r
 typeEval env (TTRecord rs)    = VTRecord <$> typeEval env rs
-typeEval env (TTForall x k t) = pure $ VTForall x k env t
+typeEval env (TTForall xs t) = pure $ VTForall xs env t
 
 typeQuote :: (Dbg, MonadIO m) => Level -> VType -> m TType
 typeQuote l t = typeForce t >>= \case
@@ -281,9 +292,10 @@ typeQuote l t = typeForce t >>= \case
   VTRow fs -> TTRow <$> mapM (mapM (typeQuote l)) fs
   VTRowExt fs r -> TTRowExt <$> mapM (mapM (typeQuote l)) fs <*> typeQuote l r
   VTRecord rs -> TTRecord <$> typeQuote l rs
-  VTForall x k env t -> do
-    t' <- typeEval (VTVar l k : env) t
-    TTForall x k <$> typeQuote (succ l) t'
+  VTForall xs env t -> do
+    let (l', env') = typeEnvExtend l env xs
+    t' <- typeEval env' t
+    TTForall xs <$> typeQuote l' t'
 
 typeQuote' :: (Dbg, MonadIO m) => Level -> Level -> VType -> m TType
 typeQuote' b l t = typeForce t >>= \case
@@ -301,9 +313,10 @@ typeQuote' b l t = typeForce t >>= \case
   VTRow fs -> TTRow <$> mapM (mapM (typeQuote' b l)) fs
   VTRowExt fs r -> TTRowExt <$> mapM (mapM (typeQuote' b l)) fs <*> typeQuote' b l r
   VTRecord rs -> TTRecord <$> typeQuote' b l rs
-  VTForall x k env t -> do
-    t' <- typeEval (VTVar l k : env) t
-    TTForall x k <$> typeQuote' b (succ l) t'
+  VTForall xs env t -> do
+    let (l', env') = typeEnvExtend l env xs
+    t' <- typeEval env' t
+    TTForall xs <$> typeQuote' b l' t'
 
 instance (MonadIO m) => Display m Kind where
   display = go False
@@ -368,12 +381,12 @@ instance Display Check TType where
       go _ (TTRecord fs) = do
         fs <- go ParenNone fs
         pure $ "{" <> fs <>  "}"
-      go p (TTForall x k t) = do
-        t <- typeBind x k $ go ParenNone t
-        x <- kindForce k >>= \k -> do
-          k <- display k
+      go p (TTForall xs t) = do
+        t <- foldr (uncurry typeBind) (go ParenNone t) xs
+        xs <- Text.intercalate " " <$> forM xs \(x, k) -> do
+          k <- kindForce k >>= display
           pure $ "(" <> x <> " : " <> k <>  ")"
-        pure $ parens p ("forall " <> x <> ". " <> t)
+        pure $ parens p ("forall " <> xs <> ". " <> t)
 
 instance Display Check VType where
   display t = do

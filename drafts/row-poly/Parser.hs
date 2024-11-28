@@ -146,8 +146,8 @@ pType = pForall <|> pType2
 
     pForall = do
       rsymbol "forall" <|> rsymbol "∀"
-      (x, t) <- pArg pKind <* symbol "."
-      RTForall x t <$> pType
+      xs <- some (pArg pKind) <* symbol "."
+      RTForall xs <$> pType
 
     pRecord = braces do
       Mega.optional (Mega.try p) >>= \case
