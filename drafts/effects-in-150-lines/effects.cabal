@@ -1,0 +1,17 @@
+cabal-version:      3.0
+name:               effects
+version:            0.1.0.0
+license:            BSD-3-Clause
+author:             Emeka Nkurumeh
+build-type:         Simple
+
+common warnings
+    ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-unused-top-binds
+
+executable effects
+    import:             warnings
+    main-is:            Index.lhs
+    build-depends:      base ^>=4.19.1.0
+    default-language:   Haskell2010
+    build-tool-depends: markdown-unlit:markdown-unlit ^>= 0.6
+    ghc-options:        -main-is Index -pgmL markdown-unlit
