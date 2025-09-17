@@ -25,16 +25,13 @@
     \end{center}
 }
 
-\newenvironment{school} [4] {
-    \textbf{#1}\hfill #2\\
-    \textbf{B.S.}~\textit{Computer Science}, #4\hfill\\
-    % \textit{GPA}: #3 \\
-
-    Relevant Coursework:
-    \begin{itemize}[topsep=4pt, partopsep=0pt, itemsep=-2pt]
-} {
-    \end{itemize}
-  }
+\newcommand{\school} [5] {
+  \textbf{#2}\hfill #3\\
+  \begin{itemize}[label={},topsep=4pt, partopsep=0pt, itemsep=-2pt]
+    \item \textbf{#1}~\textit{Computer Science}, #5\hfill
+    % \textit{GPA}: #4 \\
+  \end{itemize}
+}
 
 \newcommand{\award} [3] {\item[#1{\normalfont,}] #3\hfill #2}
 \newenvironment{activity} [2] {\textbf{#1}\hfill #2\\} {}
@@ -43,6 +40,7 @@
 \newenvironment{publication} [3] {
     \textbf{\href{#2}{#1}}, #3\\
     \begin{itemize}[label={},topsep=4pt, partopsep=0pt, itemsep=-2pt]
-    \item} {\end{itemize}}
+    \item
+} {\end{itemize}}
 
 \newenvironment{skill} [1] {\textbf{#1}} {}

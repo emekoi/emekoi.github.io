@@ -3,7 +3,7 @@ title: Notes
 naked-main: true
 ---
 
-Short-form ramblings.
+Short-form writings.
 
 ::: {.note date="2024-08-09"}
 # `thingatpt.el`

@@ -17,7 +17,7 @@ url         :: StrictText
 
 author      = "Emeka Nkurumeh"
 description = author <> "'s Blog"
-email       = "e.nk@caltech.edu"
+email       = "emnkuru@iu.edu"
 git         = "https://github.com/emekoi"
 lang        = "en"
 source      = "https://github.com/emekoi/emekoi.github.io"
