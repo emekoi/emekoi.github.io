@@ -15,7 +15,7 @@ flag ci
 
 common base
   ghc-options: -Wall -Wcompat -Wextra -Widentities -Wno-name-shadowing
-  ld-options: -Wl,--gc-sections,--build-id,--icf=all
+  ld-options: -Wl,--gc-sections,--build-id
   if !flag(ci)
     ld-options: -fuse-ld=mold -Wl,--ignore-data-address-equality
 
